@@ -361,7 +361,10 @@ def main():
             for path in (ROOT/'build').glob('Z1Mini_AP_*.gcu'):
                 with zipfile.ZipFile(path) as z:
                     assert z.testzip() is None
-                    assert all(n.startswith('gcu/ap/') or n == 'gcu/ipc/camera_gcu.sh' for n in z.namelist())
+                    hooks = {'gcu/ipc/run.sh', 'gcu/ipc/camera_gcu.sh'}
+                    assert all(n.startswith('gcu/ap/') or n in hooks for n in z.namelist())
+                    # The vendor updater replaces /opt/bin/gcu; rcS needs ipc/run.sh.
+                    assert hooks <= set(z.namelist())
                     assert 'gcu/gb_control' not in z.namelist() and 'gcu/ipc/main' not in z.namelist()
                     for line in z.read('gcu/ap/SHA256SUMS').decode().splitlines():
                         digest, name = line.split('  ')

@@ -26,13 +26,16 @@ alternative which receives video from the retained vendor ISP service.
 
 ## Installation and updates
 
-Use the XFRobot `.gcu` updater and the per-release README. The Windows updater,
-power-cycle recovery and interrupted-update handling still need hardware
-verification; installations so far used direct Ethernet deployment.
+Use the XFRobot `.gcu` updater and the per-release README. The updater
+replaces the whole `/opt/bin/gcu` directory with the package contents, so the
+vendor camera programs are removed and the package ships the `ipc/run.sh`
+boot hook that `/etc/init.d/rcS` launches. Power-cycle recovery and
+interrupted-update handling still need hardware verification.
 ArduPilot web firmware upload and SD-card boot installation are not implemented
-for this target.
+for this target. The retained-ISP package depends on the vendor `ipc/` files
+and can only be deployed directly over an intact vendor installation.
 
-The package installs the AP application and its startup hook. It retains the
+The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP
 service before an updater replaces its running executables, and keep power
 connected until installation completes. Boot checks reject incomplete payloads;

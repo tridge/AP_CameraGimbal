@@ -13,8 +13,8 @@ root filesystem, AX libraries and calibration. It is not an SD bootloader image.
    this package's SHA-256 against `SHA256SUMS`.
 2. Use the XFRobot firmware update tool's `.gcu` upload procedure to transfer
    **{filename}**, then reboot. Keep power connected throughout the update.
-   The vendor Windows updater procedure still needs hardware verification;
-   bench installations so far used direct Ethernet deployment.
+   The updater replaces the whole `/opt/bin/gcu` directory, removing the vendor
+   camera programs; the package includes the boot hook the camera runs.
 3. After reboot, open the camera's existing Ethernet IP address in a browser
    on port **80**. Log in as **admin / ardupilot** on a new installation.
 4. Check the version/hash on **Status**, then check **Live**. Insert a microSD

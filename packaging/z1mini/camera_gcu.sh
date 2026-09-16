@@ -1,5 +1,5 @@
 #!/bin/sh
-# Application-only .gcu overlay entry point, called by stock ipc/run.sh.
+# Application-only .gcu overlay entry point, called by the overlay's ipc/run.sh.
 # A vendor .gcu restores this file. No rootfs/bootloader/MCU flashing.
 APP=/opt/bin/gcu/ap
 NATIVE=false
