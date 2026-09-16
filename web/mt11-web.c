@@ -33,11 +33,11 @@
 #include <strings.h>
 #ifndef __CYGWIN__
 #include <sys/reboot.h>
+#include <sys/syscall.h>
 #endif
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -2102,6 +2102,7 @@ static int renameat2(int olddir, const char *oldname, int newdir,
 
 #endif
 
+#if !WEB_INSTALLS_FIRMWARE
 /* Publishing an uploaded file must never replace an existing file. */
 static int publish_no_replace(int directory, const char *temporary, const char *published)
 {
@@ -2113,6 +2114,7 @@ static int publish_no_replace(int directory, const char *temporary, const char *
     return renameat2(directory, temporary, directory, published, RENAME_NOREPLACE);
 #endif
 }
+#endif /* !WEB_INSTALLS_FIRMWARE */
 
 static unsigned live_video_port(void)
 {
@@ -7898,6 +7900,19 @@ static bool receive_upload_body(int fd, const struct request *request, int outpu
 #endif
 static void schedule_reboot(void);
 
+/* Atomically swap two paths; the caller falls back to renames on ENOSYS. */
+static int exchange_paths(const char *a, const char *b)
+{
+#ifdef __CYGWIN__
+    (void)a;
+    (void)b;
+    errno = ENOSYS;
+    return -1;
+#else
+    return (int)syscall(SYS_renameat2, AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE);
+#endif
+}
+
 static uint32_t zip_le32(const unsigned char *p)
 {
     return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -8139,14 +8154,14 @@ static int install_gcu_package(const char *package, int client, char *error, siz
         snprintf(error, error_size, "package needs the vendor ISP program, which is not installed");
         return 1;
     }
-    sync();
+    sync_firmware_storage();
     if (lstat(GCU_ROOT, &st) < 0 && errno == ENOENT) {
         if (rename(staged, GCU_ROOT) < 0) {
             snprintf(error, error_size, "cannot install %.200s: %s", GCU_ROOT, strerror(errno));
             return 2;
         }
         removal = stage;
-    } else if (syscall(SYS_renameat2, AT_FDCWD, staged, AT_FDCWD, GCU_ROOT, RENAME_EXCHANGE) == 0) {
+    } else if (exchange_paths(staged, GCU_ROOT) == 0) {
         removal = staged;
     } else if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP) {
         if (rename(GCU_ROOT, old) < 0) {
@@ -8163,12 +8178,12 @@ static int install_gcu_package(const char *package, int client, char *error, siz
         snprintf(error, error_size, "cannot exchange %.200s: %s", GCU_ROOT, strerror(errno));
         return 2;
     }
-    sync();
+    sync_firmware_storage();
     if (!remove_path_tree(removal)) {
         log_message("cannot remove previous application %s: %s", removal, strerror(errno));
     }
     (void)remove_path_tree(stage);
-    sync();
+    sync_firmware_storage();
     return 0;
 }
 
