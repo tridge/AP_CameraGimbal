@@ -31,9 +31,15 @@ replaces the whole `/opt/bin/gcu` directory with the package contents, so the
 vendor camera programs are removed and the package ships the `ipc/run.sh`
 boot hook that `/etc/init.d/rcS` launches. Power-cycle recovery and
 interrupted-update handling still need hardware verification.
-ArduPilot web firmware upload and SD-card boot installation are not implemented
-for this target. The retained-ISP package depends on the vendor `ipc/` files
-and can only be deployed directly over an intact vendor installation.
+
+Once the AP application is running, later packages can be uploaded on the web
+**Status** page. The server streams the `.gcu` to RAM, checks the archive
+listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
+`SHA256SUMS` and the manifest target, exchanges it with the running
+installation and reboots. A rejected package leaves the installation untouched.
+SD-card boot installation is not implemented for this target. The retained-ISP
+package depends on the vendor `ipc/` files and can only be deployed directly
+over an intact vendor installation; the web upload refuses it otherwise.
 
 The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP
