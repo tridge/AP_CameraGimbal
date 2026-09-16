@@ -308,7 +308,7 @@ def main():
                 return data.decode()
             page = request('/')
             assert '80.1' in page and 'SoC temperature' in page, page
-            assert 'id=firmware-upload' not in page and '.gcu' in page
+            assert 'id=firmware-upload' in page and 'Z1Mini_AP_*.gcu' in page
             temp_file.write_text('not-a-temperature\n')
             assert '80.1' not in request('/')
             temp_file.unlink()

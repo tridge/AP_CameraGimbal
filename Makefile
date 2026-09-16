@@ -439,6 +439,7 @@ z1mini_package: z1mini
 	python3 tools/build_z1mini_package.py '$(Z1MINI_PACKAGE_OUT)'
 z1mini-test:
 	python3 tests/test_z1mini.py
+	python3 web/tests/test_z1mini_upgrade.py
 	python3 tests/test_z1mini_4k.py
 	python3 tests/test_z1mini_service.py
 	python3 tests/test_z1mini_service.py --native

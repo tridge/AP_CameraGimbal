@@ -208,6 +208,14 @@ token confirms that the upgraded camera has returned. The wait times out after
 The stock updater scans `/mnt` approximately every five seconds. Uploading
 firmware can erase the kernel and rootfs, so stable power is mandatory.
 
+On the XFRobot Z1-Mini the same button accepts `Z1Mini_AP_*.gcu` overlays and
+the web server installs them itself. The upload is streamed to `/tmp`, the ZIP
+listing is checked (only `gcu/ap/` and `gcu/ipc/` regular files, required files
+present, bounded size), the archive is extracted with the camera's `unzip` into
+`/opt/bin/gcu.new`, `SHA256SUMS` and the manifest target are verified, and the
+new tree is exchanged with `/opt/bin/gcu` in one rename before the camera
+reboots. Rejected packages leave the installation untouched.
+
 Custom firmware packages carry `/app/camera.ini.default`, not
 `/app/camera.ini`. Early startup copies the default only on a first install or
 after deliberate removal of the persistent file, so Parameters-page settings

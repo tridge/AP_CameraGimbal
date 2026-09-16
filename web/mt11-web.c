@@ -37,6 +37,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
@@ -56,10 +58,24 @@
 #if APCAM_TARGET == APCAM_TARGET_ZR10
 #include "build/zr10_upgrade.h"
 #endif
+#ifndef FIRMWARE_SUFFIX
+#define FIRMWARE_SUFFIX ".bin"
+#endif
 #ifdef FIRMWARE_INSTALL_NAME
-#define FIRMWARE_NAME_PATTERNS FIRMWARE_INSTALL_NAME " / " FIRMWARE_PREFIX "*.bin"
+#define FIRMWARE_NAME_PATTERNS FIRMWARE_INSTALL_NAME " / " FIRMWARE_PREFIX "*" FIRMWARE_SUFFIX
 #else
-#define FIRMWARE_NAME_PATTERNS FIRMWARE_PREFIX "*.bin"
+#define FIRMWARE_NAME_PATTERNS FIRMWARE_PREFIX "*" FIRMWARE_SUFFIX
+#endif
+/* Z1-Mini: the web server verifies and installs the .gcu overlay itself, then reboots. */
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+#define WEB_INSTALLS_FIRMWARE 1
+#else
+#define WEB_INSTALLS_FIRMWARE 0
+#endif
+#if APCAM_HAVE_THERMAL || WEB_INSTALLS_FIRMWARE
+#define WEB_UPGRADE_REBOOTS_JS "true"
+#else
+#define WEB_UPGRADE_REBOOTS_JS "false"
 #endif
 #define DEFAULT_CAMERA_KIND CAMERA_REPLACEMENT
 #if APCAM_HAVE_THERMAL
@@ -255,6 +271,11 @@ static char portable_replacement_camera_path[4096];
 #undef WEB_PATH
 static char portable_web_path[4096];
 #define WEB_PATH portable_web_path
+#if WEB_INSTALLS_FIRMWARE
+#undef GCU_ROOT
+static char portable_gcu_root[4096];
+#define GCU_ROOT portable_gcu_root
+#endif
 #undef APP_LIB_DIR
 static char portable_app_lib_dir[4096];
 #define APP_LIB_DIR portable_app_lib_dir
@@ -286,6 +307,9 @@ static int portable_paths_init(void)
     const char *web_path = getenv("CAMERA_GIMBAL_SITL_WEB_EXE");
     if (!web_path || snprintf(WEB_PATH, sizeof(WEB_PATH), "%s", web_path) >= (int)sizeof(WEB_PATH)) return -1;
     if (snprintf(APP_LIB_DIR, sizeof(APP_LIB_DIR), "%s/app/libs", root) >= (int)sizeof(APP_LIB_DIR)) return -1;
+#if WEB_INSTALLS_FIRMWARE
+    if (snprintf(GCU_ROOT, sizeof(GCU_ROOT), "%s/gcu", root) >= (int)sizeof(GCU_ROOT)) return -1;
+#endif
     return 0;
 }
 #else
@@ -597,6 +621,7 @@ enum string_id {
     S_STATUS_UPGRADE_HELP,
     S_STATUS_UPGRADE_SYNC_MT11,
     S_STATUS_UPGRADE_SYNC_A8,
+    S_STATUS_UPGRADE_INSTALL_Z1,
     S_STATUS_REBOOT_CONFIRM,
     S_STATUS_REBOOT_BUTTON,
     S_STATUS_AUTH_NOTE,
@@ -793,6 +818,11 @@ enum string_id {
     S_E_FW_DIR_SYNC,
     S_FW_UPLOADED_MT11,
     S_FW_UPLOADED_A8,
+    S_FW_INSTALLED_Z1,
+    S_E_FW_PACKAGE,
+    S_E_FW_INSTALL,
+    S_E_FW_TMP,
+    S_E_FW_TMP_SPACE,
     S_E_FW_FAILED,
     S_JS_FW_TIMEOUT,
     S_JS_FW_TIMEOUT_ALERT,
@@ -805,6 +835,8 @@ enum string_id {
     S_JS_FW_SIZE,
     S_JS_FW_CONFIRM,
     S_JS_FW_CONFIRM_A8,
+    S_JS_FW_CONFIRM_Z1,
+    S_JS_FW_INSTALLED,
     S_JS_FW_WRITING,
     S_JS_FW_HTTP,
     S_JS_FW_UPLOADED,
@@ -1130,6 +1162,7 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_STATUS_UPGRADE_HELP] = {"Select a <code>%s</code> package. ", "请选择 <code>%s</code> 升级包。", "<code>%s</code> パッケージを選択してください。"},
     [S_STATUS_UPGRADE_SYNC_MT11] = {"A complete upload is synced as <code>.bin.tmp</code>, atomically renamed to <code>.bin</code>, and synced again before the updater can discover it.", "上传完成后先以 <code>.bin.tmp</code> 同步写入，再原子地重命名为 <code>.bin</code> 并再次同步，之后升级程序才会发现它。", "アップロードが完了すると <code>.bin.tmp</code> として同期し、<code>.bin</code> にアトミックにリネームして再度同期してから、アップデーターが検出できるようになります。"},
     [S_STATUS_UPGRADE_SYNC_A8] = {"A complete upload is synced to the microSD card as <code>%s</code>; U-Boot installs it on the next reboot.", "上传完成后会以 <code>%s</code> 同步写入 microSD 卡；U-Boot 会在下次重启时安装。", "アップロードが完了すると <code>%s</code> として microSD カードに同期され、次回の再起動時に U-Boot がインストールします。"},
+    [S_STATUS_UPGRADE_INSTALL_Z1] = {"The package is verified, installed into the application partition and the camera reboots. Settings and the web password are kept.", "升级包经校验后安装到应用分区，随后相机重启。设置和网页密码将被保留。", "パッケージは検証後にアプリ領域へインストールされ、カメラが再起動します。設定とウェブパスワードは保持されます。"},
     [S_STATUS_REBOOT_CONFIRM] = {"I confirm this camera should reboot", "我确认要重启此相机", "このカメラを再起動することを確認しました"},
     [S_STATUS_REBOOT_BUTTON] = {"Reboot camera", "重启相机", "カメラを再起動"},
     [S_STATUS_AUTH_NOTE] = {"Authentication user: <code>admin</code>. The password is read from <code>%s</code> for every request. This service is HTTP, not HTTPS; keep it on the isolated camera network.", "认证用户：<code>admin</code>。每次请求都会从 <code>%s</code> 读取密码。本服务使用 HTTP 而非 HTTPS，请仅在隔离的相机网络中使用。", "認証ユーザー: <code>admin</code>。パスワードはリクエストごとに <code>%s</code> から読み込まれます。このサービスは HTTPS ではなく HTTP です。隔離されたカメラ用ネットワーク内でのみ使用してください。"},
@@ -1326,6 +1359,11 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_E_FW_DIR_SYNC] = {"Firmware was renamed but directory sync failed: %s", "固件已重命名，但目录同步失败：%s", "ファームウェアのリネームは完了しましたが、ディレクトリの同期に失敗しました: %s"},
     [S_FW_UPLOADED_MT11] = {"Firmware %.200s uploaded and synced to the microSD card. The updater checks about every 5 seconds and should start soon; do not interrupt power.", "固件 %.200s 已上传并同步到 microSD 卡。升级程序约每 5 秒检查一次，应很快开始；请勿断电。", "ファームウェア %.200s をアップロードし、microSD カードに同期しました。アップデーターは約 5 秒ごとに確認するため、まもなく開始されます。電源を切らないでください。"},
     [S_FW_UPLOADED_A8] = {"Firmware %.200s uploaded and synced to the card as %s. Reboot the camera to install it; do not interrupt power while it installs.", "固件 %.200s 已上传并以 %s 同步到卡上。重启相机以安装；安装期间请勿断电。", "ファームウェア %.200s をアップロードし、%s としてカードに同期しました。インストールするにはカメラを再起動してください。インストール中は電源を切らないでください。"},
+    [S_FW_INSTALLED_Z1] = {"Firmware %.200s installed. The camera is rebooting; do not interrupt power.", "固件 %.200s 已安装。相机正在重启，请勿断电。", "ファームウェア %.200s をインストールしました。カメラが再起動中です。電源を切らないでください。"},
+    [S_E_FW_PACKAGE] = {"Invalid firmware package: %s", "固件升级包无效：%s", "ファームウェアパッケージが無効です: %s"},
+    [S_E_FW_INSTALL] = {"Firmware installation failed: %s", "固件安装失败：%s", "ファームウェアのインストールに失敗しました: %s"},
+    [S_E_FW_TMP] = {"Cannot store the upload in %s: %s", "无法将上传内容保存到 %s：%s", "%s にアップロードを保存できません: %s"},
+    [S_E_FW_TMP_SPACE] = {"Not enough free space in %s", "%s 剩余空间不足", "%s の空き容量が不足しています"},
     [S_E_FW_FAILED] = {"Firmware upload failed after %zu bytes: %s", "固件上传在 %zu 字节后失败：%s", "ファームウェアのアップロードが %zu バイトで失敗しました: %s"},
     [S_JS_FW_TIMEOUT] = {"Timed out after 60 seconds waiting for the camera. Check its power and network connection before retrying.", "等待相机超过 60 秒已超时。重试前请检查其电源和网络连接。", "カメラの応答を 60 秒待ちましたがタイムアウトしました。再試行の前に電源とネットワーク接続を確認してください。"},
     [S_JS_FW_TIMEOUT_ALERT] = {"The camera did not return within 60 seconds. Check its power and network connection.", "相机在 60 秒内未恢复。请检查其电源和网络连接。", "カメラが 60 秒以内に復帰しませんでした。電源とネットワーク接続を確認してください。"},
@@ -1338,6 +1376,8 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_JS_FW_SIZE] = {"Firmware size must be between 1 byte and 128 MiB.", "固件大小必须在 1 字节至 128 MiB 之间。", "ファームウェアのサイズは 1 バイト〜128 MiB である必要があります。"},
     [S_JS_FW_CONFIRM] = {"Upload %s and start the automatic firmware upgrade? Do not interrupt camera power.", "上传 %s 并开始自动固件升级？请勿中断相机电源。", "%s をアップロードして自動ファームウェア更新を開始しますか？カメラの電源を切らないでください。"},
     [S_JS_FW_CONFIRM_A8] = {"Upload %s? Reboot the camera afterwards to install it, and do not interrupt power while it installs.", "上传 %s？上传完成后需重启相机以安装固件，安装期间请勿断电。", "%s をアップロードしますか？アップロード後、インストールするにはカメラを再起動してください。インストール中は電源を切らないでください。"},
+    [S_JS_FW_CONFIRM_Z1] = {"Upload and install %s? The camera reboots when installation completes; do not interrupt power.", "上传并安装 %s？安装完成后相机将重启，请勿断电。", "%s をアップロードしてインストールしますか？インストール完了後にカメラが再起動します。電源を切らないでください。"},
+    [S_JS_FW_INSTALLED] = {"Firmware installed. Waiting for the camera to reboot…", "固件已安装。等待相机重启…", "ファームウェアをインストールしました。カメラの再起動を待っています…"},
     [S_JS_FW_WRITING] = {"Writing %s…", "正在写入 %s…", "%s を書き込んでいます…"},
     [S_JS_FW_HTTP] = {"Upload returned HTTP ", "上传返回 HTTP ", "アップロードの応答: HTTP "},
     [S_JS_FW_UPLOADED] = {"Firmware uploaded. Waiting for the updater to reboot the camera…", "固件已上传。等待升级程序重启相机…", "ファームウェアをアップロードしました。アップデーターによるカメラの再起動を待っています…"},
@@ -5993,31 +6033,22 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
                csrf_token);
     sb_append(&page, T(S_STATUS_RESTART));
     sb_append(&page, "</button></form>");
-#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
-#ifndef MT11_WEB_SITL
-    sb_append(&page, "<p class=notice>Install firmware .gcu files with the XFRobot updater.</p>");
-#endif
-#else
     sb_appendf(&page, "<form id=firmware-upload method=post action=/upgrade>"
-                      "<input id=firmware type=file accept=.bin hidden>"
+                      "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
                       "<button id=select-firmware type=button>%s</button>"
                       "<progress id=firmware-progress value=0 max=100 hidden></progress>"
                       "<output id=firmware-status class=upload-status></output></form>"
                       "<script src=/upgrade.js data-csrf=\"%s\" defer></script>"
                       "<p class=muted>", T(S_STATUS_UPGRADE_BUTTON), csrf_token);
     sb_appendf(&page, T(S_STATUS_UPGRADE_HELP), FIRMWARE_NAME_PATTERNS);
-#if APCAM_TARGET == APCAM_TARGET_MT11
+#if WEB_INSTALLS_FIRMWARE
+    sb_append(&page, T(S_STATUS_UPGRADE_INSTALL_Z1));
+#elif APCAM_TARGET == APCAM_TARGET_MT11
     sb_append(&page, T(S_STATUS_UPGRADE_SYNC_MT11));
-    sb_append(&page, "</p>");
 #else
     sb_appendf(&page, T(S_STATUS_UPGRADE_SYNC_A8), FIRMWARE_INSTALL_NAME);
-#if APCAM_TARGET == APCAM_TARGET_ZR10
+#endif
     sb_append(&page, "</p>");
-#else
-    sb_append(&page, "</p>");
-#endif
-#endif
-#endif
     sb_appendf(&page, "<form method=post action=/reboot><input type=hidden name=csrf value=\"%s\">"
                       "<label><input type=checkbox name=confirm value=yes required> %s</label><br>"
                       "<button class=danger type=submit>%s</button></form><p class=muted>",
@@ -7672,11 +7703,8 @@ static const char upgrade_script[] =
     "  input.addEventListener('change', () => {\n"
     "    const file = input.files && input.files[0];\n"
     "    if (!file) return;\n"
-    "    if (!(/^" FIRMWARE_PREFIX "[A-Za-z0-9._-]+\\.bin$/.test(file.name)"
-#ifdef FIRMWARE_INSTALL_NAME
-    " || file.name === '" FIRMWARE_INSTALL_NAME "'"
-#endif
-    ")) {\n"
+    "    const pattern = new RegExp('^' + L.prefix + '[A-Za-z0-9._-]+' + L.suffix.replace(/\\./g, '\\\\.') + '$');\n"
+    "    if (!(pattern.test(file.name) || (L.installName && file.name === L.installName))) {\n"
     "      status.textContent = L.badName; return;\n"
     "    }\n"
     "    if (file.size < 1 || file.size > 134217728) {\n"
@@ -7694,7 +7722,7 @@ static const char upgrade_script[] =
     "    };\n"
     "    request.onload = () => {\n"
     "      status.textContent = request.responseText.trim() || (L.httpStatus + request.status);\n"
-    "      if (request.status === 201 && " TARGET_TEXT("true", "false") ") {\n"
+    "      if (request.status === 201 && " WEB_UPGRADE_REBOOTS_JS ") {\n"
     "        progress.value = 50;\n"
     "        status.textContent = L.uploaded;\n"
     "        waitForRestart();\n"
@@ -7711,19 +7739,36 @@ static const char upgrade_script[] =
     "  });\n"
     "})();\n";
 
+#if WEB_INSTALLS_FIRMWARE
+#define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_Z1
+#define UPGRADE_UPLOADED_STRING S_JS_FW_INSTALLED
+#define UPGRADE_WRITE_ROOT RUNTIME_DIR
+#else
+#define UPGRADE_CONFIRM_STRING TARGET_TEXT(S_JS_FW_CONFIRM, S_JS_FW_CONFIRM_A8)
+#define UPGRADE_UPLOADED_STRING S_JS_FW_UPLOADED
+#define UPGRADE_WRITE_ROOT MEDIA_ROOT
+#endif
+#ifndef FIRMWARE_INSTALL_NAME
+#define FIRMWARE_INSTALL_NAME_JS ""
+#else
+#define FIRMWARE_INSTALL_NAME_JS FIRMWARE_INSTALL_NAME
+#endif
+
 static void send_upgrade_script(int fd)
 {
     char bad_name[256];
     const struct js_string items[] = {
-        {"mediaRoot", MEDIA_ROOT},
+        {"mediaRoot", UPGRADE_WRITE_ROOT},
+        {"prefix", FIRMWARE_PREFIX}, {"suffix", FIRMWARE_SUFFIX},
+        {"installName", FIRMWARE_INSTALL_NAME_JS},
         {"timeout", T(S_JS_FW_TIMEOUT)}, {"timeoutAlert", T(S_JS_FW_TIMEOUT_ALERT)},
         {"back", T(S_JS_FW_BACK)}, {"backAlert", T(S_JS_FW_BACK_ALERT)},
         {"backLogin", T(S_JS_FW_BACK_LOGIN)},
         {"rebooting", T(S_JS_FW_REBOOTING)}, {"waitingUpdater", T(S_JS_FW_WAITING_UPDATER)},
         {"badName", bad_name}, {"badSize", T(S_JS_FW_SIZE)},
-        {"confirmUpload", T(TARGET_TEXT(S_JS_FW_CONFIRM, S_JS_FW_CONFIRM_A8))},
+        {"confirmUpload", T(UPGRADE_CONFIRM_STRING)},
         {"writing", T(S_JS_FW_WRITING)},
-        {"httpStatus", T(S_JS_FW_HTTP)}, {"uploaded", T(S_JS_FW_UPLOADED)},
+        {"httpStatus", T(S_JS_FW_HTTP)}, {"uploaded", T(UPGRADE_UPLOADED_STRING)},
         {"closed", T(S_JS_FW_CLOSED)},
     };
 
@@ -7785,7 +7830,7 @@ static bool valid_firmware_name(const char *name)
 #endif
     size_t length = strlen(name);
     const char prefix[] = FIRMWARE_PREFIX;
-    const char suffix[] = ".bin";
+    const char suffix[] = FIRMWARE_SUFFIX;
 
     if (length <= strlen(prefix) + strlen(suffix) || length > 200 ||
         strncmp(name, prefix, strlen(prefix)) != 0 ||
@@ -7808,18 +7853,434 @@ static void sync_firmware_storage(void)
 #include "zr10_firmware.h"
 #endif
 
+/* Stream the request body to output; errno describes a failure. */
+static bool receive_upload_body(int fd, const struct request *request, int output,
+                                size_t *received)
+{
+    char expect[64];
+
+    *received = 0;
+    if (find_header(request, "Expect", expect, sizeof(expect)) != NULL &&
+        strcasecmp(expect, "100-continue") == 0) {
+        static const char continue_response[] = "HTTP/1.1 100 Continue\r\n\r\n";
+        if (!send_all(fd, continue_response, sizeof(continue_response) - 1)) return false;
+    }
+    if (request->body_len > 0) {
+        if (!write_all(output, request->body, request->body_len)) return false;
+        *received = request->body_len;
+    }
+    while (*received < request->content_length) {
+        char buffer[64 * 1024];
+        size_t wanted = request->content_length - *received;
+        if (wanted > sizeof(buffer)) wanted = sizeof(buffer);
+        ssize_t got = recv(fd, buffer, wanted, 0);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (got == 0) {
+            errno = ECONNRESET;
+            return false;
+        }
+        if (!write_all(output, buffer, (size_t)got)) return false;
+        *received += (size_t)got;
+    }
+    return true;
+}
+
+#if WEB_INSTALLS_FIRMWARE
+/* The .gcu overlay is a ZIP of the gcu/ap and gcu/ipc files. It is checked before
+ * extraction, unpacked next to GCU_ROOT, verified against its SHA256SUMS and
+ * manifest, then exchanged with the running installation before a reboot. */
+#define GCU_PACKAGE_MAX_EXTRACTED (64U * 1024U * 1024U)
+#ifndef RENAME_EXCHANGE
+#define RENAME_EXCHANGE 2
+#endif
+static void schedule_reboot(void);
+
+static uint32_t zip_le32(const unsigned char *p)
+{
+    return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+static unsigned zip_le16(const unsigned char *p)
+{
+    return p[0] | (unsigned)p[1] << 8;
+}
+
+static bool gcu_entry_name_ok(const char *name, size_t length)
+{
+    static const char *const prefixes[] = {"gcu/ap/", "gcu/ipc/"};
+
+    for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); p++) {
+        size_t plen = strlen(prefixes[p]);
+        if (length <= plen || length - plen > 200 || memcmp(name, prefixes[p], plen) != 0) continue;
+        for (size_t i = plen; i < length; i++) {
+            unsigned char value = (unsigned char)name[i];
+            if (!(isalnum(value) || value == '.' || value == '_' || value == '-')) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+/* Check the ZIP central directory before anything is extracted. Returns a
+ * problem description or NULL, and the total extracted size. */
+static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
+{
+    static const char *const required[] = {
+        "gcu/ap/SHA256SUMS", "gcu/ap/manifest.json", "gcu/ap/service.sh",
+        "gcu/ap/camera-app", "gcu/ap/z1mini-web", "gcu/ipc/run.sh", "gcu/ipc/camera_gcu.sh",
+    };
+    static char missing[64];
+    bool found[sizeof(required) / sizeof(required[0])] = {false};
+    static unsigned char tail[22 + 65535];
+    size_t tail_length = size < sizeof(tail) ? size : sizeof(tail);
+    unsigned char *directory;
+    const char *problem = "not a ZIP archive";
+    size_t eocd = tail_length;
+
+    *extracted = 0;
+    if (size < 22 ||
+        pread(fd, tail, tail_length, (off_t)(size - tail_length)) != (ssize_t)tail_length) {
+        return problem;
+    }
+    for (size_t i = tail_length - 22;; i--) {
+        if (zip_le32(tail + i) == 0x06054b50 && i + 22 + zip_le16(tail + i + 20) == tail_length) {
+            eocd = i;
+            break;
+        }
+        if (i == 0) break;
+    }
+    if (eocd == tail_length) return problem;
+    const unsigned char *end = tail + eocd;
+    unsigned entries = zip_le16(end + 10);
+    uint32_t directory_size = zip_le32(end + 12);
+    uint32_t directory_offset = zip_le32(end + 16);
+    uint64_t eocd_position = size - tail_length + eocd;
+    if (zip_le16(end + 4) != 0 || zip_le16(end + 6) != 0 || entries != zip_le16(end + 8)) {
+        return "multi-part archive";
+    }
+    if (entries == 0xFFFF || directory_size == 0xFFFFFFFF || directory_offset == 0xFFFFFFFF) {
+        return "ZIP64 archive";
+    }
+    if (entries == 0 || entries > 256) return "unexpected entry count";
+    if ((uint64_t)directory_offset + directory_size > eocd_position) {
+        return "central directory out of range";
+    }
+    directory = malloc(directory_size);
+    if (directory == NULL) return "out of memory";
+    if (pread(fd, directory, directory_size, directory_offset) != (ssize_t)directory_size) {
+        free(directory);
+        return "cannot read central directory";
+    }
+    size_t position = 0;
+    for (unsigned n = 0; n < entries; n++) {
+        const unsigned char *header = directory + position;
+        if (position + 46 > directory_size || zip_le32(header) != 0x02014b50) {
+            problem = "corrupt central directory";
+            goto fail;
+        }
+        unsigned method = zip_le16(header + 10);
+        uint32_t uncompressed = zip_le32(header + 24);
+        unsigned name_length = zip_le16(header + 28);
+        size_t entry_length = 46 + name_length + zip_le16(header + 30) + zip_le16(header + 32);
+        unsigned mode = zip_le32(header + 38) >> 16;
+        const char *name = (const char *)header + 46;
+        if (position + entry_length > directory_size) {
+            problem = "corrupt central directory";
+            goto fail;
+        }
+        if (!gcu_entry_name_ok(name, name_length)) {
+            problem = "unexpected file in archive";
+            goto fail;
+        }
+        if (method != 0 && method != 8) {
+            problem = "unsupported compression";
+            goto fail;
+        }
+        if (zip_le16(header + 8) & 0x41) {
+            problem = "encrypted entry";
+            goto fail;
+        }
+        if ((mode & S_IFMT) != 0 && (mode & S_IFMT) != S_IFREG) {
+            problem = "archive contains a non-regular file";
+            goto fail;
+        }
+        if (uncompressed == 0xFFFFFFFF) {
+            problem = "ZIP64 entry";
+            goto fail;
+        }
+        *extracted += uncompressed;
+        if (*extracted > GCU_PACKAGE_MAX_EXTRACTED) {
+            problem = "package too large";
+            goto fail;
+        }
+        for (size_t r = 0; r < sizeof(required) / sizeof(required[0]); r++) {
+            if (strlen(required[r]) == name_length && memcmp(required[r], name, name_length) == 0) {
+                found[r] = true;
+            }
+        }
+        position += entry_length;
+    }
+    for (size_t r = 0; r < sizeof(required) / sizeof(required[0]); r++) {
+        if (found[r]) continue;
+        snprintf(missing, sizeof(missing), "missing %s", required[r]);
+        problem = missing;
+        goto fail;
+    }
+    free(directory);
+    return NULL;
+fail:
+    free(directory);
+    return problem;
+}
+
+/* Run a tool to completion with no terminal; the server ignores SIGCHLD. */
+static int run_tool(const char *directory, char *const argv[], int client)
+{
+    struct sigaction previous;
+    struct sigaction reap = {.sa_handler = SIG_DFL};
+    pid_t child;
+    int status;
+    int result = -1;
+
+    sigaction(SIGCHLD, &reap, &previous);
+    child = fork();
+    if (child == 0) {
+        int null = open("/dev/null", O_RDWR);
+        if (listen_fd >= 0) close(listen_fd);
+        if (client >= 0) close(client);
+        if (null >= 0) {
+            dup2(null, 0);
+            dup2(null, 1);
+            dup2(null, 2);
+            if (null > 2) close(null);
+        }
+        if (directory != NULL && chdir(directory) < 0) _exit(127);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    if (child > 0) {
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) continue;
+        result = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+    sigaction(SIGCHLD, &previous, NULL);
+    return result;
+}
+
+static bool join_path(char *out, size_t size, const char *directory, const char *name)
+{
+    return snprintf(out, size, "%s/%s", directory, name) < (int)size;
+}
+
+static bool remove_path_tree(const char *path)
+{
+    struct stat st;
+
+    if (lstat(path, &st) < 0) return errno == ENOENT;
+    if (!S_ISDIR(st.st_mode)) return unlink(path) == 0;
+    return nftw(path, remove_tree_item, 32, FTW_DEPTH | FTW_PHYS | FTW_MOUNT) == 0;
+}
+
+/* Returns 0 when installed, 1 for a rejected package, 2 for an install failure. */
+static int install_gcu_package(const char *package, int client, char *error, size_t error_size)
+{
+    static const char *const executables[] = {
+        "ap/service.sh", "ap/camera-app", "ap/z1mini-web", "ap/ax-capture",
+        "ipc/run.sh", "ipc/camera_gcu.sh",
+    };
+    char stage[PATH_MAX];
+    char staged[PATH_MAX];
+    char old[PATH_MAX];
+    char path[PATH_MAX];
+    const char *removal;
+    struct stat st;
+    size_t length = 0;
+    char *manifest;
+    bool needs_isp;
+
+    if (snprintf(stage, sizeof(stage), "%s.new", GCU_ROOT) >= (int)sizeof(stage) ||
+        snprintf(staged, sizeof(staged), "%s.new/gcu", GCU_ROOT) >= (int)sizeof(staged) ||
+        snprintf(old, sizeof(old), "%s.old", GCU_ROOT) >= (int)sizeof(old)) {
+        snprintf(error, error_size, "path too long");
+        return 2;
+    }
+    if (!remove_path_tree(stage) || !remove_path_tree(old) || mkdir(stage, 0755) < 0) {
+        snprintf(error, error_size, "cannot prepare %.200s: %s", stage, strerror(errno));
+        return 2;
+    }
+    char *const unzip_argv[] = {"unzip", "-o", "-q", (char *)package, "-d", stage, NULL};
+    if (run_tool(NULL, unzip_argv, client) != 0) {
+        snprintf(error, error_size, "extraction failed");
+        return 1;
+    }
+    for (size_t i = 0; i < sizeof(executables) / sizeof(executables[0]); i++) {
+        if (!join_path(path, sizeof(path), staged, executables[i]) || lstat(path, &st) < 0) continue;
+        if (!S_ISREG(st.st_mode) || chmod(path, 0755) < 0) {
+            snprintf(error, error_size, "cannot mark %.200s executable", executables[i]);
+            return 2;
+        }
+    }
+    char *const sums_argv[] = {"sha256sum", "-c", "SHA256SUMS", NULL};
+    if (!join_path(path, sizeof(path), staged, "ap") || run_tool(path, sums_argv, client) != 0) {
+        snprintf(error, error_size, "SHA256SUMS mismatch");
+        return 1;
+    }
+    manifest = join_path(path, sizeof(path), staged, "ap/manifest.json") ?
+               read_file(path, 65536, &length) : NULL;
+    if (manifest == NULL || strstr(manifest, "\"target\": \"xfrobot-z1mini\"") == NULL) {
+        free(manifest);
+        snprintf(error, error_size, "manifest is not for the " PRODUCT_NAME);
+        return 1;
+    }
+    needs_isp = strstr(manifest, "\"vendor_isp_required\": true") != NULL;
+    free(manifest);
+    if (needs_isp && (!join_path(path, sizeof(path), GCU_ROOT, "ipc/main") || access(path, X_OK) != 0)) {
+        snprintf(error, error_size, "package needs the vendor ISP program, which is not installed");
+        return 1;
+    }
+    sync();
+    if (lstat(GCU_ROOT, &st) < 0 && errno == ENOENT) {
+        if (rename(staged, GCU_ROOT) < 0) {
+            snprintf(error, error_size, "cannot install %.200s: %s", GCU_ROOT, strerror(errno));
+            return 2;
+        }
+        removal = stage;
+    } else if (syscall(SYS_renameat2, AT_FDCWD, staged, AT_FDCWD, GCU_ROOT, RENAME_EXCHANGE) == 0) {
+        removal = staged;
+    } else if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP) {
+        if (rename(GCU_ROOT, old) < 0) {
+            snprintf(error, error_size, "cannot move aside %.200s: %s", GCU_ROOT, strerror(errno));
+            return 2;
+        }
+        if (rename(staged, GCU_ROOT) < 0) {
+            snprintf(error, error_size, "cannot install %.200s: %s", GCU_ROOT, strerror(errno));
+            (void)rename(old, GCU_ROOT);
+            return 2;
+        }
+        removal = old;
+    } else {
+        snprintf(error, error_size, "cannot exchange %.200s: %s", GCU_ROOT, strerror(errno));
+        return 2;
+    }
+    sync();
+    if (!remove_path_tree(removal)) {
+        log_message("cannot remove previous application %s: %s", removal, strerror(errno));
+    }
+    (void)remove_path_tree(stage);
+    sync();
+    return 0;
+}
+
+static void handle_firmware_install(int fd, const struct request *request, const char *peer)
+{
+    char filename[256];
+    char content_type[128];
+    char package[PATH_MAX];
+    char error[512];
+    struct statvfs space;
+    uint64_t extracted = 0;
+    int upgrade_lock = -1;
+    int output = -1;
+    size_t received = 0;
+    bool created = false;
+    const char *problem;
+    int result;
+
+    if (!valid_csrf_header(request)) {
+        log_message("CSRF check failed from %s for firmware upload", peer);
+        send_text_errorf(fd, 403, "Forbidden", S_CSRF_RELOAD);
+        return;
+    }
+    if (request->content_length == 0 || request->content_length > MAX_FIRMWARE_SIZE) {
+        send_text_errorf(fd, 413, "Payload Too Large", S_E_FW_SIZE);
+        return;
+    }
+    if (find_header(request, "Content-Type", content_type, sizeof(content_type)) == NULL ||
+        strncasecmp(content_type, "application/octet-stream", 24) != 0 ||
+        (content_type[24] != '\0' && content_type[24] != ';')) {
+        send_text_errorf(fd, 415, "Unsupported Media Type", S_E_FW_CONTENT_TYPE);
+        return;
+    }
+    if (find_header(request, "X-Firmware-Name", filename, sizeof(filename)) == NULL ||
+        !valid_firmware_name(filename)) {
+        send_text_errorf(fd, 400, "Bad Request", S_E_FW_NAME, FIRMWARE_NAME_PATTERNS);
+        return;
+    }
+    upgrade_lock = open(UPGRADE_LOCK_PATH, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (upgrade_lock < 0 || flock(upgrade_lock, LOCK_EX) < 0) {
+        send_text_errorf(fd, 503, "Service Unavailable", S_E_FW_LOCK, strerror(errno));
+        goto done;
+    }
+    if (snprintf(package, sizeof(package), "%s/firmware-upload.XXXXXX", RUNTIME_DIR) >=
+        (int)sizeof(package)) {
+        send_text_errorf(fd, 500, "Internal Server Error", S_E_FW_TMP, RUNTIME_DIR, "path too long");
+        goto done;
+    }
+    output = mkostemp(package, O_CLOEXEC);
+    if (output < 0) {
+        send_text_errorf(fd, 500, "Internal Server Error", S_E_FW_TMP, RUNTIME_DIR, strerror(errno));
+        goto done;
+    }
+    created = true;
+    if (fstatvfs(output, &space) == 0 &&
+        (uint64_t)space.f_bavail * space.f_frsize < request->content_length + 1024U * 1024U) {
+        send_text_errorf(fd, 507, "Insufficient Storage", S_E_FW_TMP_SPACE, RUNTIME_DIR);
+        goto done;
+    }
+    if (!receive_upload_body(fd, request, output, &received) || fsync(output) < 0) goto receive_failed;
+    problem = check_gcu_package(output, received, &extracted);
+    if (problem != NULL) {
+        log_message("firmware %s from %s rejected: %s", filename, peer, problem);
+        send_text_errorf(fd, 400, "Bad Request", S_E_FW_PACKAGE, problem);
+        goto done;
+    }
+    if (statvfs(GCU_ROOT, &space) == 0 &&
+        (uint64_t)space.f_bavail * space.f_frsize < extracted + 1024U * 1024U) {
+        send_text_errorf(fd, 507, "Insufficient Storage", S_E_FW_TMP_SPACE, GCU_ROOT);
+        goto done;
+    }
+    close(output);
+    output = -1;
+    result = install_gcu_package(package, fd, error, sizeof(error));
+    if (result != 0) {
+        char stage[PATH_MAX];
+        if (snprintf(stage, sizeof(stage), "%s.new", GCU_ROOT) < (int)sizeof(stage)) {
+            (void)remove_path_tree(stage);
+        }
+        log_message("firmware %s from %s not installed: %s", filename, peer, error);
+        if (result == 1) {
+            send_text_errorf(fd, 400, "Bad Request", S_E_FW_PACKAGE, error);
+        } else {
+            send_text_errorf(fd, 500, "Internal Server Error", S_E_FW_INSTALL, error);
+        }
+        goto done;
+    }
+    log_message("firmware %s (%zu bytes) installed by %s; rebooting", filename, received, peer);
+    send_text_errorf(fd, 201, "Created", S_FW_INSTALLED_Z1, filename);
+    schedule_reboot();
+    goto done;
+
+receive_failed:
+    log_message("firmware upload from %s failed after %zu bytes: %s", peer, received,
+                strerror(errno));
+    send_text_errorf(fd, 400, "Bad Request", S_E_FW_FAILED, received, strerror(errno));
+done:
+    if (output >= 0) close(output);
+    if (created) (void)unlink(package);
+    if (upgrade_lock >= 0) close(upgrade_lock);
+}
+#endif
+
 static void handle_firmware_upload(int fd, const struct request *request,
                                    const char *peer)
 {
-#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
-    (void)request; (void)peer;
-    send_response(fd, 501, "Not Implemented", "text/plain", "Use the XFRobot .gcu updater.\n", 29, NULL);
-    return;
-#endif
+#if WEB_INSTALLS_FIRMWARE
+    handle_firmware_install(fd, request, peer);
+#else
     char filename[256];
     char temporary[272];
     char content_type[128];
-    char expect[64];
     struct statvfs space;
     struct stat st;
     int upgrade_lock = -1;
@@ -7924,31 +8385,7 @@ static void handle_firmware_upload(int fd, const struct request *request,
         goto done;
     }
     temporary_created = true;
-    if (find_header(request, "Expect", expect, sizeof(expect)) != NULL &&
-        strcasecmp(expect, "100-continue") == 0) {
-        static const char continue_response[] = "HTTP/1.1 100 Continue\r\n\r\n";
-        if (!send_all(fd, continue_response, sizeof(continue_response) - 1)) goto receive_failed;
-    }
-    if (request->body_len > 0) {
-        if (!write_all(output, request->body, request->body_len)) goto receive_failed;
-        received = request->body_len;
-    }
-    while (received < request->content_length) {
-        char buffer[64 * 1024];
-        size_t wanted = request->content_length - received;
-        if (wanted > sizeof(buffer)) wanted = sizeof(buffer);
-        ssize_t got = recv(fd, buffer, wanted, 0);
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            goto receive_failed;
-        }
-        if (got == 0) {
-            errno = ECONNRESET;
-            goto receive_failed;
-        }
-        if (!write_all(output, buffer, (size_t)got)) goto receive_failed;
-        received += (size_t)got;
-    }
+    if (!receive_upload_body(fd, request, output, &received)) goto receive_failed;
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     if (!zr10_valid_firmware(output)) {
         send_text_error(fd, 400, "Bad Request", "Invalid ZR10 firmware: header, partition payload or checksum mismatch.\n", NULL);
@@ -8006,6 +8443,7 @@ done:
     if (directory >= 0 && temporary_created && !renamed) (void)unlinkat(directory, temporary, 0);
     if (directory >= 0) close(directory);
     if (upgrade_lock >= 0) close(upgrade_lock);
+#endif
 }
 
 static void send_log_page(int fd)

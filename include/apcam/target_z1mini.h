@@ -85,8 +85,11 @@
 
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
-#define FIRMWARE_PREFIX "Z1Mini_FW_"
-#define FIRMWARE_INSTALL_NAME "Z1Mini.gcu"
+#define FIRMWARE_PREFIX "Z1Mini_AP_"
+#define FIRMWARE_SUFFIX ".gcu"
+#ifndef GCU_ROOT
+#define GCU_ROOT "/opt/bin/gcu"
+#endif
 #ifndef SOC_TEMPERATURE_PATH
 #define SOC_TEMPERATURE_PATH "/sys/class/thermal/thermal_zone0/temp"
 #endif
