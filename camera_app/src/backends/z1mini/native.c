@@ -76,7 +76,10 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
         if (header.magic==CA_Z1_NATIVE_OVERLAY_MAGIC) {
-            if (header.size || header.stream>1 || header.key>4095 || !awaiting_overlay) break;
+            if (header.size || header.stream>1 || header.key>4095) break;
+            /* A previous request can be acknowledged after a retry has
+             * already completed. It is stale, not a video transport error. */
+            if (!awaiting_overlay) continue;
             if (overlay) {
                 int applied=header.key ? -(int)header.key : (int)header.stream;
                 /* A timeout may have caused the app to request rollback while

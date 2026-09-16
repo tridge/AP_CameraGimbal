@@ -134,10 +134,8 @@ int ca_media_open(struct ca_media **result, const struct ca_media_config *config
         free(media); return -1;
     }
     if (ca_media_impl_apply_overlay(media->impl, &config->settings) < 0) {
-        int saved=errno;
-        ca_media_close(media);
-        errno=saved;
-        return -1;
+        ca_log("initial video overlay could not be applied; camera remains available: %s",
+               strerror(errno));
     }
     start_controls_monitor(media);
     *result = media;

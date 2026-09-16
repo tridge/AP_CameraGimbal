@@ -49,7 +49,8 @@ int main(int argc, char **argv)
             }
             if (read(3,&request,1)!=1 || request!=1) return 1;
             struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,request};
-            if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
+            if (write(3,&reply,sizeof(reply))!=sizeof(reply) ||
+                write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
             for (unsigned i=190;i<200;i++) {
                 frame_header.stream=i&1U;
                 if (write(3,&frame_header,sizeof(frame_header))!=sizeof(frame_header) ||

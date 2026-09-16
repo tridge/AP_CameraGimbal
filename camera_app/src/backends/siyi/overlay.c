@@ -70,6 +70,7 @@ int ca_overlay_hw_set(struct ca_overlay_hw **out,const struct ca_overlay_channel
         ca_overlay_geometry(&g,s->width,s->height,true,false,0);
         if (ca_overlay_bitmaps(bits,s->width,s->height,&g)<0) { error=-1; goto fail; }
         struct ca_overlay_bitmap *b=&bits[0];
+        if (!b->pixels) { ca_overlay_free(bits); errno=ENOMEM; goto fail; }
         MI_TYPE(rgn_cnf) config={.type=0,.pixFmt=0,.size={b->width,b->height}};
         error=MI_CALL(hw,fnCreateRegion,c,&config);
         if (!error) {
