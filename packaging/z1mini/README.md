@@ -39,7 +39,9 @@ listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
 installation and reboots. A rejected package leaves the installation untouched.
 SD-card boot installation is not implemented for this target. The retained-ISP
 package depends on the vendor `ipc/` files and can only be deployed directly
-over an intact vendor installation; the web upload refuses it otherwise.
+over an intact vendor installation. The web upload refuses retained-ISP
+packages because it replaces the complete application tree and would remove
+those vendor files.
 
 The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP

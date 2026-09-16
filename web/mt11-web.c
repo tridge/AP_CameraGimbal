@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -7982,6 +7983,8 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
     if ((uint64_t)directory_offset + directory_size > eocd_position) {
         return "central directory out of range";
     }
+    uint64_t max_directory = (uint64_t)entries * (46U + 3U * 65535U);
+    if (directory_size > max_directory) return "central directory too large";
     directory = malloc(directory_size);
     if (directory == NULL) return "out of memory";
     if (pread(fd, directory, directory_size, directory_offset) != (ssize_t)directory_size) {
@@ -8071,6 +8074,13 @@ static int run_tool(const char *directory, char *const argv[], int client)
             dup2(null, 2);
             if (null > 2) close(null);
         }
+        if (argv[0] != NULL && strcmp(argv[0], "unzip") == 0) {
+            struct rlimit limit = {
+                .rlim_cur = GCU_PACKAGE_MAX_EXTRACTED,
+                .rlim_max = GCU_PACKAGE_MAX_EXTRACTED,
+            };
+            (void)setrlimit(RLIMIT_FSIZE, &limit);
+        }
         if (directory != NULL && chdir(directory) < 0) _exit(127);
         execvp(argv[0], argv);
         _exit(127);
@@ -8150,8 +8160,8 @@ static int install_gcu_package(const char *package, int client, char *error, siz
     }
     needs_isp = strstr(manifest, "\"vendor_isp_required\": true") != NULL;
     free(manifest);
-    if (needs_isp && (!join_path(path, sizeof(path), GCU_ROOT, "ipc/main") || access(path, X_OK) != 0)) {
-        snprintf(error, error_size, "package needs the vendor ISP program, which is not installed");
+    if (needs_isp) {
+        snprintf(error, error_size, "retained-ISP packages cannot be installed from the web UI");
         return 1;
     }
     sync_firmware_storage();
@@ -8170,7 +8180,9 @@ static int install_gcu_package(const char *package, int client, char *error, siz
         }
         if (rename(staged, GCU_ROOT) < 0) {
             snprintf(error, error_size, "cannot install %.200s: %s", GCU_ROOT, strerror(errno));
-            (void)rename(old, GCU_ROOT);
+            if (rename(old, GCU_ROOT) < 0) {
+                log_message("cannot restore previous application %s: %s", old, strerror(errno));
+            }
             return 2;
         }
         removal = old;

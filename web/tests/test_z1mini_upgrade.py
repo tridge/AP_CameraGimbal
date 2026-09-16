@@ -145,17 +145,18 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         assert not (root / 'gcu.new').exists() and not (root / 'gcu.old').exists()
         assert not list(run.glob('firmware-upload.*'))
         assert (settings / 'camera.ini').read_bytes() == config
-        # a second install replaces the first, and a vendor-ISP package is accepted once ipc/main exists
+        # A retained-ISP package is never accepted by the destructive web
+        # updater, even when the old vendor ISP is still present.
         (gcu / 'ipc/main').write_bytes(b'#!/bin/sh\n')
         (gcu / 'ipc/main').chmod(0o755)
         second = package(AP | {'camera-app': b'second\n'}, IPC,
                          manifest=b'{"target": "xfrobot-z1mini", "vendor_isp_required": true}\n')
-        assert request('/upgrade', second, headers)[0] == 201
-        assert (gcu / 'ap/camera-app').read_bytes() == b'second\n'
-        assert not (gcu / 'ipc/main').exists()
+        assert request('/upgrade', second, headers)[0] == 400
+        assert (gcu / 'ap/camera-app').read_bytes() == AP['camera-app']
+        assert (gcu / 'ipc/main').exists()
         log.flush()
         text = (root / 'web.log').read_text()
-        assert text.count('SITL reboot request ignored') == 2, text
+        assert text.count('SITL reboot request ignored') == 1, text
         print('PASS Z1-Mini: browser and server accept overlay packages, reject bad names and archives, install atomically and reboot')
     finally:
         process.terminate()
