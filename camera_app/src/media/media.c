@@ -272,9 +272,9 @@ int ca_media_set_zoom(struct ca_media *media, float zoom)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_zoom(IMPL, zoom);
     int saved=errno;
-    int overlay=ca_media_impl_apply_overlay(IMPL, &media->config.settings);
     if (result<0) { errno=saved; return result; }
-    return overlay;
+    (void)ca_media_impl_apply_overlay(IMPL, &media->config.settings);
+    return 0;
 }
 float ca_media_zoom(const struct ca_media *media)
 { return IMPL ? ca_media_impl_zoom(IMPL) : 1; }
@@ -287,9 +287,9 @@ int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_lens(IMPL, lens);
     int saved=errno;
-    int overlay=ca_media_impl_apply_overlay(IMPL, &media->config.settings);
     if (result<0) { errno=saved; return result; }
-    return overlay;
+    (void)ca_media_impl_apply_overlay(IMPL, &media->config.settings);
+    return 0;
 }
 enum ca_media_lens ca_media_lens(const struct ca_media *media)
 { return IMPL ? ca_media_impl_lens(IMPL) : CA_MEDIA_LENS_WIDE; }
@@ -298,9 +298,9 @@ int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_thermal_main(IMPL, thermal_main);
     int saved=errno;
-    int overlay=ca_media_impl_apply_overlay(IMPL, &media->config.settings);
     if (result<0) { errno=saved; return result; }
-    return overlay;
+    (void)ca_media_impl_apply_overlay(IMPL, &media->config.settings);
+    return 0;
 }
 bool ca_media_thermal_main(const struct ca_media *media)
 { return IMPL && ca_media_impl_thermal_main(IMPL); }
