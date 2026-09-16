@@ -210,11 +210,14 @@ firmware can erase the kernel and rootfs, so stable power is mandatory.
 
 On the XFRobot Z1-Mini the same button accepts `Z1Mini_AP_*.gcu` overlays and
 the web server installs them itself. The upload is streamed to `/tmp`, the ZIP
-listing is checked (only `gcu/ap/` and `gcu/ipc/` regular files, required files
-present, bounded size), the archive is extracted with the camera's `unzip` into
+listing is checked against the generated package's file allowlist (required
+files present, bounded central directory and total extracted size), the archive
+is extracted one file at a time with the camera's `unzip` into
 `/opt/bin/gcu.new`, `SHA256SUMS` and the manifest target are verified, and the
-new tree is exchanged with `/opt/bin/gcu` in one rename before the camera
-reboots. Rejected packages leave the installation untouched.
+new tree is atomically exchanged with `/opt/bin/gcu` before the camera reboots.
+If the filesystem does not support atomic directory exchange, the upload fails
+while preserving the existing installation. Rejected packages leave the
+installation untouched.
 
 Custom firmware packages carry `/app/camera.ini.default`, not
 `/app/camera.ini`. Early startup copies the default only on a first install or

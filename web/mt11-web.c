@@ -7895,13 +7895,15 @@ static bool receive_upload_body(int fd, const struct request *request, int outpu
 /* The .gcu overlay is a ZIP of the gcu/ap and gcu/ipc files. It is checked before
  * extraction, unpacked next to GCU_ROOT, verified against its SHA256SUMS and
  * manifest, then exchanged with the running installation before a reboot. */
+#ifndef GCU_PACKAGE_MAX_EXTRACTED
 #define GCU_PACKAGE_MAX_EXTRACTED (64U * 1024U * 1024U)
+#endif
 #ifndef RENAME_EXCHANGE
 #define RENAME_EXCHANGE 2
 #endif
 static void schedule_reboot(void);
 
-/* Atomically swap two paths; the caller falls back to renames on ENOSYS. */
+/* Atomically swap two paths; unsupported filesystems fail safely. */
 static int exchange_paths(const char *a, const char *b)
 {
 #ifdef __CYGWIN__
@@ -7910,6 +7912,13 @@ static int exchange_paths(const char *a, const char *b)
     errno = ENOSYS;
     return -1;
 #else
+#ifdef MT11_WEB_TEST
+    const char *failure_marker = getenv("CAMERA_GIMBAL_TEST_EXCHANGE_FAIL");
+    if (failure_marker != NULL && access(failure_marker, F_OK) == 0) {
+        errno = ENOSYS;
+        return -1;
+    }
+#endif
     return (int)syscall(SYS_renameat2, AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE);
 #endif
 }
@@ -7925,23 +7934,30 @@ static unsigned zip_le16(const unsigned char *p)
 
 static bool gcu_entry_name_ok(const char *name, size_t length)
 {
-    static const char *const prefixes[] = {"gcu/ap/", "gcu/ipc/"};
+    static const char *const allowed[] = {
+        "gcu/ap/SHA256SUMS", "gcu/ap/manifest.json", "gcu/ap/service.sh",
+        "gcu/ap/camera-app", "gcu/ap/z1mini-web", "gcu/ap/ax-capture",
+        "gcu/ap/camera.ini.default", "gcu/ap/web.pass.default", "gcu/ap/README.md",
+        "gcu/ipc/run.sh", "gcu/ipc/camera_gcu.sh",
+    };
 
-    for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); p++) {
-        size_t plen = strlen(prefixes[p]);
-        if (length <= plen || length - plen > 200 || memcmp(name, prefixes[p], plen) != 0) continue;
-        for (size_t i = plen; i < length; i++) {
-            unsigned char value = (unsigned char)name[i];
-            if (!(isalnum(value) || value == '.' || value == '_' || value == '-')) return false;
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+        if (strlen(allowed[i]) == length && memcmp(name, allowed[i], length) == 0) {
+            return true;
         }
-        return true;
     }
     return false;
 }
 
+struct gcu_package_index {
+    unsigned count;
+    char names[256][256];
+};
+
 /* Check the ZIP central directory before anything is extracted. Returns a
  * problem description or NULL, and the total extracted size. */
-static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
+static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted,
+                                     struct gcu_package_index *index)
 {
     static const char *const required[] = {
         "gcu/ap/SHA256SUMS", "gcu/ap/manifest.json", "gcu/ap/service.sh",
@@ -7956,6 +7972,7 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
     size_t eocd = tail_length;
 
     *extracted = 0;
+    index->count = 0;
     if (size < 22 ||
         pread(fd, tail, tail_length, (off_t)(size - tail_length)) != (ssize_t)tail_length) {
         return problem;
@@ -7983,7 +8000,9 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
     if ((uint64_t)directory_offset + directory_size > eocd_position) {
         return "central directory out of range";
     }
-    uint64_t max_directory = (uint64_t)entries * (46U + 3U * 65535U);
+    /* Only our generated flat package format is accepted. Bound the extra
+     * fields/comments too, so entries cannot force a multi-megabyte malloc. */
+    uint64_t max_directory = (uint64_t)entries * (46U + 207U + 2048U);
     if (directory_size > max_directory) return "central directory too large";
     directory = malloc(directory_size);
     if (directory == NULL) return "out of memory";
@@ -8001,7 +8020,13 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
         unsigned method = zip_le16(header + 10);
         uint32_t uncompressed = zip_le32(header + 24);
         unsigned name_length = zip_le16(header + 28);
-        size_t entry_length = 46 + name_length + zip_le16(header + 30) + zip_le16(header + 32);
+        unsigned extra_length = zip_le16(header + 30);
+        unsigned comment_length = zip_le16(header + 32);
+        if (extra_length > 1024 || comment_length > 1024) {
+            problem = "oversized central directory entry";
+            goto fail;
+        }
+        size_t entry_length = 46 + name_length + extra_length + comment_length;
         unsigned mode = zip_le32(header + 38) >> 16;
         const char *name = (const char *)header + 46;
         if (position + entry_length > directory_size) {
@@ -8011,6 +8036,13 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
         if (!gcu_entry_name_ok(name, name_length)) {
             problem = "unexpected file in archive";
             goto fail;
+        }
+        for (unsigned previous = 0; previous < n; previous++) {
+            if (strlen(index->names[previous]) == name_length &&
+                memcmp(index->names[previous], name, name_length) == 0) {
+                problem = "duplicate archive entry";
+                goto fail;
+            }
         }
         if (method != 0 && method != 8) {
             problem = "unsupported compression";
@@ -8033,6 +8065,12 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
             problem = "package too large";
             goto fail;
         }
+        if (name_length >= sizeof(index->names[0])) {
+            problem = "file name too long";
+            goto fail;
+        }
+        memcpy(index->names[n], name, name_length);
+        index->names[n][name_length] = '\0';
         for (size_t r = 0; r < sizeof(required) / sizeof(required[0]); r++) {
             if (strlen(required[r]) == name_length && memcmp(required[r], name, name_length) == 0) {
                 found[r] = true;
@@ -8040,6 +8078,7 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted)
         }
         position += entry_length;
     }
+    index->count = entries;
     for (size_t r = 0; r < sizeof(required) / sizeof(required[0]); r++) {
         if (found[r]) continue;
         snprintf(missing, sizeof(missing), "missing %s", required[r]);
@@ -8054,7 +8093,8 @@ fail:
 }
 
 /* Run a tool to completion with no terminal; the server ignores SIGCHLD. */
-static int run_tool(const char *directory, char *const argv[], int client)
+static int run_tool(const char *directory, char *const argv[], int client,
+                    rlim_t max_file_size)
 {
     struct sigaction previous;
     struct sigaction reap = {.sa_handler = SIG_DFL};
@@ -8074,12 +8114,12 @@ static int run_tool(const char *directory, char *const argv[], int client)
             dup2(null, 2);
             if (null > 2) close(null);
         }
-        if (argv[0] != NULL && strcmp(argv[0], "unzip") == 0) {
+        if (max_file_size != RLIM_INFINITY) {
             struct rlimit limit = {
-                .rlim_cur = GCU_PACKAGE_MAX_EXTRACTED,
-                .rlim_max = GCU_PACKAGE_MAX_EXTRACTED,
+                .rlim_cur = max_file_size,
+                .rlim_max = max_file_size,
             };
-            (void)setrlimit(RLIMIT_FSIZE, &limit);
+            if (setrlimit(RLIMIT_FSIZE, &limit) < 0) _exit(126);
         }
         if (directory != NULL && chdir(directory) < 0) _exit(127);
         execvp(argv[0], argv);
@@ -8087,7 +8127,8 @@ static int run_tool(const char *directory, char *const argv[], int client)
     }
     if (child > 0) {
         while (waitpid(child, &status, 0) < 0 && errno == EINTR) continue;
-        result = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        result = WIFEXITED(status) ? WEXITSTATUS(status) :
+                 (WIFSIGNALED(status) && WTERMSIG(status) == SIGXFSZ ? -2 : -1);
     }
     sigaction(SIGCHLD, &previous, NULL);
     return result;
@@ -8107,8 +8148,20 @@ static bool remove_path_tree(const char *path)
     return nftw(path, remove_tree_item, 32, FTW_DEPTH | FTW_PHYS | FTW_MOUNT) == 0;
 }
 
+static int set_package_tree_permissions(const char *path, const struct stat *st,
+                                        int type, struct FTW *walk)
+{
+    (void)type;
+    (void)walk;
+    if (S_ISDIR(st->st_mode)) return chmod(path, 0755);
+    if (S_ISREG(st->st_mode)) return chmod(path, (st->st_mode & 0111) ? 0755 : 0644);
+    errno = EINVAL;
+    return -1;
+}
+
 /* Returns 0 when installed, 1 for a rejected package, 2 for an install failure. */
-static int install_gcu_package(const char *package, int client, char *error, size_t error_size)
+static int install_gcu_package(const char *package, const struct gcu_package_index *index,
+                               int client, char *error, size_t error_size)
 {
     static const char *const executables[] = {
         "ap/service.sh", "ap/camera-app", "ap/z1mini-web", "ap/ax-capture",
@@ -8116,7 +8169,6 @@ static int install_gcu_package(const char *package, int client, char *error, siz
     };
     char stage[PATH_MAX];
     char staged[PATH_MAX];
-    char old[PATH_MAX];
     char path[PATH_MAX];
     const char *removal;
     struct stat st;
@@ -8125,19 +8177,39 @@ static int install_gcu_package(const char *package, int client, char *error, siz
     bool needs_isp;
 
     if (snprintf(stage, sizeof(stage), "%s.new", GCU_ROOT) >= (int)sizeof(stage) ||
-        snprintf(staged, sizeof(staged), "%s.new/gcu", GCU_ROOT) >= (int)sizeof(staged) ||
-        snprintf(old, sizeof(old), "%s.old", GCU_ROOT) >= (int)sizeof(old)) {
+        snprintf(staged, sizeof(staged), "%s.new/gcu", GCU_ROOT) >= (int)sizeof(staged)) {
         snprintf(error, error_size, "path too long");
         return 2;
     }
-    if (!remove_path_tree(stage) || !remove_path_tree(old) || mkdir(stage, 0755) < 0) {
+    if (!remove_path_tree(stage) || mkdir(stage, 0755) < 0) {
         snprintf(error, error_size, "cannot prepare %.200s: %s", stage, strerror(errno));
         return 2;
     }
-    char *const unzip_argv[] = {"unzip", "-o", "-q", (char *)package, "-d", stage, NULL};
-    if (run_tool(NULL, unzip_argv, client) != 0) {
-        snprintf(error, error_size, "extraction failed");
-        return 1;
+    uint64_t remaining = GCU_PACKAGE_MAX_EXTRACTED;
+    for (unsigned i = 0; i < index->count; i++) {
+        char *const unzip_argv[] = {"unzip", "-o", "-q", (char *)package,
+                                    (char *)index->names[i], "-d", stage, NULL};
+        int unzip_result = run_tool(NULL, unzip_argv, client, (rlim_t)remaining);
+        if (unzip_result != 0) {
+            if (unzip_result == -2) {
+                snprintf(error, error_size, "extracted data exceeds package limit");
+                return 1;
+            }
+            snprintf(error, error_size, "%s", unzip_result == 126 || unzip_result == 127 ?
+                     "required unzip utility is unavailable" : "extraction failed");
+            return unzip_result == 126 || unzip_result == 127 ? 2 : 1;
+        }
+        if (!join_path(path, sizeof(path), staged, index->names[i] + 4) ||
+            stat(path, &st) < 0 || !S_ISREG(st.st_mode) ||
+            (uint64_t)st.st_size > remaining) {
+            snprintf(error, error_size, "invalid extracted file");
+            return 1;
+        }
+        remaining -= (uint64_t)st.st_size;
+    }
+    if (nftw(staged, set_package_tree_permissions, 16, FTW_PHYS | FTW_MOUNT) < 0) {
+        snprintf(error, error_size, "cannot set application permissions: %s", strerror(errno));
+        return 2;
     }
     for (size_t i = 0; i < sizeof(executables) / sizeof(executables[0]); i++) {
         if (!join_path(path, sizeof(path), staged, executables[i]) || lstat(path, &st) < 0) continue;
@@ -8147,7 +8219,16 @@ static int install_gcu_package(const char *package, int client, char *error, siz
         }
     }
     char *const sums_argv[] = {"sha256sum", "-c", "SHA256SUMS", NULL};
-    if (!join_path(path, sizeof(path), staged, "ap") || run_tool(path, sums_argv, client) != 0) {
+    if (!join_path(path, sizeof(path), staged, "ap")) {
+        snprintf(error, error_size, "invalid staged application path");
+        return 2;
+    }
+    int sums_result = run_tool(path, sums_argv, client, RLIM_INFINITY);
+    if (sums_result == 126 || sums_result == 127) {
+        snprintf(error, error_size, "required sha256sum utility is unavailable");
+        return 2;
+    }
+    if (sums_result != 0) {
         snprintf(error, error_size, "SHA256SUMS mismatch");
         return 1;
     }
@@ -8173,21 +8254,10 @@ static int install_gcu_package(const char *package, int client, char *error, siz
         removal = stage;
     } else if (exchange_paths(staged, GCU_ROOT) == 0) {
         removal = staged;
-    } else if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP) {
-        if (rename(GCU_ROOT, old) < 0) {
-            snprintf(error, error_size, "cannot move aside %.200s: %s", GCU_ROOT, strerror(errno));
-            return 2;
-        }
-        if (rename(staged, GCU_ROOT) < 0) {
-            snprintf(error, error_size, "cannot install %.200s: %s", GCU_ROOT, strerror(errno));
-            if (rename(old, GCU_ROOT) < 0) {
-                log_message("cannot restore previous application %s: %s", old, strerror(errno));
-            }
-            return 2;
-        }
-        removal = old;
     } else {
-        snprintf(error, error_size, "cannot exchange %.200s: %s", GCU_ROOT, strerror(errno));
+        snprintf(error, error_size,
+                 "cannot atomically exchange %.200s: %s; existing installation preserved",
+                 GCU_ROOT, strerror(errno));
         return 2;
     }
     sync_firmware_storage();
@@ -8207,6 +8277,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
     char error[512];
     struct statvfs space;
     uint64_t extracted = 0;
+    struct gcu_package_index package_index;
     int upgrade_lock = -1;
     int output = -1;
     size_t received = 0;
@@ -8256,7 +8327,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
         goto done;
     }
     if (!receive_upload_body(fd, request, output, &received) || fsync(output) < 0) goto receive_failed;
-    problem = check_gcu_package(output, received, &extracted);
+    problem = check_gcu_package(output, received, &extracted, &package_index);
     if (problem != NULL) {
         log_message("firmware %s from %s rejected: %s", filename, peer, problem);
         send_text_errorf(fd, 400, "Bad Request", S_E_FW_PACKAGE, problem);
@@ -8269,7 +8340,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
     }
     close(output);
     output = -1;
-    result = install_gcu_package(package, fd, error, sizeof(error));
+    result = install_gcu_package(package, &package_index, fd, error, sizeof(error));
     if (result != 0) {
         char stage[PATH_MAX];
         if (snprintf(stage, sizeof(stage), "%s.new", GCU_ROOT) < (int)sizeof(stage)) {

@@ -20,9 +20,10 @@ camera SDK libraries are not redistributed. Common build dependencies provide
 the pinned XOP RTSP and minimp4 sources.
 
 The output folder contains the `.gcu` application overlay, installation/update
-instructions, build information and checksums. `make z1mini_native_package`
-builds the same native overlay directly. `make z1mini_package` builds an
-alternative which receives video from the retained vendor ISP service.
+instructions, build information and checksums. `make z1mini_package` builds
+the self-contained native-capture release package; `make z1mini_native_package`
+is an explicit alias. The `make z1mini_retained_isp_package` target is for
+development only and cannot be deployed through either supported installer.
 
 ## Installation and updates
 
@@ -38,10 +39,12 @@ listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
 `SHA256SUMS` and the manifest target, exchanges it with the running
 installation and reboots. A rejected package leaves the installation untouched.
 SD-card boot installation is not implemented for this target. The retained-ISP
-package depends on the vendor `ipc/` files and can only be deployed directly
-over an intact vendor installation. The web upload refuses retained-ISP
-packages because it replaces the complete application tree and would remove
-those vendor files.
+package depends on the vendor `ipc/` files. The XFRobot updater also replaces
+the complete GCU tree, so the retained-ISP package is only for development on
+a camera where the vendor ISP has been installed separately; it is not a
+deployable release package. `make z1mini_package` therefore builds the
+self-contained native package. The web upload refuses retained-ISP packages
+because that update would remove the vendor ISP files.
 
 The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP

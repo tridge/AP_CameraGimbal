@@ -5,7 +5,7 @@
 # SITL, source downloads and clean targets do not need hardware toolchains.
 HARDWARE_BUILD_GOALS := all release mt11_package _mt11_package \
 	a8_package zr10 zr10_dependencies zr10_package zr10_firmware \
-	z1mini z1mini_package z1mini_native_package packaging/mt11/thermal_socket
+	z1mini z1mini_package z1mini_native_package z1mini_retained_isp_package packaging/mt11/thermal_socket
 ifneq ($(filter $(HARDWARE_BUILD_GOALS),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
 ifeq ($(wildcard build/environment.mk),)
 $(error Build environment is not configured in this checkout. Run 'python3 tools/install_build_environment.py' first)
@@ -431,11 +431,11 @@ zr10_sitl-test: zr10_sitl
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_BUILD_HASH := $(MT11_GIT_HASH)$(shell git diff --quiet HEAD -- || printf -- -dirty)
 Z1MINI_PACKAGE_OUT ?= build/Z1Mini_AP_$(MT11_VERSION)_$(Z1MINI_BUILD_HASH).gcu
-.PHONY: z1mini z1mini_package z1mini-test
+.PHONY: z1mini z1mini_package z1mini_retained_isp_package z1mini-test
 z1mini: build-dependencies
 	$(MAKE) -C camera_app CAMERA_BACKEND=z1mini CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
 	$(MAKE) -C web z1mini-web Z1MINI_CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
-z1mini_package: z1mini
+z1mini_retained_isp_package: z1mini
 	python3 tools/build_z1mini_package.py '$(Z1MINI_PACKAGE_OUT)'
 z1mini-test:
 	python3 tests/test_z1mini.py
@@ -450,6 +450,9 @@ Z1MINI_NATIVE_PACKAGE_OUT ?= build/Z1Mini_AP_native_$(MT11_VERSION)_$(Z1MINI_BUI
 z1mini_native_package: z1mini
 	$(MAKE) -C camera_app CAMERA_BACKEND=z1mini CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)' z1mini-capture Z1MINI_AX_SDK_INCLUDE='$(Z1MINI_AX_SDK_INCLUDE)'
 	python3 tools/build_z1mini_package.py --native-capture camera_app/build/z1mini/ax-capture '$(Z1MINI_NATIVE_PACKAGE_OUT)'
+
+# The self-contained native-capture variant is the deployable package.
+z1mini_package: z1mini_native_package
 
 Z1MINI_SITL_BUILD ?= build/z1mini-sitl
 $(Z1MINI_SITL_BUILD)/main.h264: $(A8_SITL_BUILD)/main.h264

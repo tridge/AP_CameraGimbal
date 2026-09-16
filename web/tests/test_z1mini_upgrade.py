@@ -6,6 +6,7 @@ import http.client
 import json
 from pathlib import Path
 import io
+import os
 import re
 import socket
 import subprocess
@@ -46,6 +47,29 @@ def raw_zip(entries):
     return output.getvalue()
 
 
+def lie_about_uncompressed_size(data, names, declared_size):
+    """Tamper the local and central ZIP sizes while retaining deflate data."""
+    data = bytearray(data)
+    wanted = set(names)
+    for signature, name_offset, length_offset, size_offset in (
+            (b'PK\x03\x04', 30, 26, 22), (b'PK\x01\x02', 46, 28, 24)):
+        position = 0
+        while True:
+            position = data.find(signature, position)
+            if position < 0:
+                break
+            name_length = int.from_bytes(data[position + length_offset:
+                                                position + length_offset + 2], 'little')
+            name = bytes(data[position + name_offset:
+                               position + name_offset + name_length]).decode()
+            if name in wanted:
+                data[position + size_offset:position + size_offset + 4] = declared_size.to_bytes(4, 'little')
+                wanted.remove(name)
+            position += name_offset + name_length
+    assert not wanted, wanted
+    return bytes(data)
+
+
 AP = {'camera-app': b'#!/bin/sh\necho new camera\n', 'z1mini-web': b'#!/bin/sh\necho new web\n',
       'service.sh': b'#!/bin/sh\n', 'ax-capture': b'#!/bin/sh\n', 'camera.ini.default': b'[general]\n',
       'web.pass.default': b'ardupilot\n', 'README.md': b'readme\n'}
@@ -73,8 +97,10 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
                  UPGRADE_LOCK_PATH=run / 'upgrade.lock', USER_LOCK_PATH=run / 'users.lock',
                  RUNTIME_DIR=run, CAMERA_READY_PATH=run / 'ready', REPLACEMENT_CAMERA_PATH=gcu / 'ap/camera-app',
                  SOC_TEMPERATURE_PATH=run / 'soc_temp')
+    exchange_failure = root / 'disable-atomic-exchange'
     subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
+                    '-DGCU_PACKAGE_MAX_EXTRACTED=4096',
                     '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', f'-I{MAVLINK}',
                     *[f'-D{name}="{path}"' for name, path in paths.items()],
                     str(WEB / 'mt11-web.c'), '-o', str(binary), '-lm'], check=True)
@@ -82,7 +108,14 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     log = (root / 'web.log').open('w')
-    process = subprocess.Popen([str(binary), '-p', str(port)], stdout=log, stderr=log)
+    test_env = os.environ.copy()
+    test_env['CAMERA_GIMBAL_TEST_EXCHANGE_FAIL'] = str(exchange_failure)
+    old_umask = os.umask(0o077)
+    try:
+        process = subprocess.Popen([str(binary), '-p', str(port)], stdout=log,
+                                   stderr=log, env=test_env)
+    finally:
+        os.umask(old_umask)
 
     def request(path, body=None, headers=None):
         connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
@@ -128,12 +161,23 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             'bad checksum': package(AP, IPC, sums=b'0' * 64 + b'  camera-app\n'),
             'other target': package(AP, IPC, manifest=b'{"target": "xfrobot-other"}\n'),
             'needs vendor isp': package(AP, IPC, manifest=b'{"target": "xfrobot-z1mini", "vendor_isp_required": true}\n'),
+            'unlisted extra file': package(AP | {'unlisted.bin': b'payload'}, IPC),
+            'dot path': raw_zip({'gcu/ap/..': b'x'}),
+            'aggregate decompression limit': lie_about_uncompressed_size(
+                package(AP | {'camera-app': b'a' * 2500, 'z1mini-web': b'b' * 2500}, IPC),
+                ('gcu/ap/camera-app', 'gcu/ap/z1mini-web'), 1500),
         }
         for label, data in rejected_packages.items():
             status, message = request('/upgrade', data, headers)
             assert status == 400, (label, status, message)
             assert (gcu / 'ap/camera-app').read_bytes() == b'old camera\n', label
             assert not (root / 'gcu.new').exists() and not list(run.glob('firmware-upload.*')), label
+        exchange_failure.touch()
+        status, message = request('/upgrade', good, headers)
+        assert status == 500 and b'atomically exchange' in message, (status, message)
+        assert (gcu / 'ap/camera-app').read_bytes() == b'old camera\n'
+        assert not (root / 'gcu.new').exists()
+        exchange_failure.unlink()
         status, message = request('/upgrade', good, headers)
         assert status == 201, (status, message)
         assert b'rebooting' in message
@@ -143,6 +187,10 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         for executable in ('ap/service.sh', 'ap/camera-app', 'ap/z1mini-web', 'ap/ax-capture', 'ipc/run.sh', 'ipc/camera_gcu.sh'):
             assert (gcu / executable).stat().st_mode & 0o111 == 0o111, executable
         assert not (root / 'gcu.new').exists() and not (root / 'gcu.old').exists()
+        assert (gcu.stat().st_mode & 0o777) == 0o755
+        assert ((gcu / 'ap').stat().st_mode & 0o777) == 0o755
+        assert ((gcu / 'ipc').stat().st_mode & 0o777) == 0o755
+        assert ((gcu / 'ap/README.md').stat().st_mode & 0o777) == 0o644
         assert not list(run.glob('firmware-upload.*'))
         assert (settings / 'camera.ini').read_bytes() == config
         # A retained-ISP package is never accepted by the destructive web
