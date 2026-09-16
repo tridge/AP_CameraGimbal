@@ -993,8 +993,9 @@ They appear in live streams. On MT11, A8 and ZR10, `[overlay] recording`
 into SD recordings. It defaults to false, keeping recordings clean; changes
 apply even during recording. The cross also appears on thermal video; the
 FOV box appears only on RGB. Z1-Mini currently shares its 1080p live encoder
-with recording and does not expose this toggle; its enabled cross appears
-in both live video and recordings.
+with recording and does not expose this toggle. The optional native helper
+supports a cross in both live video and recordings; the retained vendor-ISP
+pipeline cannot draw overlays and logs when `OSD_CROSS` is enabled.
 
 The box uses tangent-space lens projection, current RGB lens/zoom, and the
 thermal sensor's native aspect ratio. A stretched thermal stream does not

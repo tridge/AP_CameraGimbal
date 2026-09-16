@@ -252,12 +252,16 @@ int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config 
     const char *helper=getenv("CAMERA_APP_Z1_NATIVE_HELPER");
     /* The retained vendor ISP has no overlay control channel.  Keep the
      * setting harmless so it cannot prevent the camera app from starting. */
-    if (!helper || !*helper) return 0;
+    if (!helper || !*helper) {
+        static atomic_bool warned;
+        if (desired && !atomic_exchange(&warned, true))
+            ca_log("OSD_CROSS is configured but unavailable with the retained vendor ISP");
+        return 0;
+    }
     atomic_store(&m->overlay.desired,desired);
     atomic_store(&m->overlay.applied,-EINPROGRESS);
-    /* The native receiver acknowledges on its video thread.  Waiting here
-     * blocks the MAVLink event loop and can stall tracking for three seconds.
-     * The request is intentionally asynchronous; the receiver records any
-     * failure in overlay.applied and the next request retries it. */
+    /* The native receiver acknowledges on its video thread. Waiting here
+     * blocks the MAVLink event loop; the receiver retries after three seconds
+     * of video if no acknowledgement arrives. */
     return 0;
 }

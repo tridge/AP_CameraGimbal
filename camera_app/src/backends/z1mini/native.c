@@ -57,10 +57,21 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     size_t capacity = 0;
     int result = -1;
     bool awaiting_overlay=false;
+    unsigned overlay_wait_frames=0;
     while (!atomic_load(stop)) {
+        /* A live helper can lose an acknowledgement while still producing
+         * video. Retry after three seconds of frames rather than leaving the
+         * channel permanently latched busy. */
+        if (awaiting_overlay && overlay_wait_frames >= 180) {
+            awaiting_overlay=false;
+            overlay_wait_frames=0;
+        }
         if (overlay && !awaiting_overlay && atomic_load(&overlay->applied)==-EINPROGRESS) {
             uint8_t value=atomic_load(&overlay->desired);
-            if (send(sockets[0],&value,1,MSG_NOSIGNAL|MSG_DONTWAIT)==1) awaiting_overlay=true;
+            if (send(sockets[0],&value,1,MSG_NOSIGNAL|MSG_DONTWAIT)==1) {
+                awaiting_overlay=true;
+                overlay_wait_frames=0;
+            }
         }
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
@@ -74,6 +85,7 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                 atomic_store(&overlay->applied,applied);
             }
             awaiting_overlay=false;
+            overlay_wait_frames=0;
             continue;
         }
         if (header.magic==CA_Z1_NATIVE_AE_MAGIC) {
@@ -97,6 +109,7 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
         }
         if (receive_exact(sockets[0], frame, header.size, stop)) break;
         publish(opaque, frame, header.size, header.pts, header.key != 0, header.stream);
+        if (awaiting_overlay && overlay_wait_frames < 180) overlay_wait_frames++;
     }
     if (atomic_load(stop)) result = 0;
     free(frame);

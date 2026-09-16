@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 static atomic_bool stopped;
-static unsigned count, exposure_count;
+static unsigned count, exposure_count, stop_after=2;
 static void exposure(void *unused, const struct ca_exposure *s)
 {
     (void)unused;
@@ -22,9 +22,9 @@ static void frame(void *unused, const uint8_t *data, size_t length, uint64_t pts
     (void)unused;
     assert(length == 5 && !memcmp(data, "\0\0\0\1\x65", 5));
     assert(pts == 1234567 && key);
-    assert(stream == count);
+    assert(stream == (count & 1U));
     count++;
-    if (count == 2) atomic_store(&stopped, true);
+    if (count == stop_after) atomic_store(&stopped, true);
 }
 
 int main(int argc, char **argv)
@@ -37,6 +37,25 @@ int main(int argc, char **argv)
             if (read(3,&request,1)!=1 || request!=1) return 1;
             struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,request};
             if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
+        }
+        if (!strcmp(mode,"retry")) {
+            uint8_t request;
+            if (read(3,&request,1)!=1 || request!=1) return 1;
+            struct ca_z1_native_header frame_header={CA_Z1_NATIVE_MAGIC,5,1234567,1,0};
+            for (unsigned i=0;i<190;i++) {
+                frame_header.stream=i&1U;
+                if (write(3,&frame_header,sizeof(frame_header))!=sizeof(frame_header) ||
+                    write(3,"\0\0\0\1\x65",5)!=5) return 1;
+            }
+            if (read(3,&request,1)!=1 || request!=1) return 1;
+            struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,request};
+            if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
+            for (unsigned i=190;i<200;i++) {
+                frame_header.stream=i&1U;
+                if (write(3,&frame_header,sizeof(frame_header))!=sizeof(frame_header) ||
+                    write(3,"\0\0\0\1\x65",5)!=5) return 1;
+            }
+            return 0;
         }
         struct ca_z1_native_header h = {CA_Z1_NATIVE_MAGIC, 5, 1234567, 1, 0};
         if (valid || !strcmp(mode,"ae-size")) {
@@ -63,18 +82,20 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay"};
-    for (unsigned i = 0; i < 6; i++) {
+    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry"};
+    for (unsigned i = 0; i < 7; i++) {
         setenv("Z1_NATIVE_TEST_MODE", modes[i], 1);
         atomic_store(&stopped, false);
         count = exposure_count = 0;
+        stop_after = i==6 ? 195 : 2;
         struct ca_z1_overlay_control overlay={.desired=1,.applied=-EINPROGRESS};
         bool valid=i==0 || i==5;
-        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, i==5 ? &overlay : NULL);
-        if (i==5) assert(atomic_load(&overlay.applied)==1);
-        assert(result == (valid ? 0 : -1));
+        bool overlay_test=i==5 || i==6;
+        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL);
+        if (overlay_test) assert(atomic_load(&overlay.applied)==1);
+        assert(result == (valid || i==6 ? 0 : -1));
         assert(exposure_count == (valid ? 1U : 0U));
-        assert(count == (valid ? 2U : 0U));
+        assert(count == (valid ? 2U : i==6 ? 195U : 0U));
         assert(waitpid(-1, NULL, WNOHANG) == -1); /* no leaked helper children */
     }
     puts("Z1 native IPC: two fragmented streams, malformed size/stream, truncated header and child cleanup passed");
