@@ -5,6 +5,8 @@
  */
 #define _GNU_SOURCE
 #include "ax_config.h"
+#include "camera_app/overlay.h"
+#include <sys/socket.h>
 #include "ax_venc_api.h"
 #include "ax_vin_api.h"
 #include "ax_isp_3a_api.h"
@@ -23,6 +25,10 @@
 #include <time.h>
 #include <unistd.h>
 static atomic_bool stopped;
+static atomic_uint overlay_request, overlay_done[2];
+static atomic_int overlay_error;
+static unsigned overlay_acked;
+
 static int created, isp_open, vin_started, dev_enabled, stream_on, enc_created[2], enc_started[2];
 static pthread_t isp_thread;
 static int thread_started;
@@ -179,6 +185,65 @@ static void *exposure_poll(void *opaque)
     }
     return NULL;
 }
+
+/* The native AX path already owns uncompressed NV12 frames. Touch only the
+ * small cross region, in uncached mappings, before giving the frame to VENC.
+ * No full-frame copy, new processing stage or extra frame queue is required. */
+static int draw_cross(AX_VIDEO_FRAME_S *frame, const struct ca_overlay_bitmap *b)
+{
+    void *(*map)(AX_U64,AX_U32)=dlsym(RTLD_DEFAULT,"AX_SYS_Mmap");
+    AX_S32 (*unmap)(void *,AX_U32)=dlsym(RTLD_DEFAULT,"AX_SYS_Munmap");
+    unsigned stride=frame->u32PicStride[0];
+    unsigned uv_stride=frame->u32PicStride[1] ? frame->u32PicStride[1] : stride;
+    if (!map || !unmap || !b->pixels || stride<frame->u32Width || uv_stride<frame->u32Width ||
+        frame->enCompressMode!=AX_COMPRESS_MODE_NONE || frame->u32LeftPadding ||
+        b->x+b->width>frame->u32Width || b->y+b->height>frame->u32Height) return ENOTSUP;
+    unsigned y_size=(b->height-1)*stride+b->width;
+    unsigned uv_size=(b->height/2-1)*uv_stride+b->width;
+    AX_U64 uv_base=frame->u64PhyAddr[1] ? frame->u64PhyAddr[1] :
+        frame->u64PhyAddr[0]+(AX_U64)stride*frame->u32Height;
+    unsigned char *y=map(frame->u64PhyAddr[0]+(AX_U64)b->y*stride+b->x,y_size);
+    if (!y || y==(void *)-1) return EIO;
+    unsigned char *uv=map(uv_base+(AX_U64)(b->y/2)*uv_stride+b->x,uv_size);
+    if (!uv || uv==(void *)-1) { unmap(y,y_size); return EIO; }
+    for (unsigned row=0;row<b->height;row++) for (unsigned col=0;col<b->width;col++) {
+        uint16_t pixel=b->pixels[row*b->width+col];
+        if (!(pixel&0x8000)) continue;
+        y[row*stride+col]=(pixel&0x7fff) ? 235 : 16;
+        uv[(row/2)*uv_stride+(col&~1U)]=128;
+        uv[(row/2)*uv_stride+(col&~1U)+1]=128;
+    }
+    int result=unmap(uv,uv_size);
+    result |= unmap(y,y_size);
+    return result ? EIO : 0;
+}
+
+static void overlay_control(unsigned channel, AX_VIDEO_FRAME_S *frame, FILE *out,
+                            const struct ca_overlay_bitmap *cross)
+{
+    if (channel==0) {
+        uint8_t value;
+        if (recv(3,&value,1,MSG_DONTWAIT)==1 && value<=1) {
+            unsigned previous=atomic_load(&overlay_request);
+            atomic_store(&overlay_error,0);
+            atomic_store(&overlay_request,((previous&~1U)+2)|value);
+        }
+    }
+    unsigned request=atomic_load(&overlay_request);
+    int error=(request&1) ? draw_cross(frame,cross) : 0;
+    if (error) atomic_store(&overlay_error,error);
+    atomic_store(&overlay_done[channel],request);
+    pthread_mutex_lock(&output_lock);
+    if (request!=overlay_acked && atomic_load(&overlay_done[0])==request &&
+        atomic_load(&overlay_done[1])==request) {
+        struct ca_z1_native_header h={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,
+            atomic_load(&overlay_error),request&1};
+        if (fwrite(&h,1,sizeof(h),out)!=sizeof(h)) stopped=true;
+        overlay_acked=request;
+    }
+    pthread_mutex_unlock(&output_lock);
+}
+
 struct encoder_worker {
     unsigned channel, limit, frames;
     size_t bytes;
@@ -190,6 +255,12 @@ static void *encode(void *opaque) {
     unsigned c = worker->channel;
     bool framed = worker->framed;
     int r;
+    struct ca_overlay_geometry geometry;
+    struct ca_overlay_bitmap cross[CA_OVERLAY_REGIONS];
+    ca_overlay_geometry(&geometry,c ? 3840:1920,c ? 2160:1080,true,false,0);
+    if (ca_overlay_bitmaps(cross,c ? 3840:1920,c ? 2160:1080,&geometry)<0) {
+        worker->failed=true; stopped=true; return NULL;
+    }
     uint64_t deadline = framed ? UINT64_MAX : mono_ms() + 15000, first_pts = 0;
     while (worker->frames < worker->limit && !stopped && mono_ms() < deadline) {
         if (temp() >= 75000) {
@@ -215,6 +286,7 @@ static void *encode(void *opaque) {
             call("AX_VIN_ReleaseYuvFrame", 0, vin, (uintptr_t)&f, 0);
             goto failed;
         }
+        if (framed) overlay_control(c,v,worker->out,&cross[0]);
         r = ((fn4)sym("AX_VENC_SendFrame"))(c, (uintptr_t)&f.info.tFrameInfo, 1000, 0);
         int released = call("AX_VIN_ReleaseYuvFrame", 0, vin, (uintptr_t)&f, 0);
         if (r || released) {
@@ -258,10 +330,12 @@ static void *encode(void *opaque) {
             printf("stream=%u frames=%u bytes=%zu temp=%d pts_span_us=%llu\n", c, worker->frames,
                    worker->bytes, temp(), (unsigned long long)(pts - first_pts));
     }
+    ca_overlay_free(cross);
     return NULL;
 failed:
     worker->failed = !stopped;
     stopped = true;
+    ca_overlay_free(cross);
     return NULL;
 }
 int main(int argc, char **argv) {

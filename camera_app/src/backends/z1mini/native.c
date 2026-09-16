@@ -28,7 +28,8 @@ static int receive_exact(int fd, void *data, size_t size, const atomic_bool *sto
 }
 
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
-                         ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque)
+                         ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
+                         struct ca_z1_overlay_control *overlay)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) return -1;
@@ -55,9 +56,26 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     unsigned char *frame = NULL;
     size_t capacity = 0;
     int result = -1;
+    bool awaiting_overlay=false;
     while (!atomic_load(stop)) {
+        if (overlay && !awaiting_overlay && atomic_load(&overlay->applied)==-EINPROGRESS) {
+            uint8_t value=atomic_load(&overlay->desired);
+            if (send(sockets[0],&value,1,MSG_NOSIGNAL|MSG_DONTWAIT)==1) awaiting_overlay=true;
+        }
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
+        if (header.magic==CA_Z1_NATIVE_OVERLAY_MAGIC) {
+            if (header.size || header.stream>1 || header.key>4095 || !awaiting_overlay) break;
+            if (overlay) {
+                int applied=header.key ? -(int)header.key : (int)header.stream;
+                /* A timeout may have caused the app to request rollback while
+                 * this older command was still in flight. Send the latest next. */
+                if ((int)header.stream!=atomic_load(&overlay->desired)) applied=-EINPROGRESS;
+                atomic_store(&overlay->applied,applied);
+            }
+            awaiting_overlay=false;
+            continue;
+        }
         if (header.magic==CA_Z1_NATIVE_AE_MAGIC) {
             struct ca_exposure sample;
             if (header.size!=sizeof(sample) || header.stream || header.key ||

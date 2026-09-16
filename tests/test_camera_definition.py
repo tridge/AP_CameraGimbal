@@ -18,6 +18,12 @@ class Definitions(unittest.TestCase):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name'): p for p in root.findall('parameters/parameter')}
                 self.assertIn('CAM_MODE', params)
+                self.assertIn('OSD_CROSS', params)
+                self.assertEqual('OSD_RECORD' in params, target != 'z1mini')
+                if 'OSD_RECORD' in params:
+                    self.assertEqual(params['OSD_RECORD'].get('default'), '0')
+                self.assertEqual('OSD_THERMAL_FOV' in params, target == 'mt11')
+                self.assertEqual(params['OSD_CROSS'].get('default'), '0')
                 self.assertEqual('CAM_PALETTE' in params, target == 'mt11')
                 self.assertEqual('CAM_LENS' in params, target == 'mt11')
                 self.assertEqual('CAM_AUTOFOCUS' in params, target == 'mt11')

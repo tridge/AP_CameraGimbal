@@ -35,5 +35,7 @@ void ca_media_impl_close(struct ca_media_impl *media);
 /* Read-only feedback; called on a background thread, only while logging. */
 int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *sample);
 
+int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings);
+
 int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings);
 #endif

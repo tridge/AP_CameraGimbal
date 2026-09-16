@@ -58,7 +58,7 @@ struct ca_media_impl {
     struct ca_support_config support;
     unsigned secondary_rtsp_stream;
     unsigned sitl_frame_rate;
-    struct sitl_video videos[4];
+    struct sitl_video videos[CA_SITL_STREAMS];
     struct ca_sitl_terrain *terrain;
     pthread_t video_thread;
     bool video_thread_started;
@@ -81,7 +81,7 @@ struct ca_media_impl {
     char recording_path[2][4096];
     unsigned record_channels;
     unsigned rgb_record_source;
-    unsigned video_width[4], video_height[4];
+    unsigned video_width[CA_SITL_STREAMS], video_height[CA_SITL_STREAMS];
 #endif
 };
 
@@ -119,9 +119,9 @@ static int close_sitl_recording(struct ca_media_impl *media)
  * texture-upload stall without turning it into a visible pause. */
 #define TERRAIN_QUEUE_SIZE 2U
 struct terrain_frame {
-    uint8_t *data[4];
-    size_t length[4];
-    bool key[4];
+    uint8_t *data[CA_SITL_STREAMS];
+    size_t length[CA_SITL_STREAMS];
+    bool key[CA_SITL_STREAMS];
     float fov[2];
     bool thermal_main;
     uint64_t pts;
@@ -140,7 +140,8 @@ struct terrain_queue {
 static void free_terrain_frame(struct terrain_frame *frame)
 {
     if (!frame) return;
-    free(frame->data[0]); free(frame->data[1]); free(frame->data[2]); free(frame->data[3]); free(frame);
+    for (unsigned i=0; i<CA_SITL_STREAMS; i++) free(frame->data[i]);
+    free(frame);
 }
 
 static void advance_time(struct timespec *time, int64_t ns)
@@ -187,7 +188,7 @@ static void *render_terrain_frames(void *opaque)
         frame->fov[1] = ca_media_impl_hfov(media, media->has_thermal);
         struct ca_sitl_image image = {0};
         pthread_mutex_lock(&media->image_lock);
-        ca_config_copy_image(&image.settings, &media->image_settings);
+        image.settings = media->image_settings;
         image.capture_mask = media->capture_mask;
         image.capture_generation = media->capture_generation;
         memcpy(image.capture_fov, media->capture_fov, sizeof(image.capture_fov));
@@ -203,7 +204,7 @@ static void *render_terrain_frames(void *opaque)
         int result = ca_sitl_terrain_frame(media->terrain, frame->pts,
                 (uint64_t)due.tv_sec * 1000U + (uint64_t)due.tv_nsec / 1000000U,
                 frame->fov, frame->thermal_main, media->has_thermal,
-                media->rgb_record_source == 3U && atomic_load(&media->sitl_recording),
+                atomic_load(&media->sitl_recording),
                 &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure);
         if (result==0) {
             exposure.time_us=ca_binlog_time_us();
@@ -315,9 +316,9 @@ static void *video_thread(void *opaque)
     bool previous_source = false;
     enum ca_video_codec rtsp_codecs[2] = {media->videos[0].codec, media->videos[1].codec};
     while (!atomic_load(&media->video_stop)) {
-        uint8_t *rendered[4] = {0};
-        size_t rendered_length[4];
-        bool rendered_key[4];
+        uint8_t *rendered[CA_SITL_STREAMS] = {0};
+        size_t rendered_length[CA_SITL_STREAMS];
+        bool rendered_key[CA_SITL_STREAMS];
         bool thermal_main = media->thermal_main;
         float fov[2] = {
             ca_media_impl_hfov(media, false),
@@ -349,7 +350,7 @@ static void *video_thread(void *opaque)
                     ca_rtsp_add_video(media->rtsp, "video2", codecs[1], media->sitl_frame_rate,
                                        &media->secondary_rtsp_stream) < 0) {
                     ca_log("cannot reconfigure SITL RTSP after source codec change");
-                    for (unsigned i = 0; i < 4; i++) free(rendered[i]);
+                    for (unsigned i = 0; i < CA_SITL_STREAMS; i++) free(rendered[i]);
                     break;
                 }
                 if (ca_rtsp_support_proxy(media->rtsp, &media->support) < 0)
@@ -364,7 +365,7 @@ static void *video_thread(void *opaque)
             }
             previous_source = thermal_main;
         }
-        for (unsigned stream = 0U; stream < 4U; stream++) {
+        for (unsigned stream = 0U; stream < CA_SITL_STREAMS; stream++) {
             const uint8_t *data;
             size_t length;
             bool key_frame;
@@ -374,12 +375,12 @@ static void *video_thread(void *opaque)
                 key_frame = rendered_key[stream]; have_frame = length != 0;
             } else break;
             if (have_frame) {
-                float record_hfov = ca_media_impl_hfov(media, media->has_thermal && stream == 1U);
+                float record_hfov = ca_media_impl_hfov(media, media->has_thermal && (stream == 1U || stream == 4U));
                 float hfov_deg = record_hfov;
-                if (media->terrain) record_hfov = hfov_deg = fov[stream == 1U ? 1U : 0U];
+                if (media->terrain) record_hfov = hfov_deg = fov[(stream == 1U || stream == 4U) ? 1U : 0U];
                 pthread_mutex_lock(&media->record_lock);
                 unsigned record = stream == media->rgb_record_source ? 0U :
-                                  (media->has_thermal && stream == 1U ? 1U : 2U);
+                                  (media->has_thermal && stream == 4U ? 1U : 2U);
                 if (record < media->record_channels && media->mp4[record] != NULL) {
                     if (key_frame) media->wait_keyframe[record] = false;
                     if (!media->wait_keyframe[record] &&
@@ -423,7 +424,7 @@ static int open_sitl_video(struct ca_media_impl *media,
     ca_video_resolution_size(config->settings.sub_resolution, &width2, &height2);
     width3 = width2; height3 = height2;
     ca_video_resolution_size(config->settings.recording_resolution, &width4, &height4);
-    media->rgb_record_source = width4 == width1 && height4 == height1 && config->settings.main_codec == CA_VIDEO_H264 ? 0U : 3U;
+    media->rgb_record_source = 3U; /* separate overlays and H.264 recording */
     if (media->has_thermal) {
         width2 = APCAM_THERMAL_STREAM_WIDTH;
         height2 = APCAM_THERMAL_STREAM_HEIGHT;
@@ -437,11 +438,11 @@ static int open_sitl_video(struct ca_media_impl *media,
             if (!*rate || *end || value < 1 || value > 60) { errno = EINVAL; return -1; }
             frame_rate = (unsigned)value;
         }
-        const unsigned widths[4] = {width1, width2, width3, width4}, heights[4] = {height1, height2, height3, height4};
-        const enum ca_video_codec codecs[4] = {config->settings.main_codec,
+        const unsigned widths[CA_SITL_STREAMS] = {width1, width2, width3, width4, width2}, heights[CA_SITL_STREAMS] = {height1, height2, height3, height4, height2};
+        const enum ca_video_codec codecs[CA_SITL_STREAMS] = {config->settings.main_codec,
             media->has_thermal ? CA_VIDEO_H264 : config->settings.sub_codec,
-            config->settings.sub_codec, CA_VIDEO_H264};
-        for (unsigned i = 0; i < 4; i++) media->videos[i].codec = codecs[i];
+            config->settings.sub_codec, CA_VIDEO_H264, CA_VIDEO_H264};
+        for (unsigned i = 0; i < CA_SITL_STREAMS; i++) media->videos[i].codec = codecs[i];
         const char *renderer = terrain ? terrain : getenv("CAMERA_APP_SITL_RENDERER");
         if (!renderer || !*renderer) renderer = CA_SITL_VIDEO_SCRIPT;
         if (ca_sitl_terrain_open(&media->terrain, renderer, widths, heights, frame_rate, codecs) < 0) return -1;
@@ -472,6 +473,7 @@ static int open_sitl_video(struct ca_media_impl *media,
     media->video_width[1] = width2; media->video_height[1] = height2;
     media->video_width[2] = width3; media->video_height[2] = height3;
     media->video_width[3] = width4; media->video_height[3] = height4;
+    media->video_width[4] = width2; media->video_height[4] = height2;
     media->record_channels = APCAM_NUM_RECORDING_CHANNELS;
     int code = pthread_create(&media->video_thread, NULL, video_thread, media);
     if (code != 0) {
@@ -515,7 +517,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     pthread_mutex_init(&media->record_lock, NULL);
     pthread_mutex_init(&media->image_lock, NULL);
     pthread_cond_init(&media->capture_changed, NULL);
-    ca_config_copy_image(&media->image_settings, &config->settings);
+    media->image_settings = config->settings;
     media->record_root = strdup(config->record_root);
     if (media->record_root == NULL || open_sitl_video(media, config) < 0) {
         int saved_errno = errno;
@@ -537,9 +539,9 @@ int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
         if (active == atomic_load(&media->sitl_recording)) goto done;
         if (!active) { result = close_sitl_recording(media); goto done; }
         if (mkdir(media->record_root, 0755) < 0 && errno != EEXIST) { result = -1; goto done; }
-        /* SITL has no separate H.264 recording encoder for HEVC fixtures. */
+        /* Recording encoders always produce H.264, independently of live codecs. */
         for (unsigned i = 0U; i < media->record_channels; i++) {
-            if (media->videos[i == 0U ? media->rgb_record_source : 1U].codec != CA_VIDEO_H264) { errno = ENOTSUP; result = -1; goto done; }
+            if (media->videos[i == 0U ? media->rgb_record_source : 4U].codec != CA_VIDEO_H264) { errno = ENOTSUP; result = -1; goto done; }
         }
         /* Reserve unique names even after a simulator restart. */
         for (unsigned i = 0U; i < media->record_channels; i++) {
@@ -551,7 +553,7 @@ int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
             close(fd);
             unlink(media->recording_path[i]);
             if (ca_mp4_open(&media->mp4[i], media->recording_path[i],
-                            media->video_width[i == 0U ? media->rgb_record_source : 1U], media->video_height[i == 0U ? media->rgb_record_source : 1U],
+                            media->video_width[i == 0U ? media->rgb_record_source : 4U], media->video_height[i == 0U ? media->rgb_record_source : 4U],
                             media->sitl_frame_rate) < 0) { result = -1; break; }
             media->wait_keyframe[i] = true;
         }
@@ -919,4 +921,17 @@ int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca
     (void)media; (void)lens;
     return -ENOTSUP;
 #endif
+}
+
+int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+{
+    if (!media || !settings) { errno=EINVAL; return -1; }
+#ifdef CAMERA_APP_SITL
+    pthread_mutex_lock(&media->image_lock);
+    media->image_settings.osd_cross = settings->osd_cross;
+    media->image_settings.osd_recording = settings->osd_recording;
+    media->image_settings.osd_thermal_fov = settings->osd_thermal_fov;
+    pthread_mutex_unlock(&media->image_lock);
+#endif
+    return 0;
 }

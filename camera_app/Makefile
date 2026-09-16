@@ -86,7 +86,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.c) src/main.c \
 	src/config.c \
 	src/log.c src/recording/binlog.c src/protocol/manual_control.c \
-	src/media/autofocus.c src/media/media.c \
+	src/media/autofocus.c src/media/media.c src/media/overlay.c \
 	src/protocol/mavlink.c \
 	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
 	src/protocol/support_mavlink.c \
@@ -103,7 +103,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/metadata.c \
 	src/recording/video_metadata.c \
 	$(BACKEND_DIR)/control.c
-OBJECTS := $(COMMON_SOURCES:.c=.o) build/mt11_media.o build/mt11_pipeline.o \
+OBJECTS := $(COMMON_SOURCES:.c=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
 	build/live_video_server.o \
@@ -181,7 +181,7 @@ A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
 A8_C_OBJECTS := $(patsubst %.c,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURCES) \
 	src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
-	$(BACKEND_DIR)/media.c $(BACKEND_DIR)/pipeline.c $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.c) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.c) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.c $(BACKEND_DIR)/native.c))
+	$(BACKEND_DIR)/media.c $(BACKEND_DIR)/pipeline.c $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.c) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.c) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.c) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.c $(BACKEND_DIR)/native.c))
 OBJECTS := $(A8_C_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
 $(TARGET): $(OBJECTS)
@@ -286,6 +286,10 @@ $(A8_HOST_TARGET): CAMERA_BACKEND=a8
 $(A8_HOST_TARGET): $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src/backends/siyi/control.c
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) \
 		-o $@ $(filter-out src/backends/siyi/control.c,$(filter %.c,$^)) -lm
+
+build/mt11_overlay.o: src/backends/mt11/overlay.c
+	mkdir -p build
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 build/mt11_media.o: $(BACKEND_DIR)/media.c $(BACKEND_DIR)/pipeline.h
 	mkdir -p build
@@ -631,10 +635,10 @@ endif
 Z1MINI_AX_SDK_INCLUDE ?=
 .PHONY: z1mini-capture
 z1mini-capture: build/z1mini/ax-capture
-build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h
+build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/media/overlay.c include/camera_app/overlay.h src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)
-	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< -o $@ -ldl -pthread
+	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 $(APCAM_CPPFLAGS) -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< src/media/overlay.c -o $@ -ldl -pthread -lm
 
 .PHONY: thermal-monitor-test
 thermal-monitor-test: tests/test_thermal_monitor

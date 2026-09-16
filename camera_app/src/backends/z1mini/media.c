@@ -23,6 +23,7 @@
 
 struct ca_media_impl {
     struct ca_media_config config;
+    struct ca_z1_overlay_control overlay;
     atomic_bool stop, ready, recording;
     pthread_t thread;
     bool started, wait_key, have_pts;
@@ -88,7 +89,7 @@ static void *receiver(void *opaque)
     const char *native_path = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
     if (native_path && *native_path) {
         ca_log("Z1 native AX capture starting; exclusive media ownership required");
-        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m);
+        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m, &m->overlay);
         ca_log("Z1 native AX capture stopped result=%d", result);
         atomic_store(&m->ready, false);
         pthread_mutex_lock(&m->lock);
@@ -242,4 +243,21 @@ int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exp
     if (now<cached.time_us || now-cached.time_us>1000000U) return -ETIMEDOUT;
     *s=cached;
     return s->result;
+}
+
+int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config *settings)
+{
+    int desired=settings->osd_cross;
+    if (atomic_load(&m->overlay.applied)==desired) return 0;
+    const char *helper=getenv("CAMERA_APP_Z1_NATIVE_HELPER");
+    if (!helper || !*helper) { errno=ENOTSUP; return -1; }
+    atomic_store(&m->overlay.desired,desired);
+    atomic_store(&m->overlay.applied,-EINPROGRESS);
+    for (unsigned i=0;i<300;i++) {
+        int applied=atomic_load(&m->overlay.applied);
+        if (applied==desired) return 0;
+        if (applied!=-EINPROGRESS) { errno=applied<0 ? -applied : EIO; return -1; }
+        usleep(10000);
+    }
+    errno=ETIMEDOUT; return -1;
 }

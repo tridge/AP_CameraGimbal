@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "pipeline.h"
+#include "camera_app/overlay.h"
 
 #include "camera_app/live_video_server.h"
 #include "camera_app/log.h"
@@ -31,6 +32,7 @@
 #define CA_ZR10_ISP_BIN_AFTER_FRAMES 10U
 
 struct ca_media_impl {
+    struct ca_overlay_hw *overlay;
     struct ca_media_config config;
     struct ca_zr10_pipeline_config pipeline;
     pthread_t thread;
@@ -213,6 +215,8 @@ static void media_cleanup(struct ca_media_impl *media)
     media->live_video = NULL;
     ca_rtsp_close(media->rtsp);
     media->rtsp = NULL;
+    ca_overlay_hw_close(media->overlay);
+    media->overlay=NULL;
     if (media->pipeline_open) {
         ca_zr10_pipeline_close();
         media->pipeline_open = false;
@@ -606,4 +610,18 @@ int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca
     if (!mode_result) ca_sstar_exposure_mode(s,value);
     pthread_mutex_unlock(&media->lock);
     return result ? result : mode_result;
+}
+
+int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+{
+    struct ca_overlay_channel channels[3]={0};
+    enum ca_video_resolution resolutions[3]={settings->main_resolution,settings->sub_resolution,settings->recording_resolution};
+    pthread_mutex_lock(&media->lock);
+    for (unsigned c=0;c<3;c++) {
+        ca_video_resolution_size(resolutions[c],&channels[c].width,&channels[c].height);
+        channels[c].cross=settings->osd_cross && (c<2 || settings->osd_recording);
+    }
+    int result=ca_overlay_hw_set(&media->overlay,channels,3);
+    pthread_mutex_unlock(&media->lock);
+    return result;
 }

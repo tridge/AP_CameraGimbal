@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "camera_app/overlay.h"
 #include "e5739.h"
 #include "isp.h"
 #include "pipeline.h"
@@ -30,6 +31,7 @@
 
 struct ca_media_impl {
     struct ca_media_config config;
+    struct ca_overlay_hw *overlay;
     sample_vi_cfg vi_cfg[2];
     ot_venc_chn_attr venc_attr[4];
     pthread_t thread;
@@ -340,6 +342,8 @@ static void media_cleanup(struct ca_media_impl *media)
         pthread_join(media->manual_focus_thread, NULL);
         media->manual_focus_thread_started = false;
     }
+    ca_overlay_hw_close(media->overlay);
+    media->overlay=NULL;
     ca_e5739_close(media->e5739);
     media->e5739 = NULL;
     ca_mt11_thermal_close(media->thermal);
@@ -1227,6 +1231,10 @@ static int switch_rtsp_sources_locked(struct ca_media_impl *media,
                              thermal_main ? media->config.frame_rate
                                           : CA_MT11_THERMAL_FRAME_RATE,
                              stream_bitrate(sub_width, sub_height));
+    /* Regions must not retain positions outside the resized encoder frame.
+     * The public media wrapper restores them after success or rollback. */
+    ca_overlay_hw_close(media->overlay);
+    media->overlay=NULL;
     /* VENC's maximum geometry and allocation are creation-time properties;
      * only the active picture geometry may change while the channel exists. */
     for (unsigned channel = 0; channel < 2U; channel++) {
@@ -1729,6 +1737,27 @@ int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca
 {
     pthread_mutex_lock(&media->lock);
     int result=ca_mt11_exposure(lens,s);
+    pthread_mutex_unlock(&media->lock);
+    return result;
+}
+
+int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+{
+    struct ca_overlay_channel channels[4]={0};
+    pthread_mutex_lock(&media->lock);
+    pthread_mutex_lock(&media->venc_lock);
+    bool swap=atomic_load(&media->thermal_main);
+    for (unsigned c=0;c<4;c++) {
+        bool thermal=c<2 ? ((c==0)==swap) : c==3;
+        channels[c]=(struct ca_overlay_channel){
+            .width=media->venc_attr[c].venc_attr.pic_width,
+            .height=media->venc_attr[c].venc_attr.pic_height,
+            .cross=settings->osd_cross && (c<2 || settings->osd_recording),
+            .thermal_box=settings->osd_thermal_fov && !thermal && (c<2 || settings->osd_recording),
+            .hfov=ca_media_impl_hfov(media,false)};
+    }
+    int result=ca_overlay_hw_set(&media->overlay,channels,4);
+    pthread_mutex_unlock(&media->venc_lock);
     pthread_mutex_unlock(&media->lock);
     return result;
 }

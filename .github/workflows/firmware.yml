@@ -66,4 +66,6 @@ jobs:
           make -C camera_app host
           python3 camera_app/tests/test_manual_mavlink.py camera_app/tests/camera-app-host sitl/gimbal_sim.py
       - name: Test exposure BIN logs and live controls on all four simulated cameras
-        run: make sitl-image-controls-test
+        run: |
+          python3 tests/test_overlay.py
+          make sitl-image-controls-test
