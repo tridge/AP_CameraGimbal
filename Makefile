@@ -431,13 +431,16 @@ zr10_sitl-test: zr10_sitl
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_BUILD_HASH := $(MT11_GIT_HASH)$(shell git diff --quiet HEAD -- || printf -- -dirty)
 Z1MINI_PACKAGE_OUT ?= build/Z1Mini_AP_$(MT11_VERSION)_$(Z1MINI_BUILD_HASH).gcu
-.PHONY: z1mini z1mini_package z1mini_retained_isp_package z1mini-test
+Z1MINI_RETAINED_ISP_PACKAGE_OUT ?= $(Z1MINI_PACKAGE_OUT)
+.PHONY: z1mini z1mini_package z1mini_retained_isp_package z1mini-test z1mini-test-headers
 z1mini: build-dependencies
 	$(MAKE) -C camera_app CAMERA_BACKEND=z1mini CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
 	$(MAKE) -C web z1mini-web Z1MINI_CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
 z1mini_retained_isp_package: z1mini
-	python3 tools/build_z1mini_package.py '$(Z1MINI_PACKAGE_OUT)'
-z1mini-test:
+	python3 tools/build_z1mini_package.py '$(Z1MINI_RETAINED_ISP_PACKAGE_OUT)'
+z1mini-test-headers:
+	$(MAKE) -C web build/version.h build/icons.h
+z1mini-test: z1mini-test-headers
 	python3 tests/test_z1mini.py
 	python3 web/tests/test_z1mini_upgrade.py
 	python3 tests/test_z1mini_4k.py

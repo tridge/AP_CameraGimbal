@@ -358,11 +358,22 @@ def main():
                 time.sleep(.1)
             assert rtsp.options and rtsp.connections == 1, (rtsp.options, rtsp.connections)
             # Inspect a complete package after the cross build, if present.
-            for path in (ROOT/'build').glob('Z1Mini_AP_*.gcu'):
+            packages = list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
+            packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
+            for path in packages:
                 with zipfile.ZipFile(path) as z:
                     assert z.testzip() is None
                     hooks = {'gcu/ipc/run.sh', 'gcu/ipc/camera_gcu.sh'}
                     assert all(n.startswith('gcu/ap/') or n in hooks for n in z.namelist())
+                    web_source = (ROOT/'web/mt11-web.c').read_text()
+                    allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
+                                          web_source, re.S)
+                    assert allowlist
+                    accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
+                    actual = set(z.namelist())
+                    assert actual <= accepted, (actual, accepted)
+                    assert {'gcu/ap/manifest.json', 'gcu/ap/SHA256SUMS',
+                            'gcu/ap/camera-app', 'gcu/ap/z1mini-web'} <= actual
                     # The vendor updater replaces /opt/bin/gcu; rcS needs ipc/run.sh.
                     assert hooks <= set(z.namelist())
                     assert 'gcu/gb_control' not in z.namelist() and 'gcu/ipc/main' not in z.namelist()

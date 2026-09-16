@@ -24,6 +24,7 @@ SITL_EXTRA_DEFINES ?=
 SITL_DEFINES := -DMT11_WEB_TEST -DMT11_WEB_SITL \
 	-DAPP_DIR='"$(SITL_ROOT)/app"' \
 	-DMEDIA_ROOT='"$(SITL_ROOT)/mnt"' \
+	-DGCU_ROOT='"$(SITL_ROOT)/gcu"' \
 	-DCONFIG_PATH='"$(SITL_ROOT)/app/config.ini"' \
 	-DCONFIG_BACKUP_PATH='"$(SITL_ROOT)/app/config.ini.web.bak"' \
 	-DREPLACEMENT_CONFIG_PATH='"$(SITL_ROOT)/app/camera.ini"' \

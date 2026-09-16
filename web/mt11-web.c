@@ -7907,10 +7907,37 @@ static void schedule_reboot(void);
 static int exchange_paths(const char *a, const char *b)
 {
 #ifdef __CYGWIN__
+#ifdef WEB_PORTABLE_SITL
+    /* The simulator's Cygwin filesystem has no renameat2 exchange. Keep the
+     * old tree recoverable while swapping this isolated temporary runtime. */
+    char backup[PATH_MAX];
+    if (snprintf(backup, sizeof(backup), "%s.exchange", b) >= (int)sizeof(backup)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (access(backup, F_OK) == 0) { errno = EEXIST; return -1; }
+    if (errno != ENOENT) return -1;
+    if (rename(b, backup) < 0) return -1;
+    if (rename(a, b) < 0) {
+        int saved = errno;
+        (void)rename(backup, b);
+        errno = saved;
+        return -1;
+    }
+    if (rename(backup, a) < 0) {
+        int saved = errno;
+        (void)rename(b, a);
+        (void)rename(backup, b);
+        errno = saved;
+        return -1;
+    }
+    return 0;
+#else
     (void)a;
     (void)b;
     errno = ENOSYS;
     return -1;
+#endif
 #else
 #ifdef MT11_WEB_TEST
     const char *failure_marker = getenv("CAMERA_GIMBAL_TEST_EXCHANGE_FAIL");
@@ -7919,7 +7946,14 @@ static int exchange_paths(const char *a, const char *b)
         return -1;
     }
 #endif
+#ifdef SYS_renameat2
     return (int)syscall(SYS_renameat2, AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE);
+#else
+    (void)a;
+    (void)b;
+    errno = ENOSYS;
+    return -1;
+#endif
 #endif
 }
 
@@ -8161,7 +8195,8 @@ static int set_package_tree_permissions(const char *path, const struct stat *st,
 
 /* Returns 0 when installed, 1 for a rejected package, 2 for an install failure. */
 static int install_gcu_package(const char *package, const struct gcu_package_index *index,
-                               int client, char *error, size_t error_size)
+                               uint64_t declared_extracted, int client,
+                               char *error, size_t error_size)
 {
     static const char *const executables[] = {
         "ap/service.sh", "ap/camera-app", "ap/z1mini-web", "ap/ax-capture",
@@ -8185,7 +8220,7 @@ static int install_gcu_package(const char *package, const struct gcu_package_ind
         snprintf(error, error_size, "cannot prepare %.200s: %s", stage, strerror(errno));
         return 2;
     }
-    uint64_t remaining = GCU_PACKAGE_MAX_EXTRACTED;
+    uint64_t remaining = declared_extracted;
     for (unsigned i = 0; i < index->count; i++) {
         char *const unzip_argv[] = {"unzip", "-o", "-q", (char *)package,
                                     (char *)index->names[i], "-d", stage, NULL};
@@ -8340,7 +8375,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
     }
     close(output);
     output = -1;
-    result = install_gcu_package(package, &package_index, fd, error, sizeof(error));
+    result = install_gcu_package(package, &package_index, extracted, fd, error, sizeof(error));
     if (result != 0) {
         char stage[PATH_MAX];
         if (snprintf(stage, sizeof(stage), "%s.new", GCU_ROOT) < (int)sizeof(stage)) {
