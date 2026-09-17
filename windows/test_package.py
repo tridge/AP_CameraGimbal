@@ -98,17 +98,18 @@ def main():
                            ('MAVLINK_UDP_PORT', 0)]:
             os.environ[prefix + key] = str(value)
         window = Launcher()
-        window.camera.setCurrentIndex(window.camera.findData(backend))
-        window.orientation.setCurrentIndex(window.orientation.findData(args.orientation))
-        window.video.setCurrentIndex(window.video.findData(args.video))
+        panel = window.simulators[0]
+        panel.camera.setCurrentIndex(panel.camera.findData(backend))
+        panel.orientation.setCurrentIndex(panel.orientation.findData(args.orientation))
+        panel.video.setCurrentIndex(panel.video.findData(args.video))
         window.show()
         link = None
         try:
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             print(f'{backend}: launcher running', flush=True)
-            assert window.web_button.isEnabled()
+            assert panel.web_button.isEnabled()
             window.grab().save(str(output / (backend + '-launcher.png')))
             login(web_port)
             print(f'{backend}: browser login and session cookie passed', flush=True)
@@ -213,7 +214,7 @@ def main():
             saved = config.read_bytes()
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             assert config.read_bytes() == saved, 'Saved configuration changed on restart'
             with web_request(web_port, '/') as response:
                 assert response.geturl().endswith('/login'), 'Old session survived web-server restart'
@@ -221,10 +222,10 @@ def main():
             print(f'{backend}: logout and session invalidation on restart passed', flush=True)
             window.stop_button.click()
             pump_until(lambda: window.phase == 'idle', 15)
-            window.clear_parameters.setChecked(True)
+            panel.clear_parameters.setChecked(True)
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             assert config.with_suffix('.ini.reset.bak').read_bytes() == saved
             assert 'autorecord = false' in config.read_text()
             assert all(path.exists() for path in recordings), 'Reset removed media'
@@ -234,7 +235,7 @@ def main():
                   'RTSP/live MP4, recording, restart and shutdown with no external tools', flush=True)
             # Windows exclusive binds produce the permission-denied failure
             # seen when a ground station already owns the camera's UDP port.
-            window.clear_parameters.setChecked(False)
+            panel.clear_parameters.setChecked(False)
             overrides = {prefix + 'MAVLINK_' + transport + '_PORT':
                          os.environ.pop(prefix + 'MAVLINK_' + transport + '_PORT')
                          for transport in ('TCP', 'UDP')}
@@ -271,7 +272,7 @@ def main():
                         config.write_text(set_ports(config.read_text(), ports))
                         window.start_button.click()
                         pump_until(lambda: window.phase in ('running', 'idle'), 60)
-                        assert window.phase == 'running', window.log.toPlainText()
+                        assert window.phase == 'running', panel.log.toPlainText()
                         login(web_port)
                         with web_request(web_port, '/live') as response:
                             csrf = re.search(r'data-csrf="([0-9a-f]{64})"', response.read().decode()).group(1)
@@ -306,10 +307,64 @@ def main():
         finally:
             if link:
                 link.close()
-            (output / (backend + '-launcher.log')).write_text(window.log.toPlainText(), encoding='utf-8')
+            (output / (backend + '-launcher.log')).write_text(panel.log.toPlainText(), encoding='utf-8')
             if window.phase != 'idle':
                 window.stop()
                 pump_until(lambda: window.phase == 'idle', 15)
+            window.close()
+    if args.backend == 'all':
+        os.environ['CAMERA_GIMBAL_SITL_BUILD'] = str(output / 'multi')
+        window = Launcher()
+        window.count.setValue(4)
+        endpoints = []
+        try:
+            for index, (backend, panel) in enumerate(zip(TARGETS, window.simulators)):
+                panel.camera.setCurrentIndex(panel.camera.findData(backend))
+                panel.orientation.setCurrentIndex(panel.orientation.findData(args.orientation))
+                panel.video.setCurrentIndex(panel.video.findData(args.video))
+                prefix = backend.upper() + '_SITL_'
+                web_port, camera_port, mav_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
+                while True:
+                    rtsp_port = reserve_port(socket.SOCK_STREAM)
+                    try:
+                        with socket.socket() as probe:
+                            probe.bind(('127.0.0.1', rtsp_port + 1))
+                        break
+                    except OSError:
+                        pass
+                for name, value, stride in (('WEB_PORT', web_port, 1), ('CAMERA_PORT', camera_port, 1),
+                                            ('RTSP_PORT', rtsp_port, 10), ('MAVLINK_TCP_PORT', mav_port, 10)):
+                    os.environ[prefix + name] = str(value - index * stride)
+                os.environ[prefix + 'MAVLINK_UDP_PORT'] = '0'
+                endpoints.append((web_port, mav_port, rtsp_port))
+            window.start()
+            pump_until(lambda: window.phase in ('running', 'idle'), 150)
+            assert window.phase == 'running', window.status.text() + '\n' + '\n'.join(p.log.toPlainText()[-3000:] for p in window.simulators)
+            for index, (web_port, mav_port, rtsp_port) in enumerate(endpoints):
+                with web_request(web_port, '/login') as response:
+                    assert response.status == 200
+                connection = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mav_port}', source_system=42, source_component=1)
+                try:
+                    connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_FIXED_WING,
+                                                 mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, 4)
+                    connection.mav.command_long_send(42, 100+index, mavutil.mavlink.MAV_CMD_REQUEST_CAMERA_INFORMATION,
+                                                     0, 1, 0, 0, 0, 0, 0, 0)
+                    info = connection.recv_match(type='CAMERA_INFORMATION', blocking=True, timeout=5)
+                    assert info and info.get_srcComponent() == 100+index, info
+                    assert info.gimbal_device_id == (154, 171, 172, 173)[index], info
+                finally:
+                    connection.close()
+                with av.open(f'rtsp://127.0.0.1:{rtsp_port}/video1', options={'rtsp_transport': 'tcp'}, timeout=15) as video:
+                    assert next(video.decode(video=0)).width >= 1280
+            window.stop()
+            pump_until(lambda: window.phase == 'idle', 20)
+            assert all(not (p.runtime / 'camera-app.ready').exists() for p in window.simulators)
+            print('PASS four simultaneous packaged cameras: web, distinct MAVLink identities, video and stop-all', flush=True)
+        finally:
+            window.stop()
+            pump_until(lambda: window.phase == 'idle', 20)
+            for index, panel in enumerate(window.simulators):
+                (output / f'multi-{index+1}-launcher.log').write_text(panel.log.toPlainText(), encoding='utf-8')
             window.close()
     print('PASS standalone Windows package', flush=True)
     faulthandler.cancel_dump_traceback_later()

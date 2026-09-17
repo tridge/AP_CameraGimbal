@@ -3,6 +3,7 @@
 
 import argparse
 import math
+import os
 import select
 import signal
 import socket
@@ -379,8 +380,13 @@ def main():
     gimbal = Gimbal(2 if args.orientation == "inverted" else 1, args.backend)
     if args.ready_file is not None:
         args.ready_file.parent.mkdir(parents=True, exist_ok=True)
-        args.ready_file.write_text(f"{bound_host}:{bound_port}\n",
-                                   encoding="ascii")
+        temporary = args.ready_file.with_name(
+            args.ready_file.name + f".{os.getpid()}.tmp")
+        try:
+            temporary.write_text(f"{bound_host}:{bound_port}\n", encoding="ascii")
+            temporary.replace(args.ready_file)
+        finally:
+            temporary.unlink(missing_ok=True)
     print(f"gimbal-sim listening on udp://{bound_host}:{bound_port} "
           f"backend={args.backend} orientation={args.orientation}", flush=True)
     peer = None

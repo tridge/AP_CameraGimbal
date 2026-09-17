@@ -46,12 +46,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ffmpeg python3-venv iproute2
           python3 -m venv build/terrain-venv
-          build/terrain-venv/bin/pip install pymavlink numpy opencv-python-headless av pexpect defusedxml
+          build/terrain-venv/bin/pip install pymavlink numpy opencv-python-headless av pexpect defusedxml PyQt6
           # The live-control tests use MAVProxy's camera definition parser.
           build/terrain-venv/bin/pip install --no-deps 'MAVProxy @ git+https://github.com/ArduPilot/MAVProxy.git@13b1fb1cf6f594a026349e369576a8d11ce1d5b4'
           echo "$PWD/build/terrain-venv/bin" >> "$GITHUB_PATH"
       - name: Fetch pinned build sources
         run: make dependencies
+      - name: Test multiple simulator launcher lifecycle
+        run: QT_QPA_PLATFORM=offscreen python3 sitl/test_launch.py
       - name: Test configuration migration, IP addresses, routes and rollback
         run: |
           make -C camera_app tests/test_config host
@@ -69,3 +71,5 @@ jobs:
         run: make -C camera_app mavlink-components-test
       - name: Test exposure BIN logs and live controls on all four simulated cameras
         run: make sitl-image-controls-test
+      - name: Test four concurrent simulator stacks
+        run: QT_QPA_PLATFORM=offscreen python3 sitl/test_launch_multi.py

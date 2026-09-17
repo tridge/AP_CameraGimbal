@@ -60,11 +60,33 @@ Alternatively, use the PyQt desktop launcher from the repository root:
 ./sitl_launch.py
 ```
 
-It offers **MT11 / A8 / ZR10**, **Normal / Inverted**, and **Simple test patterns /
-3D terrain and imagery**. Start builds the selected backend and launches SITL;
-Stop or closing the window stops its processes, including cameras restarted
-through the web UI. Build output and service logs appear in the window, and
-**Open Web UI** opens the running camera in your browser.
+Choose **1–4 simulators** (default 1), then select **MT11 / A8 / ZR10 / Z1-Mini**,
+**Normal / Inverted**, and **Simple test patterns / 3D terrain and imagery** in
+each simulator's tab. Repeated camera types are supported. **Start all** builds
+the cameras sequentially, then leaves them running together. **Stop all** or
+closing the window stops the entire group, including cameras restarted through
+the web UI. A startup failure stops the group and leaves the logs in each tab.
+Each tab has its own **Open Web UI**, build output and service logs.
+
+Fresh simulator slots use these defaults:
+
+| Simulator | Web | MAVLink TCP/UDP | RTSP | Live video | Camera/gimbal components |
+|---|---:|---:|---:|---:|---|
+| 1 | 8081 | 14550 | 8554 | 8555 | 100 / 154 |
+| 2 | 8082 | 14560 | 8564 | 8565 | 101 / 171 |
+| 3 | 8083 | 14570 | 8574 | 8575 | 102 / 172 |
+| 4 | 8084 | 14580 | 8584 | 8585 | 103 / 173 |
+
+Vendor protocol ports start at 37260 for SIYI cameras or 2337 for Z1-Mini,
+plus the slot number minus one. Internal gimbal sockets use automatically
+allocated ports. Existing MAVLink port and component settings are preserved;
+conflicting saved settings are reported before starting the group.
+
+Slot 1 keeps its existing build/runtime directory. Additional slots use
+`<build>/instance-<number>/<camera>/runtime`, with separate parameters, login
+settings, recordings and logs. **Clear parameters on launch** applies only to
+that tab. The launcher number seeds port and component defaults when creating
+or explicitly resetting a configuration, so web changes remain effective.
 
 Windows users can run the standalone installer or portable ZIP without installing
 Python, Cygwin or FFmpeg. See [Windows packaging and usage](../windows/README.md).
@@ -72,12 +94,18 @@ Python, Cygwin or FFmpeg. See [Windows packaging and usage](../windows/README.md
 The launcher supports PyQt6 or PyQt5 (for example, install `python3-pyqt6` on
 Debian/Ubuntu). Terrain mode automatically uses `build/terrain-venv/bin/python`
 when present, or the `CAMERA_GIMBAL_SITL_PYTHON` override. The port and MAVLink
-environment overrides described below still apply; A8 MAVLink remains disabled
-by default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for both
-the build and launch. Test the GUI without a display using
+environment overrides described below still apply as slot-1 base ports, with
+the same offsets for later slots (MAVLink port 0 stays disabled). A8 launched
+from the GUI enables MAVLink; standalone `make a8_sitl-run` retains its existing
+disabled default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for
+both build and launch, with numbered subdirectories for additional slots.
+Test the GUI without a display using
 `QT_QPA_PLATFORM=offscreen python3 sitl/test_launch.py`.
 Add `--real` to build and launch both real backends in isolated temporary
 directories, checking mounting orientation, web restarts and process cleanup.
+`QT_QPA_PLATFORM=offscreen python3 sitl/test_launch_multi.py` builds and runs
+four MT11s, then all four camera types, checking concurrent web servers, video,
+MAVLink identities and cleanup on isolated test ports.
 
 Keep that command running and press Ctrl-C in the same terminal to stop all
 three processes. For MT11, another terminal can use `make sitl-kill`. The kill
