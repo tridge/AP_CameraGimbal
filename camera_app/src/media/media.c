@@ -304,8 +304,8 @@ int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_thermal_main(IMPL, thermal_main);
     int saved=errno;
-    if (result<0) { errno=saved; return result; }
     apply_overlay_after_control(media, "video source change");
+    if (result<0) { errno=saved; return result; }
     return 0;
 }
 bool ca_media_thermal_main(const struct ca_media *media)

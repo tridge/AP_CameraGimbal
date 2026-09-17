@@ -5,11 +5,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 static atomic_bool stopped;
 static unsigned count, exposure_count, stop_after=2;
+static int read_exact_fd(int fd, void *data, size_t size)
+{
+    size_t offset=0;
+    while (offset<size) {
+        ssize_t n=read(fd,(char *)data+offset,size-offset);
+        if (n<=0) return -1;
+        offset+=(size_t)n;
+    }
+    return 0;
+}
+static int read_request(int fd, struct ca_z1_overlay_request *request)
+{
+    fd_set ready;
+    FD_ZERO(&ready); FD_SET(fd,&ready);
+    struct timeval timeout={.tv_sec=5,.tv_usec=0};
+    if (select(fd+1,&ready,NULL,NULL,&timeout)<=0) return -1;
+    return read_exact_fd(fd,request,sizeof(*request));
+}
 static void exposure(void *unused, const struct ca_exposure *s)
 {
     (void)unused;
@@ -33,24 +52,32 @@ int main(int argc, char **argv)
         const char *mode = getenv("Z1_NATIVE_TEST_MODE");
         bool valid=!strcmp(mode,"valid") || !strcmp(mode,"overlay");
         if (!strcmp(mode,"overlay")) {
-            uint8_t request;
-            if (read(3,&request,1)!=1 || request!=1) return 1;
-            struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,request};
+            struct ca_z1_overlay_request request;
+            if (read_exact_fd(3,&request,sizeof(request)) || !request.sequence || request.desired!=1) return 1;
+            struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,request.sequence,0,request.desired};
             if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
         }
         if (!strcmp(mode,"retry")) {
-            uint8_t request;
-            if (read(3,&request,1)!=1 || request!=1) return 1;
+            struct ca_z1_overlay_request first, retry;
+            if (read_exact_fd(3,&first,sizeof(first)) || !first.sequence || first.desired!=1) return 1;
             struct ca_z1_native_header frame_header={CA_Z1_NATIVE_MAGIC,5,1234567,1,0};
             for (unsigned i=0;i<190;i++) {
                 frame_header.stream=i&1U;
                 if (write(3,&frame_header,sizeof(frame_header))!=sizeof(frame_header) ||
                     write(3,"\0\0\0\1\x65",5)!=5) return 1;
             }
-            if (read(3,&request,1)!=1 || request!=1) return 1;
-            struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,request};
-            if (write(3,&reply,sizeof(reply))!=sizeof(reply) ||
-                write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
+            if (read_request(3,&retry) || retry.sequence==first.sequence || retry.desired!=1) return 1;
+            /* A stale acknowledgement with the same state value must not
+             * complete the newer request. The current ack reports OFF, so
+             * the parent must send a fresh ON request and wait for its ack. */
+            struct ca_z1_native_header stale={CA_Z1_NATIVE_OVERLAY_MAGIC,0,first.sequence,0,1};
+            if (write(3,&stale,sizeof(stale))!=sizeof(stale)) return 1;
+            struct ca_z1_native_header off={CA_Z1_NATIVE_OVERLAY_MAGIC,0,retry.sequence,0,0};
+            if (write(3,&off,sizeof(off))!=sizeof(off)) return 1;
+            struct ca_z1_overlay_request final;
+            if (read_request(3,&final) || final.sequence==retry.sequence || final.desired!=1) return 1;
+            struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,final.sequence,0,final.desired};
+            if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
             for (unsigned i=190;i<200;i++) {
                 frame_header.stream=i&1U;
                 if (write(3,&frame_header,sizeof(frame_header))!=sizeof(frame_header) ||

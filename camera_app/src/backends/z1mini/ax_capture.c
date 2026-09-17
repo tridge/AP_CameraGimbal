@@ -27,7 +27,10 @@
 static atomic_bool stopped;
 static atomic_uint overlay_request, overlay_done[2];
 static atomic_int overlay_error;
+static atomic_uint overlay_sequence;
 static unsigned overlay_acked;
+static uint8_t overlay_request_bytes[sizeof(struct ca_z1_overlay_request)];
+static size_t overlay_request_length;
 
 static int created, isp_open, vin_started, dev_enabled, stream_on, enc_created[2], enc_started[2];
 static pthread_t isp_thread;
@@ -221,27 +224,36 @@ static int draw_cross(AX_VIDEO_FRAME_S *frame, const struct ca_overlay_bitmap *b
 static void overlay_control(unsigned channel, AX_VIDEO_FRAME_S *frame, FILE *out,
                             const struct ca_overlay_bitmap *cross)
 {
-    if (channel==0) {
-        uint8_t value;
-        if (recv(3,&value,1,MSG_DONTWAIT)==1 && value<=1) {
-            unsigned previous=atomic_load(&overlay_request);
-            atomic_store(&overlay_error,0);
-            atomic_store(&overlay_request,((previous&~1U)+2)|value);
-        }
-    }
     unsigned request=atomic_load(&overlay_request);
-    int error=(request&1) ? draw_cross(frame,cross) : 0;
+    int error=(request&1) ? (cross ? draw_cross(frame,cross) : ENOMEM) : 0;
     if (error) atomic_store(&overlay_error,error);
     atomic_store(&overlay_done[channel],request);
     pthread_mutex_lock(&output_lock);
     if (request!=overlay_acked && atomic_load(&overlay_done[0])==request &&
         atomic_load(&overlay_done[1])==request) {
-        struct ca_z1_native_header h={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,
+        struct ca_z1_native_header h={CA_Z1_NATIVE_OVERLAY_MAGIC,0,
+            atomic_load(&overlay_sequence),
             atomic_load(&overlay_error),request&1};
         if (fwrite(&h,1,sizeof(h),out)!=sizeof(h)) stopped=true;
         overlay_acked=request;
     }
     pthread_mutex_unlock(&output_lock);
+}
+
+static void read_overlay_request(void)
+{
+    ssize_t bytes=recv(3,overlay_request_bytes+overlay_request_length,
+                       sizeof(overlay_request_bytes)-overlay_request_length,MSG_DONTWAIT);
+    if (bytes>0) overlay_request_length+=(size_t)bytes;
+    if (overlay_request_length!=sizeof(overlay_request_bytes)) return;
+    struct ca_z1_overlay_request request;
+    memcpy(&request,overlay_request_bytes,sizeof(request));
+    overlay_request_length=0;
+    if (!request.sequence || request.desired>1) return;
+    unsigned previous=atomic_load(&overlay_request);
+    atomic_store(&overlay_error,0);
+    atomic_store(&overlay_sequence,request.sequence);
+    atomic_store(&overlay_request,((previous&~1U)+2)|request.desired);
 }
 
 struct encoder_worker {
@@ -255,12 +267,9 @@ static void *encode(void *opaque) {
     unsigned c = worker->channel;
     bool framed = worker->framed;
     int r;
-    struct ca_overlay_geometry geometry;
-    struct ca_overlay_bitmap cross[CA_OVERLAY_REGIONS];
-    ca_overlay_geometry(&geometry,c ? 3840:1920,c ? 2160:1080,true,false,0);
-    if (ca_overlay_bitmaps(cross,c ? 3840:1920,c ? 2160:1080,&geometry)<0) {
-        worker->failed=true; stopped=true; return NULL;
-    }
+    struct ca_overlay_bitmap cross[CA_OVERLAY_REGIONS]={0};
+    bool cross_enabled=false;
+    unsigned cross_width=0,cross_height=0;
     uint64_t deadline = framed ? UINT64_MAX : mono_ms() + 15000, first_pts = 0;
     while (worker->frames < worker->limit && !stopped && mono_ms() < deadline) {
         if (temp() >= 75000) {
@@ -286,7 +295,26 @@ static void *encode(void *opaque) {
             call("AX_VIN_ReleaseYuvFrame", 0, vin, (uintptr_t)&f, 0);
             goto failed;
         }
-        if (framed) overlay_control(c,v,worker->out,&cross[0]);
+        if (framed) {
+            if (c==0) read_overlay_request();
+            unsigned state=atomic_load(&overlay_request);
+            bool want_cross=(state&1U)!=0;
+            if (want_cross!=cross_enabled ||
+                (want_cross && (cross_width!=v->u32Width || cross_height!=v->u32Height))) {
+                ca_overlay_free(cross);
+                cross_enabled=want_cross;
+                cross_width=v->u32Width;
+                cross_height=v->u32Height;
+                if (want_cross) {
+                    struct ca_overlay_geometry geometry;
+                    ca_overlay_geometry(&geometry,v->u32Width,v->u32Height,true,false,0);
+                    if (ca_overlay_bitmaps(cross,v->u32Width,v->u32Height,&geometry)<0) {
+                        ca_overlay_free(cross);
+                    }
+                }
+            }
+            overlay_control(c,v,worker->out,want_cross && cross[0].pixels ? &cross[0] : NULL);
+        }
         r = ((fn4)sym("AX_VENC_SendFrame"))(c, (uintptr_t)&f.info.tFrameInfo, 1000, 0);
         int released = call("AX_VIN_ReleaseYuvFrame", 0, vin, (uintptr_t)&f, 0);
         if (r || released) {

@@ -11,9 +11,15 @@
  * CA_Z1_NATIVE_AE_MAGIC carries a ca_exposure payload (stream/key zero).
  * The helper exclusively owns the AX pipeline. */
 #define CA_Z1_NATIVE_MAGIC UINT32_C(0x34363248)
-/* Parent sends one byte (0/1) on the same duplex socket; helper replies only
- * after both encoder inputs have applied it. Negative applied values are errno. */
+/* Parent sends a sequenced request on the same duplex socket; the helper
+ * replies with that sequence only after both encoders have applied it. */
 struct ca_z1_overlay_control { atomic_int desired, applied; };
+struct ca_z1_overlay_request {
+    uint32_t sequence;
+    uint8_t desired;
+    uint8_t reserved[3];
+};
+_Static_assert(sizeof(struct ca_z1_overlay_request) == 8, "overlay request ABI");
 #define CA_Z1_NATIVE_OVERLAY_MAGIC UINT32_C(0x3144534f)
 #define CA_Z1_NATIVE_AE_MAGIC UINT32_C(0x31454143)
 #define CA_Z1_NATIVE_MAX_FRAME (8U * 1024U * 1024U)

@@ -57,6 +57,10 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     size_t capacity = 0;
     int result = -1;
     bool awaiting_overlay=false;
+    bool pending_overlay=false;
+    struct ca_z1_overlay_request overlay_request={0};
+    size_t overlay_request_offset=0;
+    uint32_t next_overlay_sequence=0, awaiting_overlay_sequence=0;
     unsigned overlay_wait_frames=0;
     while (!atomic_load(stop)) {
         /* A live helper can lose an acknowledgement while still producing
@@ -66,24 +70,44 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             awaiting_overlay=false;
             overlay_wait_frames=0;
         }
-        if (overlay && !awaiting_overlay && atomic_load(&overlay->applied)==-EINPROGRESS) {
-            uint8_t value=atomic_load(&overlay->desired);
-            if (send(sockets[0],&value,1,MSG_NOSIGNAL|MSG_DONTWAIT)==1) {
-                awaiting_overlay=true;
-                overlay_wait_frames=0;
+        if (overlay && !awaiting_overlay && !pending_overlay &&
+            atomic_load(&overlay->applied)==-EINPROGRESS) {
+            if (++next_overlay_sequence==0) ++next_overlay_sequence;
+            overlay_request=(struct ca_z1_overlay_request){
+                .sequence=next_overlay_sequence,
+                .desired=(uint8_t)atomic_load(&overlay->desired),
+            };
+            overlay_request_offset=0;
+            pending_overlay=true;
+        }
+        if (pending_overlay) {
+            ssize_t sent=send(sockets[0],(const uint8_t *)&overlay_request+overlay_request_offset,
+                              sizeof(overlay_request)-overlay_request_offset,
+                              MSG_NOSIGNAL|MSG_DONTWAIT);
+            if (sent>0) {
+                overlay_request_offset+=(size_t)sent;
+                if (overlay_request_offset==sizeof(overlay_request)) {
+                    awaiting_overlay=true;
+                    awaiting_overlay_sequence=overlay_request.sequence;
+                    overlay_wait_frames=0;
+                    pending_overlay=false;
+                }
+            } else if (sent<0 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR) {
+                atomic_store(&overlay->applied,-errno);
+                pending_overlay=false;
             }
         }
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
         if (header.magic==CA_Z1_NATIVE_OVERLAY_MAGIC) {
-            if (header.size || header.stream>1 || header.key>4095) break;
+            if (header.size || !header.pts || header.stream>1 || header.key>4095) break;
             /* A previous request can be acknowledged after a retry has
              * already completed. It is stale, not a video transport error. */
-            if (!awaiting_overlay) continue;
+            if (!awaiting_overlay || header.pts!=awaiting_overlay_sequence) continue;
             if (overlay) {
                 int applied=header.key ? -(int)header.key : (int)header.stream;
-                /* A timeout may have caused the app to request rollback while
-                 * this older command was still in flight. Send the latest next. */
+                /* The user may have changed the desired state while this
+                 * request was in flight; enqueue the new state after its ack. */
                 if ((int)header.stream!=atomic_load(&overlay->desired)) applied=-EINPROGRESS;
                 atomic_store(&overlay->applied,applied);
             }
