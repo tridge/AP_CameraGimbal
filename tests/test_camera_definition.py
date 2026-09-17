@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate generated camera definitions and the bounded read-only MAVFTP service."""
+import binascii
 import ctypes
 from pathlib import Path
 import struct
@@ -40,6 +41,45 @@ class Definitions(unittest.TestCase):
                     self.assertNotIn('PROXY_', name)
                     for update in p.findall('updates/update'):
                         self.assertIn(update.text, params)
+
+
+class DefinitionVersion(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.work = tempfile.TemporaryDirectory(prefix='apcam-definition-version-')
+        library = Path(cls.work.name) / 'definition.so'
+        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                        '-I' + str(ROOT / 'include'),
+                        '-I' + str(ROOT / 'camera_app/include'),
+                        '-DAPCAM_TARGET=APCAM_TARGET_MT11',
+                        str(ROOT / 'camera_app/src/protocol/camera_definition.c'),
+                        str(ROOT / 'camera_app/src/config.c'), '-lm', '-o', str(library)], check=True)
+        cls.library = ctypes.CDLL(str(library))
+        cls.version = cls.library.ca_camera_definition_version
+        cls.version.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+        cls.version.restype = ctypes.c_uint16
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.work.cleanup()
+
+    def test_crc_vectors(self):
+        self.assertEqual(self.version(b'123456789', 9), 0x29b1)
+        self.assertEqual(self.version(b'', 0), 0xffff)
+        self.assertEqual(binascii.crc_hqx(b'\xff\xff', 0xffff), 0)
+        self.assertEqual(self.version(b'\xff\xff', 2), 0xffff)
+
+    def test_exported_bytes_and_changes(self):
+        for target in ('mt11', 'a8', 'zr10', 'z1mini'):
+            with self.subTest(target=target):
+                xml = (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
+                version = self.version(xml, len(xml))
+                self.assertEqual(version, binascii.crc_hqx(xml, 0xffff) or 0xffff)
+                self.assertEqual(version, self.version(xml + b'ignored', len(xml)))
+                # UI-only changes must invalidate the definition cache too.
+                changed = xml.replace(b'Targeting cross', b'Targeting reticle')
+                self.assertNotEqual(xml, changed)
+                self.assertNotEqual(version, self.version(changed, len(changed)))
 
 
 class Session(ctypes.Structure):

@@ -91,6 +91,7 @@ struct ca_mavlink_server {
     struct ca_config parameters;
     char *definition_xml;
     size_t definition_length;
+    uint16_t definition_version;
     struct ca_camera_ftp ftp;
     struct ext_parameter_list ext_lists[CA_MAVLINK_CLIENTS];
     char *config_path;
@@ -529,7 +530,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
     mavlink_message_t message;
     mavlink_camera_information_t info = {
         .time_boot_ms = boot_ms(server),
-        .cam_definition_version = CA_CAMERA_DEFINITION_VERSION,
+        .cam_definition_version = server->definition_version,
         .firmware_version = 1U, /* app protocol version 1.0.0.0 */
         .focal_length = NAN,
         .sensor_size_h = NAN,
@@ -2510,6 +2511,8 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     if (server->config_path == NULL) goto fail;
     server->definition_xml = ca_camera_definition(&server->definition_length);
     if (server->definition_xml == NULL) goto fail;
+    server->definition_version = ca_camera_definition_version(
+        server->definition_xml, server->definition_length);
     server->camera_mode = APCAM_HAVE_PHOTO ? 0 : 1;
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = true;
     server->next_image_index = 1;

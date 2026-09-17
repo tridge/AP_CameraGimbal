@@ -174,3 +174,16 @@ char *ca_camera_definition(size_t *length)
     if (fclose(out) != 0 || failed) { free(xml); return NULL; }
     return xml;
 }
+
+uint16_t ca_camera_definition_version(const char *xml, size_t length)
+{
+    uint16_t crc = 0xffffU;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)(uint8_t)xml[i] << 8;
+        for (unsigned bit = 0; bit < 8; bit++) {
+            crc = (crc & 0x8000U) != 0U
+                ? (uint16_t)((crc << 1) ^ 0x1021U) : (uint16_t)(crc << 1);
+        }
+    }
+    return crc != 0U ? crc : 0xffffU;
+}

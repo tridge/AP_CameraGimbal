@@ -4,6 +4,7 @@
 Build the four SITL targets first. Uses isolated ports and runtime directories.
 """
 import argparse
+import binascii
 import os
 from pathlib import Path
 import re
@@ -296,8 +297,8 @@ def test_target(target, output):
             information = info(link)
             assert information.get_srcComponent() == CAMERA
             assert information.cam_definition_uri == f'mftp://[;comp={CAMERA}]/camera.xml'
-            assert information.cam_definition_version == 4
             xml = download(link)
+            assert information.cam_definition_version == (binascii.crc_hqx(xml, 0xffff) or 0xffff)
             assert xml == (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
             (directory / 'camera.xml').write_bytes(xml)
             definition = CameraDefinition(xml)

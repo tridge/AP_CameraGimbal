@@ -927,8 +927,13 @@ The exporter and firmware use the same C metadata in
 `src/protocol/camera_definition.c`, with resolution/codec options from the
 configuration validator and capability flags from `include/apcam/target_*.h`.
 There are no independently maintained XML copies to become inconsistent with a
-camera or its simulator. Increment `CA_CAMERA_DEFINITION_VERSION` when changing
-the definition metadata so ground stations invalidate cached definitions.
+camera or its simulator. `CAMERA_INFORMATION.cam_definition_version` is computed
+once at startup as CRC-16/CCITT-FALSE (polynomial 0x1021, initial value 0xffff)
+of the exact XML bytes served over MAVFTP, excluding the terminating NUL.
+A zero CRC is mapped to 0xffff because MAVLink reserves zero for an unknown
+version. Definition changes therefore update the cache version automatically;
+no manual version bump is required. The XML document revision is separate and
+is not replaced with the CRC, avoiding a self-referential checksum.
 
 The camera component implements binary little-endian `PARAM_EXT_REQUEST_LIST`,
 `PARAM_EXT_REQUEST_READ`, `PARAM_EXT_VALUE`, `PARAM_EXT_SET` and `PARAM_EXT_ACK`.
