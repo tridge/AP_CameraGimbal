@@ -62,7 +62,10 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
     } else if (opcode == 4) { /* OpenFileRO */
         char path[240] = {0};
         memcpy(path, request + 12, size);
-        if (strcmp(path, CA_CAMERA_DEFINITION_PATH) && strcmp(path, CA_CAMERA_DEFINITION_PATH + 1)) {
+        /* QGC can retain an extra slash when parsing the MAVFTP URI. */
+        const char *name = path;
+        while (*name == '/') name++;
+        if (strcmp(name, CA_CAMERA_DEFINITION_PATH + 1)) {
             error = 10; /* FileNotFound */
         } else {
             /* Reopening this immutable file reuses a client's session. That

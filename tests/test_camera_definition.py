@@ -106,13 +106,34 @@ class FTPTest(unittest.TestCase):
         self.assertEqual(self.request(1, session)[0][2], 128)
         self.assertEqual(self.request(5, session, size=1)[1], b'\x04')
 
+    def test_download_with_leading_slashes(self):
+        for path in (b'camera.xml', b'/camera.xml', b'//camera.xml',
+                     b'////camera.xml', b'/' * 229 + b'camera.xml'):
+            with self.subTest(path=path):
+                header, payload = self.request(4, data=path)
+                self.assertEqual(header[2], 128)
+                self.assertEqual(struct.unpack('<I', payload)[0], len(self.xml))
+                session = header[1]
+                result = b''
+                while len(result) < len(self.xml):
+                    header, payload = self.request(15, session, size=239, offset=len(result))
+                    self.assertEqual(header[2], 128)
+                    result += payload
+                self.assertEqual(result, self.xml)
+                self.assertEqual(self.request(1, session)[0][2], 128)
+
     def test_scope_bounds_and_independent_sessions(self):
         first, second = self.open(), self.open(owner=254)
         self.assertNotEqual(first, second)
         self.assertEqual(self.request(5, second, size=1)[1], b'\x04')
         self.request(2)
         self.assertEqual(self.request(5, second, size=1, owner=254)[0][2], 128)
-        self.assertEqual(self.request(4, data=b'/../../etc/passwd')[1], b'\x0a')
+        for path in (b'/../../etc/passwd', b'//../camera.xml', b'//etc/passwd',
+                     b'//camera.xml/..', b'//missing.xml', b'', b'//', b'/' * 239):
+            with self.subTest(path=path):
+                header, payload = self.request(4, data=path)
+                self.assertEqual(header[2], 129)
+                self.assertEqual(payload, b'\x0a')
         self.assertEqual(self.request(7, data=b'malicious')[1], b'\x07')
         self.assertEqual(self.request(5, second, size=240, owner=254)[1], b'\x03')
         self.assertEqual(self.request(5, second, size=1, offset=0xffffffff, owner=254)[1], b'\x06')
