@@ -12,7 +12,7 @@ from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sitl_launch import Launcher, QtWidgets, owned_processes, REPO
+from sitl_launch import SimulatorPanel as Launcher, Launcher as MultiLauncher, QtWidgets, owned_processes, REPO
 
 
 def until(app, predicate, timeout=15):
@@ -43,7 +43,7 @@ def real_stack(app):
                    prefix + 'CAMERA_PORT': str(camera_port),
                    prefix + 'MAVLINK_TCP_PORT': '0', prefix + 'MAVLINK_UDP_PORT': '0'}
             with mock.patch.dict(os.environ, env):
-                window.camera.setCurrentIndex(index)
+                window.camera.setCurrentIndex(window.camera.findData(backend))
                 window.orientation.setCurrentIndex(index)
                 window.video.setCurrentIndex(index)
                 window.start_button.click()
@@ -105,7 +105,7 @@ def main(real=False):
     with tempfile.TemporaryDirectory(prefix='sitl-launch-') as temp:
         repo = Path(temp)
         (repo / 'sitl').mkdir()
-        (repo / 'Makefile').write_text('sitl a8_sitl:\n\t@echo built $@\n')
+        (repo / 'Makefile').write_text('sitl a8_sitl zr10_sitl z1mini_sitl:\n\t@echo built $@\n')
         (repo / 'sitl/terrain_video.py').write_text("print('terrain dependencies available')\n")
         (repo / 'sitl/run.sh').write_text('exec python3 "$(dirname "$0")/fake.py"\n')
         (repo / 'sitl/fake.py').write_text('''
@@ -133,7 +133,8 @@ time.sleep(60)
             assert window.environment()[0]['CAMERA_GIMBAL_SITL_RESET_PARAMETERS'] == '1'
             window.clear_parameters.setChecked(False)
             for index in (0, 1):
-                window.camera.setCurrentIndex(index)
+                backend = ('mt11', 'a8')[index]
+                window.camera.setCurrentIndex(window.camera.findData(backend))
                 window.orientation.setCurrentIndex(index)
                 window.video.setCurrentIndex(index)
                 window.start_button.click()
@@ -156,6 +157,67 @@ time.sleep(60)
                 assert unrelated.poll() is None, 'launcher stopped an unrelated process'
                 assert window.start_button.isEnabled()
             print('PASS camera/orientation/video selections, startup, stop, close and detached-child cleanup')
+
+            group = MultiLauncher(repo)
+            try:
+                assert group.count.value() == 1 and group.tabs.count() == 1
+                group.count.setValue(4)
+                assert group.tabs.count() == 4
+                for backends in (('mt11',) * 4, ('mt11', 'a8', 'zr10', 'z1mini')):
+                    for i, panel in enumerate(group.simulators):
+                        panel.camera.setCurrentIndex(panel.camera.findData(backends[i]))
+                        panel.video.setCurrentIndex(i % 2)
+                        panel.orientation.setCurrentIndex(i % 2)
+                    group.start_button.click()
+                    until(app, lambda: group.phase in ('running', 'idle'))
+                    assert group.phase == 'running', group.status.text()
+                    assert not group.count.isEnabled()
+                    tokens = [p.token for p in group.simulators]
+                    builds = [p.runtime.parent.parent for p in group.simulators]
+                    assert len(set(builds)) == 4
+                    assert len({p.web_url for p in group.simulators}) == 4
+                    for i, panel in enumerate(group.simulators):
+                        selection = json.loads((builds[i] / 'selection.json').read_text())
+                        assert selection['CAMERA_GIMBAL_SITL_BACKEND'] == backends[i]
+                        assert selection['CAMERA_GIMBAL_SITL_VIDEO'] == ('simple', 'terrain')[i % 2]
+                        assert len(owned_processes(tokens[i])) >= 2
+                    if backends[1] == 'a8':
+                        group.close()
+                    else:
+                        group.stop_button.click()
+                    until(app, lambda: group.phase == 'idle')
+                    assert all(not owned_processes(token) for token in tokens)
+                    assert unrelated.poll() is None
+                print('PASS four identical/mixed simulators, separate directories/ports, stop-all and close cleanup')
+
+                # A failure after another simulator started must unwind the group.
+                (repo / 'Makefile').write_text('sitl a8_sitl zr10_sitl z1mini_sitl:\n'
+                    '\t@test "$$CAMERA_GIMBAL_SITL_INSTANCE" != 2\n')
+                group.start()
+                until(app, lambda: group.phase == 'idle')
+                assert 'Simulator 2 stopped' in group.status.text(), group.status.text()
+                assert all(p.phase == 'idle' for p in group.simulators)
+                assert not (builds[2] / 'launcher.pid').exists()
+                print('PASS partial startup failure stops the whole group')
+
+                (repo / 'Makefile').write_text('sitl a8_sitl zr10_sitl z1mini_sitl:\n\t@sleep 60\n')
+                group.start()
+                until(app, lambda: group.simulators[0].phase == 'building')
+                token = group.simulators[0].token
+                group.stop()
+                until(app, lambda: group.phase == 'idle')
+                assert not owned_processes(token)
+                assert all(p.phase == 'idle' for p in group.simulators)
+                print('PASS stop during build cancels pending simulators')
+
+                with mock.patch.dict(os.environ, {'MT11_SITL_WEB_PORT': '8554'}):
+                    group.start()
+                    assert group.phase == 'idle' and 'shared' in group.status.text()
+                assert group.start_button.isEnabled()
+                print('PASS conflicting endpoints rejected before startup')
+            finally:
+                group.close()
+                until(app, lambda: group.phase == 'idle')
 
             (repo / 'Makefile').write_text('sitl a8_sitl:\n\t@echo deliberate build failure\n\t@false\n')
             window.video.setCurrentIndex(0)

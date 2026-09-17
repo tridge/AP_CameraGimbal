@@ -103,33 +103,18 @@ esac
 # overrides when the caller explicitly supplied them; exporting default values
 # here would make every web-triggered camera restart ignore the saved INI.
 unset CAMERA_APP_MAVLINK_TCP_PORT CAMERA_APP_MAVLINK_UDP_PORT
-if [ "$backend" = zr10 ]; then
-    if [ "${ZR10_SITL_MAVLINK_TCP_PORT+set}" = set ]; then
-        CAMERA_APP_MAVLINK_TCP_PORT=$ZR10_SITL_MAVLINK_TCP_PORT
-        export CAMERA_APP_MAVLINK_TCP_PORT
+for transport in TCP UDP; do
+    key="${label}_SITL_MAVLINK_${transport}_PORT"
+    # Only these fixed backend/transport names are evaluated, never values.
+    eval "present=\${${key}+set}"
+    if [ "$present" = set ]; then
+        eval "port=\${${key}}"
+        export "CAMERA_APP_MAVLINK_${transport}_PORT=$port"
+    elif [ "$backend" = a8 ] && [ -z "${CAMERA_GIMBAL_SITL_INSTANCE:-}" ]; then
+        # Preserve standalone A8 isolation; GUI slots seed their own ports.
+        export "CAMERA_APP_MAVLINK_${transport}_PORT=0"
     fi
-elif [ "$backend" = a8 ]; then
-    # Keep standalone A8 SITL isolated from any ArduPilot instance already
-    # broadcasting on the production port. Otherwise its gimbal manager can
-    # continuously replace manual web commands with its own attitude target.
-    CAMERA_APP_MAVLINK_TCP_PORT=${A8_SITL_MAVLINK_TCP_PORT:-0}
-    export CAMERA_APP_MAVLINK_TCP_PORT
-elif [ "$backend" = mt11 ] && [ "${MT11_SITL_MAVLINK_TCP_PORT+set}" = set ]; then
-    CAMERA_APP_MAVLINK_TCP_PORT=$MT11_SITL_MAVLINK_TCP_PORT
-    export CAMERA_APP_MAVLINK_TCP_PORT
-fi
-if [ "$backend" = zr10 ]; then
-    if [ "${ZR10_SITL_MAVLINK_UDP_PORT+set}" = set ]; then
-        CAMERA_APP_MAVLINK_UDP_PORT=$ZR10_SITL_MAVLINK_UDP_PORT
-        export CAMERA_APP_MAVLINK_UDP_PORT
-    fi
-elif [ "$backend" = a8 ]; then
-    CAMERA_APP_MAVLINK_UDP_PORT=${A8_SITL_MAVLINK_UDP_PORT:-0}
-    export CAMERA_APP_MAVLINK_UDP_PORT
-elif [ "$backend" = mt11 ] && [ "${MT11_SITL_MAVLINK_UDP_PORT+set}" = set ]; then
-    CAMERA_APP_MAVLINK_UDP_PORT=$MT11_SITL_MAVLINK_UDP_PORT
-    export CAMERA_APP_MAVLINK_UDP_PORT
-fi
+done
 
 stop_processes()
 {

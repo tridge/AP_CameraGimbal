@@ -154,7 +154,7 @@ def main():
     for name in ('gimbal.ready', 'camera-app.ready', 'web.pid'):
         (run / name).unlink(missing_ok=True)
     try:
-        gimbal = launch(worker_command('gimbal') + ['--backend', backend, '--port', '0',
+        gimbal = launch(worker_command('gimbal') + ['--backend', backend, '--port', os.environ.get(prefix + 'GIMBAL_PORT', '0'),
                         '--orientation', os.environ.get(prefix + 'ORIENTATION', 'upright'),
                         '--ready-file', str(run / 'gimbal.ready')], 'gimbal')
         ready(run / 'gimbal.ready', gimbal)
