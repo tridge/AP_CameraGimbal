@@ -50,9 +50,9 @@ def raw_zip(entries):
 def lie_about_uncompressed_size(data, names, declared_size):
     """Tamper the local and central ZIP sizes while retaining deflate data."""
     data = bytearray(data)
-    wanted = set(names)
     for signature, name_offset, length_offset, size_offset in (
             (b'PK\x03\x04', 30, 26, 22), (b'PK\x01\x02', 46, 28, 24)):
+        wanted = set(names)
         position = 0
         while True:
             position = data.find(signature, position)
@@ -163,13 +163,15 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             'needs vendor isp': package(AP, IPC, manifest=b'{"target": "xfrobot-z1mini", "vendor_isp_required": true}\n'),
             'unlisted extra file': package(AP | {'unlisted.bin': b'payload'}, IPC),
             'dot path': raw_zip({'gcu/ap/..': b'x'}),
-            'aggregate decompression limit': lie_about_uncompressed_size(
+            'underdeclared extracted size exceeds remaining budget': lie_about_uncompressed_size(
                 package(AP | {'camera-app': b'a' * 2500, 'z1mini-web': b'b' * 2500}, IPC),
                 ('gcu/ap/camera-app', 'gcu/ap/z1mini-web'), 1500),
         }
         for label, data in rejected_packages.items():
             status, message = request('/upgrade', data, headers)
             assert status == 400, (label, status, message)
+            if label == 'underdeclared extracted size exceeds remaining budget':
+                assert b'extraction failed' in message, (label, message)
             assert (gcu / 'ap/camera-app').read_bytes() == b'old camera\n', label
             assert not (root / 'gcu.new').exists() and not list(run.glob('firmware-upload.*')), label
         exchange_failure.touch()

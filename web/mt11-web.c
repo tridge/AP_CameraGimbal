@@ -7902,6 +7902,7 @@ static bool receive_upload_body(int fd, const struct request *request, int outpu
 #define RENAME_EXCHANGE 2
 #endif
 static void schedule_reboot(void);
+static bool remove_path_tree(const char *path);
 
 /* Atomically swap two paths; unsupported filesystems fail safely. */
 static int exchange_paths(const char *a, const char *b)
@@ -7915,8 +7916,14 @@ static int exchange_paths(const char *a, const char *b)
         errno = ENAMETOOLONG;
         return -1;
     }
-    if (access(backup, F_OK) == 0) { errno = EEXIST; return -1; }
-    if (errno != ENOENT) return -1;
+    if (access(backup, F_OK) == 0) {
+        struct stat current;
+        if (lstat(b, &current) < 0) {
+            if (errno != ENOENT || rename(backup, b) < 0) return -1;
+        } else if (!remove_path_tree(backup)) {
+            return -1;
+        }
+    } else if (errno != ENOENT) return -1;
     if (rename(b, backup) < 0) return -1;
     if (rename(a, b) < 0) {
         int saved = errno;

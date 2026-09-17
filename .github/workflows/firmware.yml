@@ -25,8 +25,6 @@ jobs:
         run: make release-test platform-test camera-definition-test
       - name: Test Z1-Mini web firmware updates
         run: python3 web/tests/test_z1mini_upgrade.py
-      - name: Test Z1-Mini offline integration
-        run: python3 tests/test_z1mini.py
       - uses: actions/upload-artifact@v4
         with:
           name: AP-CameraGimbal-firmware
@@ -37,6 +35,8 @@ jobs:
           name: AP-CameraGimbal-camera-definitions
           path: build/camera-definitions/*.xml
           if-no-files-found: error
+      - name: Test Z1-Mini offline integration
+        run: build/environment/bin/python3 tests/test_z1mini.py
 
   exposure:
     runs-on: ubuntu-24.04

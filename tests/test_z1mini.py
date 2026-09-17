@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline Z1-Mini: PTY MCU, real media receiver, MAVLink, web and overlay ZIP."""
 import base64
+import ast
 import hashlib
 import http.client
 import json
@@ -159,6 +160,27 @@ class RTSP:
 
 
 def main():
+    web_source = (ROOT/'web/mt11-web.c').read_text()
+    allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
+                          web_source, re.S)
+    assert allowlist
+    accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
+    builder = ast.parse((ROOT/'tools/build_z1mini_package.py').read_text())
+    app_files, ipc_files = set(), set()
+    for node in ast.walk(builder):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == 'payload' and isinstance(node.value, ast.Dict):
+                    app_files.update(key.value for key in node.value.keys
+                                     if isinstance(key, ast.Constant) and isinstance(key.value, str))
+                if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                    key = target.slice
+                    if isinstance(target.value, ast.Name) and target.value.id == 'payload' and isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        app_files.add(key.value)
+                    if isinstance(target.value, ast.Name) and target.value.id == 'members' and isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        ipc_files.add(key.value)
+    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files
+    assert accepted == builder_members, (accepted, builder_members)
     with tempfile.TemporaryDirectory(prefix='z1mini-test-') as temp:
         root = Path(temp)
         log = (root / 'build.log').open('w')
@@ -365,11 +387,6 @@ def main():
                     assert z.testzip() is None
                     hooks = {'gcu/ipc/run.sh', 'gcu/ipc/camera_gcu.sh'}
                     assert all(n.startswith('gcu/ap/') or n in hooks for n in z.namelist())
-                    web_source = (ROOT/'web/mt11-web.c').read_text()
-                    allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
-                                          web_source, re.S)
-                    assert allowlist
-                    accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
                     actual = set(z.namelist())
                     assert actual <= accepted, (actual, accepted)
                     assert {'gcu/ap/manifest.json', 'gcu/ap/SHA256SUMS',
