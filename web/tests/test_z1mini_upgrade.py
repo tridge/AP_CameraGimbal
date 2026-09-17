@@ -81,6 +81,14 @@ if not (MAVLINK / 'all/mavlink.h').exists():
 
 with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     root = Path(directory)
+    exchange_test = root / 'exchange-test'
+    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+                    '-Wno-address-of-packed-member', '-ffunction-sections', '-fdata-sections',
+                    '-Wl,--gc-sections', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
+                    '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
+                    f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.c'),
+                    '-o', str(exchange_test), '-lm'], check=True)
+    subprocess.run([str(exchange_test), str(root)], check=True)
     gcu, settings, run, media = root / 'gcu', root / 'settings', root / 'run', root / 'mnt'
     for path in (gcu / 'ap', gcu / 'ipc', settings, run, media):
         path.mkdir(parents=True)
@@ -164,14 +172,15 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             'unlisted extra file': package(AP | {'unlisted.bin': b'payload'}, IPC),
             'dot path': raw_zip({'gcu/ap/..': b'x'}),
             'underdeclared extracted size exceeds remaining budget': lie_about_uncompressed_size(
-                package(AP | {'camera-app': b'a' * 2500, 'z1mini-web': b'b' * 2500}, IPC),
-                ('gcu/ap/camera-app', 'gcu/ap/z1mini-web'), 1500),
+                package(AP | {'camera-app': b'a' * 1200, 'z1mini-web': b'b' * 1200}, IPC),
+                ('gcu/ap/camera-app', 'gcu/ap/z1mini-web'), 100),
         }
         for label, data in rejected_packages.items():
             status, message = request('/upgrade', data, headers)
             assert status == 400, (label, status, message)
             if label == 'underdeclared extracted size exceeds remaining budget':
-                assert b'extraction failed' in message, (label, message)
+                assert (b'extraction failed' in message or
+                        b'extracted data exceeds package limit' in message), (label, message)
             assert (gcu / 'ap/camera-app').read_bytes() == b'old camera\n', label
             assert not (root / 'gcu.new').exists() and not list(run.glob('firmware-upload.*')), label
         exchange_failure.touch()

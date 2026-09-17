@@ -129,7 +129,7 @@ int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config 
     pthread_mutex_init(&m->lock, NULL);
     if (ca_rtsp_open(&m->rtsp, c->rtsp_port, "video1", CA_VIDEO_H264, 30) < 0 ||
         ca_rtsp_add_video(m->rtsp, "video2", CA_VIDEO_H264, 30, &m->sub) < 0 ||
-        ca_live_video_server_open(&m->live, 8555) < 0 ||
+        ca_live_video_server_open(&m->live, c->rtsp_port + 1U) < 0 ||
         ca_live_video_server_configure(m->live, 0, 1920, 1080, 30, true) < 0 ||
         ca_live_video_server_configure(m->live, 1, 1920, 1080, 30, true) < 0) goto fail;
     if (ca_rtsp_support_proxy(m->rtsp, &c->settings.support) < 0)

@@ -3,6 +3,7 @@
 import base64
 import ast
 import hashlib
+import importlib.util
 import http.client
 import json
 import os
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from unittest import mock
 from urllib.parse import urlencode
 
 from pymavlink.dialects.v20 import ardupilotmega as mav
@@ -28,10 +30,21 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
-def port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+def port(kind=socket.SOCK_STREAM, adjacent=False):
+    while True:
+        with socket.socket(socket.AF_INET, kind) as s:
+            s.bind(('127.0.0.1', 0))
+            value = s.getsockname()[1]
+            if not adjacent:
+                return value
+            if value == 65535:
+                continue
+            with socket.socket() as neighbour:
+                try:
+                    neighbour.bind(('127.0.0.1', value + 1))
+                except OSError:
+                    continue
+            return value
 
 
 def crc(data):
@@ -207,7 +220,7 @@ def main():
         mcu = MCU()
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.bind(('127.0.0.1', 0)); udp.settimeout(.5)
-        mavport, tcpport, outputport = port(), port(), port()
+        mavport, tcpport, outputport = port(socket.SOCK_DGRAM), port(), port(adjacent=True)
         encoder = mav.MAVLink(None, srcSystem=255, srcComponent=191)
         parser = mav.MAVLink(None)
         ready = root/'ready'
@@ -319,7 +332,8 @@ def main():
                 '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-DMT11_WEB_TEST', '-I'+str(ROOT/'camera_app/build/mavlink/all/include'),
                 *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.c'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
             webport = port()
-            web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log)
+            web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log,
+                                   env=dict(os.environ, MT11_WEB_LIVE_PORT=str(outputport + 1)))
             time.sleep(.3)
             auth = 'Basic '+base64.b64encode(b'admin:test-password').decode()
             def request(path):
@@ -379,8 +393,18 @@ def main():
             while not rtsp.options and time.monotonic() < deadline:
                 time.sleep(.1)
             assert rtsp.options and rtsp.connections == 1, (rtsp.options, rtsp.connections)
-            # Inspect a complete package after the cross build, if present.
-            packages = list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
+            # Always exercise the real builder, even before a cross build.
+            # Only executable validation is substituted for these fixtures;
+            # release packages below still use real validated ARM binaries.
+            spec = importlib.util.spec_from_file_location('z1_package', ROOT/'tools/build_z1mini_package.py')
+            package_builder = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(package_builder)
+            packages = [root/'Z1Mini_AP_fixture.gcu', root/'Z1Mini_AP_native_fixture.gcu']
+            with mock.patch.object(package_builder, 'arm_binary',
+                                   side_effect=lambda path: b'ELF fixture: ' + path.name.encode()):
+                package_builder.build(packages[0])
+                package_builder.build(packages[1], native_capture=Path('ax-capture'))
+            packages += list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
             packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
             for path in packages:
                 with zipfile.ZipFile(path) as z:
