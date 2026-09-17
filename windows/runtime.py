@@ -60,7 +60,12 @@ def own_children():
 
 def ready(path, process, timeout=30):
     deadline = time.monotonic() + timeout
-    while not path.exists():
+    while True:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return
+        except FileNotFoundError:
+            pass
         if process.poll() is not None:
             raise RuntimeError(f'{process.args[0]} exited with status {process.returncode}')
         if time.monotonic() > deadline:

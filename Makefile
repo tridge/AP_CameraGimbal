@@ -79,6 +79,10 @@ all: build-dependencies
 
 .PHONY: release release-test
 .PHONY: camera-definitions camera-definition-test
+.PHONY: safe-tar-test
+safe-tar-test:
+	python3 tests/test_safe_tar.py
+
 camera-definitions:
 	python3 tools/build_camera_definitions.py
 

@@ -5,6 +5,16 @@
 #include "../src/backends/z1mini/control.c"
 #include "../src/backends/z1mini/pipeline.h"
 
+uint64_t ca_binlog_time_us(void) { return 0; }
+void ca_binlog_emit(uint8_t id, const void *data, size_t size)
+{
+    (void)id; (void)data; (void)size;
+}
+void ca_binlog_feedback(const struct ca_gimbal_attitude *attitude)
+{
+    (void)attitude;
+}
+
 static unsigned frames;
 static uint64_t received_pts;
 static void frame(void *opaque, const uint8_t *p, size_t n, uint64_t pts, bool key)

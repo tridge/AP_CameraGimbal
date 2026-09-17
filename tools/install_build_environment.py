@@ -13,8 +13,8 @@ import platform
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
+from safe_tar import safe_extract
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -43,6 +43,11 @@ def sha256(path):
     return digest.hexdigest()
 
 
+# Unpack the downloaded compiler archive into a temporary directory
+def extract_toolchain(archive, destination):
+    safe_extract(archive, destination)
+
+
 def toolchain(name):
     directory, url, digest, prefix = TOOLCHAINS[name]
     base = BUILD / 'toolchains'
@@ -62,8 +67,7 @@ def toolchain(name):
         if sha256(archive) != digest:
             raise RuntimeError(f'Toolchain checksum mismatch: {archive}')
         with tempfile.TemporaryDirectory(prefix='extract-', dir=base) as work:
-            with tarfile.open(archive) as tar:
-                tar.extractall(work, filter='data')
+            extract_toolchain(archive, work)
             (Path(work) / directory).rename(target)
         stamp.write_text(digest + '\n')
     compiler = str(target / 'bin' / prefix)

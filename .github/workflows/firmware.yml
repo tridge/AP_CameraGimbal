@@ -9,6 +9,21 @@ concurrency:
   group: camera-firmware-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  legacy-python:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ['3.10.11', '3.10.13', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test extraction with and without the PEP 706 backport
+        run: |
+          python tests/test_safe_tar.py
+          sudo "$(command -v python)" tests/test_safe_tar.py
+
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -17,6 +32,8 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+      - name: Test legacy Python tar extraction safety
+        run: python3 tests/test_safe_tar.py
       - name: Install compilers, SDKs and build tools
         run: python3 tools/install_build_environment.py
       - name: Build all camera release packages
