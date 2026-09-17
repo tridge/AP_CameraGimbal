@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Offline Z1-Mini: PTY MCU, real media receiver, MAVLink, web and overlay ZIP."""
 import base64
+import ast
 import hashlib
+import importlib.util
 import http.client
 import json
 import os
@@ -16,6 +18,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from unittest import mock
 from urllib.parse import urlencode
 
 from pymavlink.dialects.v20 import ardupilotmega as mav
@@ -27,10 +30,21 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
-def port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+def port(kind=socket.SOCK_STREAM, adjacent=False):
+    while True:
+        with socket.socket(socket.AF_INET, kind) as s:
+            s.bind(('127.0.0.1', 0))
+            value = s.getsockname()[1]
+            if not adjacent:
+                return value
+            if value == 65535:
+                continue
+            with socket.socket() as neighbour:
+                try:
+                    neighbour.bind(('127.0.0.1', value + 1))
+                except OSError:
+                    continue
+            return value
 
 
 def crc(data):
@@ -159,6 +173,27 @@ class RTSP:
 
 
 def main():
+    web_source = (ROOT/'web/mt11-web.c').read_text()
+    allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
+                          web_source, re.S)
+    assert allowlist
+    accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
+    builder = ast.parse((ROOT/'tools/build_z1mini_package.py').read_text())
+    app_files, ipc_files = set(), set()
+    for node in ast.walk(builder):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == 'payload' and isinstance(node.value, ast.Dict):
+                    app_files.update(key.value for key in node.value.keys
+                                     if isinstance(key, ast.Constant) and isinstance(key.value, str))
+                if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                    key = target.slice
+                    if isinstance(target.value, ast.Name) and target.value.id == 'payload' and isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        app_files.add(key.value)
+                    if isinstance(target.value, ast.Name) and target.value.id == 'members' and isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        ipc_files.add(key.value)
+    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files
+    assert accepted == builder_members, (accepted, builder_members)
     with tempfile.TemporaryDirectory(prefix='z1mini-test-') as temp:
         root = Path(temp)
         log = (root / 'build.log').open('w')
@@ -185,7 +220,7 @@ def main():
         mcu = MCU()
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.bind(('127.0.0.1', 0)); udp.settimeout(.5)
-        mavport, tcpport, outputport = port(), port(), port()
+        mavport, tcpport, outputport = port(socket.SOCK_DGRAM), port(), port(adjacent=True)
         encoder = mav.MAVLink(None, srcSystem=255, srcComponent=191)
         parser = mav.MAVLink(None)
         ready = root/'ready'
@@ -297,7 +332,8 @@ def main():
                 '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-DMT11_WEB_TEST', '-I'+str(ROOT/'camera_app/build/mavlink/all/include'),
                 *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.c'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
             webport = port()
-            web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log)
+            web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log,
+                                   env=dict(os.environ, MT11_WEB_LIVE_PORT=str(outputport + 1)))
             time.sleep(.3)
             auth = 'Basic '+base64.b64encode(b'admin:test-password').decode()
             def request(path):
@@ -308,7 +344,7 @@ def main():
                 return data.decode()
             page = request('/')
             assert '80.1' in page and 'SoC temperature' in page, page
-            assert 'id=firmware-upload' not in page and '.gcu' in page
+            assert 'id=firmware-upload' in page and 'Z1Mini_AP_*.gcu' in page
             temp_file.write_text('not-a-temperature\n')
             assert '80.1' not in request('/')
             temp_file.unlink()
@@ -357,11 +393,30 @@ def main():
             while not rtsp.options and time.monotonic() < deadline:
                 time.sleep(.1)
             assert rtsp.options and rtsp.connections == 1, (rtsp.options, rtsp.connections)
-            # Inspect a complete package after the cross build, if present.
-            for path in (ROOT/'build').glob('Z1Mini_AP_*.gcu'):
+            # Always exercise the real builder, even before a cross build.
+            # Only executable validation is substituted for these fixtures;
+            # release packages below still use real validated ARM binaries.
+            spec = importlib.util.spec_from_file_location('z1_package', ROOT/'tools/build_z1mini_package.py')
+            package_builder = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(package_builder)
+            packages = [root/'Z1Mini_AP_fixture.gcu', root/'Z1Mini_AP_native_fixture.gcu']
+            with mock.patch.object(package_builder, 'arm_binary',
+                                   side_effect=lambda path: b'ELF fixture: ' + path.name.encode()):
+                package_builder.build(packages[0])
+                package_builder.build(packages[1], native_capture=Path('ax-capture'))
+            packages += list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
+            packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
+            for path in packages:
                 with zipfile.ZipFile(path) as z:
                     assert z.testzip() is None
-                    assert all(n.startswith('gcu/ap/') or n == 'gcu/ipc/camera_gcu.sh' for n in z.namelist())
+                    hooks = {'gcu/ipc/run.sh', 'gcu/ipc/camera_gcu.sh'}
+                    assert all(n.startswith('gcu/ap/') or n in hooks for n in z.namelist())
+                    actual = set(z.namelist())
+                    assert actual <= accepted, (actual, accepted)
+                    assert {'gcu/ap/manifest.json', 'gcu/ap/SHA256SUMS',
+                            'gcu/ap/camera-app', 'gcu/ap/z1mini-web'} <= actual
+                    # The vendor updater replaces /opt/bin/gcu; rcS needs ipc/run.sh.
+                    assert hooks <= set(z.namelist())
                     assert 'gcu/gb_control' not in z.namelist() and 'gcu/ipc/main' not in z.namelist()
                     for line in z.read('gcu/ap/SHA256SUMS').decode().splitlines():
                         digest, name = line.split('  ')

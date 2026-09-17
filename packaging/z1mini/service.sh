@@ -1,5 +1,5 @@
 #!/bin/sh
-# Z1-Mini overlay supervisor. Stock run.sh has loaded AX drivers/network.
+# Z1-Mini overlay supervisor. Stock rcS has loaded AX drivers/network.
 # main owns the sensor/ISP; gb_control and camera-app are mutually exclusive.
 set -u
 umask 077

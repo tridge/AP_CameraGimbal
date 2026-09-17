@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest https://cygwin.com/setup-x86_64.exe -OutFile "$env:RUNNER_TEMP\cygwin-setup.exe"
-          $setup = Start-Process "$env:RUNNER_TEMP\cygwin-setup.exe" -Wait -PassThru -ArgumentList @('--quiet-mode', '--no-admin', '--no-shortcuts', '--root', 'C:\cygwin64', '--local-package-dir', "$env:RUNNER_TEMP\cygwin-packages", '--site', 'https://mirrors.kernel.org/sourceware/cygwin/', '--packages', 'gcc-core,gcc-g++,make,python3,python3-lxml,patch,git,curl,tar,xz')
+          $setup = Start-Process "$env:RUNNER_TEMP\cygwin-setup.exe" -Wait -PassThru -ArgumentList @('--quiet-mode', '--no-admin', '--no-shortcuts', '--root', 'C:\cygwin64', '--local-package-dir', "$env:RUNNER_TEMP\cygwin-packages", '--site', 'https://mirrors.kernel.org/sourceware/cygwin/', '--packages', 'gcc-core,gcc-g++,make,python3,python3-lxml,patch,git,curl,tar,unzip,xz')
           if ($setup.ExitCode -ne 0) { throw "Cygwin setup failed: $($setup.ExitCode)" }
       - name: Build standalone launcher and installer
         shell: pwsh

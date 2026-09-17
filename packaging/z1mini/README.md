@@ -20,19 +20,37 @@ camera SDK libraries are not redistributed. Common build dependencies provide
 the pinned XOP RTSP and minimp4 sources.
 
 The output folder contains the `.gcu` application overlay, installation/update
-instructions, build information and checksums. `make z1mini_native_package`
-builds the same native overlay directly. `make z1mini_package` builds an
-alternative which receives video from the retained vendor ISP service.
+instructions, build information and checksums. `make z1mini_package` is an
+alias for `make z1mini_native_package`, which builds the self-contained
+native-capture release package. `make z1mini_retained_isp_package` is for
+development only; set `Z1MINI_RETAINED_ISP_PACKAGE_OUT` to choose its output.
+Retained-ISP packages cannot be uploaded through the web installer.
 
 ## Installation and updates
 
-Use the XFRobot `.gcu` updater and the per-release README. The Windows updater,
-power-cycle recovery and interrupted-update handling still need hardware
-verification; installations so far used direct Ethernet deployment.
-ArduPilot web firmware upload and SD-card boot installation are not implemented
-for this target.
+Use the XFRobot `.gcu` updater and the per-release README. The updater
+replaces the whole `/opt/bin/gcu` directory with the package contents, so the
+vendor camera programs are removed and the package ships the `ipc/run.sh`
+boot hook that `/etc/init.d/rcS` launches. Power-cycle recovery and
+interrupted-update handling still need hardware verification.
 
-The package installs the AP application and its startup hook. It retains the
+Once the AP application is running, later packages can be uploaded on the web
+**Status** page. The server streams the `.gcu` to RAM, checks the archive
+listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
+`SHA256SUMS` and the manifest target, exchanges it with the running
+installation and reboots. A rejected package leaves the installation untouched.
+When updating an older retained-ISP installation to a native package, the web
+server moves from port 8080 to port 80; open the camera at its new address if
+the browser does not reconnect automatically.
+SD-card boot installation is not implemented for this target. The retained-ISP
+package depends on the vendor `ipc/` files. The XFRobot updater also replaces
+the complete GCU tree, so the retained-ISP package is only for development on
+a camera where the vendor ISP has been installed separately; it is not a
+deployable release package. `make z1mini_package` therefore builds the
+self-contained native package. The web upload refuses retained-ISP packages
+because that update would remove the vendor ISP files.
+
+The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP
 service before an updater replaces its running executables, and keep power
 connected until installation completes. Boot checks reject incomplete payloads;
