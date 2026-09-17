@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -50,10 +51,23 @@ int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "fd:3")) {
         const char *mode = getenv("Z1_NATIVE_TEST_MODE");
-        bool valid=!strcmp(mode,"valid") || !strcmp(mode,"overlay");
+        bool valid=!strcmp(mode,"valid") || !strcmp(mode,"overlay") || !strcmp(mode,"legacy");
+        if (!strcmp(mode,"overlay") || !strcmp(mode,"retry")) {
+            struct ca_z1_native_header hello={CA_Z1_NATIVE_OVERLAY_MAGIC,0,CA_Z1_NATIVE_OVERLAY_READY,0,0};
+            if (write(3,&hello,sizeof(hello))!=sizeof(hello)) return 1;
+        }
+        if (!strcmp(mode,"legacy")) {
+            struct ca_z1_native_header old={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,0};
+            if (write(3,&old,sizeof(old))!=sizeof(old)) return 1;
+            usleep(10000);
+            uint8_t byte;
+            if (recv(3,&byte,1,MSG_DONTWAIT)>0) return 1;
+        }
         if (!strcmp(mode,"overlay")) {
             struct ca_z1_overlay_request request;
             if (read_exact_fd(3,&request,sizeof(request)) || !request.sequence || request.desired!=1) return 1;
+            struct ca_z1_native_header old={CA_Z1_NATIVE_OVERLAY_MAGIC,0,0,0,0};
+            if (write(3,&old,sizeof(old))!=sizeof(old)) return 1;
             struct ca_z1_native_header reply={CA_Z1_NATIVE_OVERLAY_MAGIC,0,request.sequence,0,request.desired};
             if (write(3,&reply,sizeof(reply))!=sizeof(reply)) return 1;
         }
@@ -110,17 +124,17 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry"};
-    for (unsigned i = 0; i < 7; i++) {
+    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry", "legacy"};
+    for (unsigned i = 0; i < sizeof(modes)/sizeof(modes[0]); i++) {
         setenv("Z1_NATIVE_TEST_MODE", modes[i], 1);
         atomic_store(&stopped, false);
         count = exposure_count = 0;
         stop_after = i==6 ? 195 : 2;
         struct ca_z1_overlay_control overlay={.desired=1,.applied=-EINPROGRESS};
-        bool valid=i==0 || i==5;
-        bool overlay_test=i==5 || i==6;
+        bool valid=i==0 || i==5 || i==7;
+        bool overlay_test=i>=5;
         int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL);
-        if (overlay_test) assert(atomic_load(&overlay.applied)==1);
+        if (overlay_test) assert(atomic_load(&overlay.applied)==(i==7 ? -ENOTSUP : 1));
         assert(result == (valid || i==6 ? 0 : -1));
         assert(exposure_count == (valid ? 1U : 0U));
         assert(count == (valid ? 2U : i==6 ? 195U : 0U));

@@ -21,6 +21,10 @@ struct ca_z1_overlay_request {
 };
 _Static_assert(sizeof(struct ca_z1_overlay_request) == 8, "overlay request ABI");
 #define CA_Z1_NATIVE_OVERLAY_MAGIC UINT32_C(0x3144534f)
+/* Capability announcement in an overlay header's PTS, before any frames.
+ * Outside the uint32 request sequence range. The existing header format lets
+ * older receivers continue streaming even without this capability. */
+#define CA_Z1_NATIVE_OVERLAY_READY UINT64_MAX
 #define CA_Z1_NATIVE_AE_MAGIC UINT32_C(0x31454143)
 #define CA_Z1_NATIVE_MAX_FRAME (8U * 1024U * 1024U)
 struct ca_z1_native_header {

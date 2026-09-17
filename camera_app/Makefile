@@ -635,6 +635,13 @@ endif
 Z1MINI_AX_SDK_INCLUDE ?=
 .PHONY: z1mini-capture
 z1mini-capture: build/z1mini/ax-capture
+.PHONY: z1mini-overlay-test
+z1mini-overlay-test:
+	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
+	mkdir -p build/tests
+	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini tests/test_z1mini_overlay.c src/media/overlay.c -o build/tests/test_z1mini_overlay -ldl -pthread -lm
+	./build/tests/test_z1mini_overlay
+
 build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/media/overlay.c include/camera_app/overlay.h src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)

@@ -58,6 +58,8 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     int result = -1;
     bool awaiting_overlay=false;
     bool pending_overlay=false;
+    bool overlay_supported=false;
+    bool overlay_warned=false;
     struct ca_z1_overlay_request overlay_request={0};
     size_t overlay_request_offset=0;
     uint32_t next_overlay_sequence=0, awaiting_overlay_sequence=0;
@@ -70,12 +72,13 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             awaiting_overlay=false;
             overlay_wait_frames=0;
         }
-        if (overlay && !awaiting_overlay && !pending_overlay &&
+        if (overlay && overlay_supported && !awaiting_overlay && !pending_overlay &&
             atomic_load(&overlay->applied)==-EINPROGRESS) {
             if (++next_overlay_sequence==0) ++next_overlay_sequence;
             overlay_request=(struct ca_z1_overlay_request){
                 .sequence=next_overlay_sequence,
                 .desired=(uint8_t)atomic_load(&overlay->desired),
+                .reserved={0},
             };
             overlay_request_offset=0;
             pending_overlay=true;
@@ -100,7 +103,14 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
         if (header.magic==CA_Z1_NATIVE_OVERLAY_MAGIC) {
-            if (header.size || !header.pts || header.stream>1 || header.key>4095) break;
+            if (header.size || header.stream>1 || header.key>4095) break;
+            if (header.pts==CA_Z1_NATIVE_OVERLAY_READY && !header.key) {
+                overlay_supported=true;
+                continue;
+            }
+            /* A legacy ack is not video corruption. Do not send the new
+             * request format to a helper that has not advertised it. */
+            if (!header.pts) continue;
             /* A previous request can be acknowledged after a retry has
              * already completed. It is stale, not a video transport error. */
             if (!awaiting_overlay || header.pts!=awaiting_overlay_sequence) continue;
@@ -127,6 +137,13 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             header.key > 1 || !header.size || header.size > CA_Z1_NATIVE_MAX_FRAME) {
             ca_log("Z1 native capture helper sent an invalid frame header");
             break;
+        }
+        if (overlay && !overlay_supported && atomic_load(&overlay->applied)==-EINPROGRESS) {
+            if (!overlay_warned) {
+                ca_log("Z1 native helper lacks sequenced overlay support; video remains available");
+                overlay_warned=true;
+            }
+            atomic_store(&overlay->applied,-ENOTSUP);
         }
         if (header.size > capacity) {
             unsigned char *next = realloc(frame, header.size);

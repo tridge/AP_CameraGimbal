@@ -445,6 +445,10 @@ z1mini-test:
 
 # Optional native package: independent 1080p live video and 4K recording.
 Z1MINI_NATIVE_PACKAGE_OUT ?= build/Z1Mini_AP_native_$(MT11_VERSION)_$(Z1MINI_BUILD_HASH).gcu
+.PHONY: z1mini-overlay-test
+z1mini-overlay-test:
+	$(MAKE) -C camera_app z1mini-overlay-test Z1MINI_AX_SDK_INCLUDE='$(Z1MINI_AX_SDK_INCLUDE)'
+
 .PHONY: z1mini_native_package
 z1mini_native_package: z1mini
 	$(MAKE) -C camera_app CAMERA_BACKEND=z1mini CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)' z1mini-capture Z1MINI_AX_SDK_INCLUDE='$(Z1MINI_AX_SDK_INCLUDE)'
