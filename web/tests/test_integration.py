@@ -609,6 +609,7 @@ try:
     for name in (b"proxy_video1_port", b"proxy_video2_port"):
         assert re.search(rb'<input[^>]*name="' + name + rb'"[^>]*value="0"', body)
     assert b'name="position_targeting"' in body
+    assert b'name="osd_cross"' in body and b'name="osd_thermal_fov"' in body
     assert b'value="true" selected' in body
     assert b'name="uart_protocol"' in body and b'>None</option>' in body
     assert b'<option value="while_armed">While Armed</option>' in body
@@ -623,6 +624,9 @@ try:
         "mavlink_udp_port": "14601",
         "position_targeting": "false",
         "tracking_method": "angle",
+        "osd_cross": "true",
+        "osd_recording": "true",
+        "osd_thermal_fov": "true",
         "log_disarmed": "false",
         "thermal_palette": "white_hot",
         "autorecord": "while_armed",
@@ -669,6 +673,8 @@ try:
     assert 'tcp_port = "14600"' in saved_config
     assert 'udp_port = "14601"' in saved_config
     assert 'position_targeting = "false"' in saved_config
+    assert 'cross = "true"' in saved_config and 'thermal_fov = "true"' in saved_config
+    assert 'recording = "true"' in saved_config
     assert 'autorecord = "while_armed"' in saved_config
     assert "retained from an installation" in saved_config
     status, body, _ = request("GET", "/parameters", "initial-password")

@@ -28,6 +28,14 @@ struct ca_media {
     pthread_cond_t exposure_wake;
 };
 
+static void apply_overlay_after_control(struct ca_media *media, const char *control)
+{
+    if (ca_media_impl_apply_overlay(media->impl, &media->config.settings) < 0) {
+        ca_log("video overlay update failed after %s; control completed: %s",
+               control, strerror(errno));
+    }
+}
+
 /* Thermal USB transactions can take hundreds of milliseconds. Refresh their
  * diagnostic cache off the control loop, never holding the cache lock over I/O. */
 static void *monitor_controls(void *opaque)
@@ -125,6 +133,10 @@ int ca_media_open(struct ca_media **result, const struct ca_media_config *config
         pthread_mutex_destroy(&media->controls_lock);
         free(media); return -1;
     }
+    if (ca_media_impl_apply_overlay(media->impl, &config->settings) < 0) {
+        ca_log("initial video overlay could not be applied; camera remains available: %s",
+               strerror(errno));
+    }
     start_controls_monitor(media);
     *result = media;
     return 0;
@@ -182,11 +194,13 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
         ca_media_impl_close(media->impl);
         media->impl = NULL;
         ca_log("reconfiguring media pipeline without restarting camera app");
-        if (ca_media_impl_open(&media->impl, &next) < 0 || restore_controls(media, &state) < 0) {
+        if (ca_media_impl_open(&media->impl, &next) < 0 || restore_controls(media, &state) < 0 ||
+            ca_media_impl_apply_overlay(media->impl, settings) < 0) {
             int saved_errno = errno;
             ca_media_impl_close(media->impl);
             media->impl = NULL;
-            if (ca_media_impl_open(&media->impl, &media->config) < 0 || restore_controls(media, &state) < 0)
+            if (ca_media_impl_open(&media->impl, &media->config) < 0 || restore_controls(media, &state) < 0 ||
+                ca_media_impl_apply_overlay(media->impl, old) < 0)
                 ca_log("media configuration rollback failed; retry configuration");
             start_controls_monitor(media);
             errno = saved_errno ? saved_errno : EIO;
@@ -202,6 +216,17 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
             if (ca_media_impl_apply_image(media->impl, old) < 0)
                 ca_log("image configuration rollback failed");
             errno = saved_errno;
+            return -1;
+        }
+    }
+    if (old->osd_cross != settings->osd_cross || old->osd_thermal_fov != settings->osd_thermal_fov ||
+        old->osd_recording != settings->osd_recording) {
+        if (ca_media_impl_apply_overlay(media->impl, settings) < 0) {
+            int saved = errno;
+            (void)ca_media_impl_apply_overlay(media->impl, old);
+            if (!ca_config_image_equal(old, settings))
+                (void)ca_media_impl_apply_image(media->impl, old);
+            errno = saved;
             return -1;
         }
     }
@@ -249,7 +274,14 @@ bool ca_media_recording(const struct ca_media *media)
 const char *ca_media_recording_path(const struct ca_media *media)
 { return IMPL ? ca_media_impl_recording_path(IMPL) : NULL; }
 int ca_media_set_zoom(struct ca_media *media, float zoom)
-{ REQUIRE_IMPL; return ca_media_impl_set_zoom(IMPL, zoom); }
+{
+    REQUIRE_IMPL;
+    int result=ca_media_impl_set_zoom(IMPL, zoom);
+    int saved=errno;
+    if (result<0) { errno=saved; return result; }
+    apply_overlay_after_control(media, "zoom");
+    return 0;
+}
 float ca_media_zoom(const struct ca_media *media)
 { return IMPL ? ca_media_impl_zoom(IMPL) : 1; }
 float ca_media_hfov(const struct ca_media *media, bool thermal)
@@ -257,11 +289,25 @@ float ca_media_hfov(const struct ca_media *media, bool thermal)
 unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)
 { return IMPL ? ca_media_impl_frame_rate(IMPL, thermal) : 0; }
 int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
-{ REQUIRE_IMPL; return ca_media_impl_set_lens(IMPL, lens); }
+{
+    REQUIRE_IMPL;
+    int result=ca_media_impl_set_lens(IMPL, lens);
+    int saved=errno;
+    if (result<0) { errno=saved; return result; }
+    apply_overlay_after_control(media, "lens change");
+    return 0;
+}
 enum ca_media_lens ca_media_lens(const struct ca_media *media)
 { return IMPL ? ca_media_impl_lens(IMPL) : CA_MEDIA_LENS_WIDE; }
 int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
-{ REQUIRE_IMPL; return ca_media_impl_set_thermal_main(IMPL, thermal_main); }
+{
+    REQUIRE_IMPL;
+    int result=ca_media_impl_set_thermal_main(IMPL, thermal_main);
+    int saved=errno;
+    apply_overlay_after_control(media, "video source change");
+    if (result<0) { errno=saved; return result; }
+    return 0;
+}
 bool ca_media_thermal_main(const struct ca_media *media)
 { return IMPL && ca_media_impl_thermal_main(IMPL); }
 int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y)

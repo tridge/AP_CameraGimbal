@@ -183,6 +183,16 @@ static const struct config_field config_fields[] = {
     {"stream.sub", "codec", CONFIG_ENUM, offsetof(struct ca_config, sub_codec),
      sizeof(((struct ca_config *)0)->sub_codec), codec_options,
      sizeof(codec_options) / sizeof(codec_options[0]), 0, 0, "VIDEO_SUB_CODEC"},
+    {"overlay", "cross", CONFIG_BOOL, offsetof(struct ca_config, osd_cross),
+     sizeof(((struct ca_config *)0)->osd_cross), NULL, 0U, 0, 0, "OSD_CROSS"},
+#if APCAM_HAVE_OVERLAY_RECORDING_SELECT
+    {"overlay", "recording", CONFIG_BOOL, offsetof(struct ca_config, osd_recording),
+     sizeof(((struct ca_config *)0)->osd_recording), NULL, 0U, 0, 0, "OSD_RECORD"},
+#endif
+#if APCAM_HAVE_THERMAL
+    {"overlay", "thermal_fov", CONFIG_BOOL, offsetof(struct ca_config, osd_thermal_fov),
+     sizeof(((struct ca_config *)0)->osd_thermal_fov), NULL, 0U, 0, 0, "OSD_THERMAL_FOV"},
+#endif
     {"image", "brightness", CONFIG_INT, offsetof(struct ca_config, brightness),
      sizeof(((struct ca_config *)0)->brightness), NULL, 0U, 0, 100, "IMG_BRIGHTNESS"},
     {"image", "saturation", CONFIG_INT, offsetof(struct ca_config, saturation),
@@ -430,6 +440,7 @@ void ca_config_defaults(struct ca_config *config)
     config->metering = CA_METERING_AVERAGE;
     config->white_balance = CA_WB_AUTO;
     config->position_targeting = APCAM_DEFAULT_POSITION_TARGETING;
+    config->osd_recording = !APCAM_HAVE_OVERLAY_RECORDING_SELECT;
     config->tracking_method = CA_TRACK_ANGLE;
     config->mavlink_system_id = APCAM_DEFAULT_SYSTEM_ID;
     config->mavlink_camera_component_id = 100U; /* MAV_COMP_ID_CAMERA */

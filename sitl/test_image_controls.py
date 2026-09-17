@@ -96,6 +96,131 @@ class Viewer:
         self.client.close()
 
 
+def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, root):
+    from test_camera_definition import write, read, M, receive
+    assert read(link, 'OSD_CROSS') == 0
+    assert ('OSD_THERMAL_FOV' in definition.parameters) == (backend == 'mt11')
+    h, w = baseline.shape[:2]
+    scale = max(1, h // 720)
+    cx, cy = w // 2, h // 2
+    write(link, definition, 'OSD_CROSS', 2, M.PARAM_ACK_VALUE_UNSUPPORTED)
+    write(link, definition, 'OSD_CROSS', 1)
+    changed = viewer.frame()
+    # Four visible white arms and a clear gap over the optical centre.
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            assert changed[cy + sy * 12 * scale, cx + sx * 12 * scale].min() > 180
+    assert np.abs(changed[cy, cx].astype(float) - baseline[cy, cx]).max() < 10
+    assert read(link, 'OSD_CROSS') == 1 and 'cross=true' in config.read_text().replace(' ', '')
+    write(link, definition, 'OSD_CROSS', 0)
+    assert np.abs(viewer.frame().astype(float) - baseline).mean() < 3
+    # Standard MAVLink parameters and web-style INI reload share the same path.
+    link.mav.param_set_send(42, 100, b'OSD_CROSS', 1, M.MAV_PARAM_TYPE_INT32)
+    reply = receive(link, 'PARAM_VALUE', lambda msg: msg.param_id == 'OSD_CROSS')
+    assert reply.param_value == 1
+    assert viewer.frame()[cy+12*scale, cx+12*scale].min() > 180
+    config.write_text(config.read_text().replace('cross = true', 'cross = false').replace('cross=true', 'cross=false'))
+    deadline = time.monotonic()+5
+    while time.monotonic() < deadline:
+        if read(link, 'OSD_CROSS') == 0:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError('Overlay INI update was not applied live')
+    assert np.abs(viewer.frame().astype(float)-baseline).mean() < 3
+    print(f'PASS {backend} cross: camera.xml, MAVLink, INI reload, validation and live pixels', flush=True)
+    assert ('OSD_RECORD' in definition.parameters) == (backend != 'z1mini')
+    if backend != 'z1mini':
+        assert read(link, 'OSD_RECORD') == 0
+        write(link, definition, 'OSD_RECORD', 2, M.PARAM_ACK_VALUE_UNSUPPORTED)
+        write(link, definition, 'OSD_CROSS', 1)
+        write(link, definition, 'REC_AUTOSTART', 1)
+        # Change the recording destination live, without stopping recording.
+        for enabled in (0, 1, 0):
+            write(link, definition, 'OSD_RECORD', enabled)
+            for _ in range(6):
+                live = viewer.frame()
+                assert live[cy+12*scale, cx+12*scale].min() > 180
+        write(link, definition, 'REC_AUTOSTART', 0)
+        recordings = list((root / 'record').glob('*.mp4'))
+        assert len(recordings) == (2 if backend == 'mt11' else 1)
+        for path in recordings:
+            with av.open(str(path)) as video:
+                visible = []
+                for decoded in video.decode(video=0):
+                    frame = decoded.to_ndarray(format='rgb24')
+                    rh, rw = frame.shape[:2]
+                    rs = max(1, rh // 720)
+                    visible.append(frame[rh//2+12*rs, rw//2+12*rs].min() > 180)
+            assert visible and not visible[0] and any(visible) and not visible[-1], (path, visible)
+            path.unlink()
+        write(link, definition, 'OSD_CROSS', 0)
+        print(f'PASS {backend} clean recording default and live recording overlay toggle', flush=True)
+    if backend != 'mt11':
+        return
+    thermal = Viewer(rtsp, 'video2')
+    try:
+        thermal_baseline = thermal.frame()
+        write(link, definition, 'OSD_THERMAL_FOV', 1)
+        box = viewer.frame()
+        # Independent pinhole projection using native thermal 5:4 aspect.
+        half_w = w * .5 * math.tan(math.radians(24.2)/2) / math.tan(math.radians(88)/2)
+        half_h = half_w * 512 / 640
+        x0, x1 = round(cx-half_w), round(cx+half_w)
+        y0, y1 = round(cy-half_h), round(cy+half_h)
+        assert box[y0, x0+5].min() > 180
+        assert box[y1, x0+5].min() > 180
+        assert box[y0+5, x0].min() > 180
+        assert box[y0+5, x1].min() > 180
+        assert np.abs(thermal.frame().astype(float)-thermal_baseline).mean() < 3
+        # Swap places; only the RGB image keeps the box.
+        write(link, definition, 'CAM_SOURCE', 1)
+        swapped_rgb = thermal.frame()
+        # Thermal-main mode selects the zoom RGB lens (31.36 degrees).
+        sw = swapped_rgb.shape[1]
+        sx = round(sw/2 - sw*.5*math.tan(math.radians(24.2)/2) / math.tan(math.radians(31.3613561)/2))
+        assert swapped_rgb[100:200, sx].max() > 180
+        write(link, definition, 'CAM_SOURCE', 0)
+        write(link, definition, 'CAM_LENS', 0)
+        # Wide digital zoom doubles the tangent-space box size.
+        write(link, definition, 'CAM_ZOOM', 100 / 9)
+        zoomed = viewer.frame()
+        zx, zy = round(cx-2*half_w), round(cy-2*half_h)
+        assert zoomed[zy, zx+5].min() > 180
+        # At maximum zoom all thermal boundaries are outside the RGB view.
+        write(link, definition, 'CAM_ZOOM', 100)
+        outside = viewer.frame()
+        write(link, definition, 'OSD_THERMAL_FOV', 0)
+        assert np.abs(viewer.frame().astype(float)-outside).mean() < 3
+        write(link, definition, 'CAM_ZOOM', 0)
+        # Explicitly opt in to recording the enabled cross and thermal box.
+        write(link, definition, 'OSD_RECORD', 1)
+        write(link, definition, 'OSD_CROSS', 1)
+        write(link, definition, 'OSD_THERMAL_FOV', 1)
+        write(link, definition, 'REC_AUTOSTART', 1)
+        for _ in range(4):
+            viewer.frame()
+        write(link, definition, 'REC_AUTOSTART', 0)
+        recorded = next((root / 'record').glob('SITL_0_*.mp4'))
+        with av.open(str(recorded)) as video:
+            frame = next(video.decode(video=0)).to_ndarray(format='rgb24')
+        rh, rw = frame.shape[:2]
+        rs = max(1, rh // 720)
+        assert frame[rh//2 + 12*rs, rw//2 + 12*rs].min() > 180
+        rx = round(rw/2-rw*.5*math.tan(math.radians(24.2)/2)/math.tan(math.radians(88)/2))
+        ry = round(rh/2-(rw/2-rx)*512/640)
+        assert frame[ry, rx+5*rs].min() > 180
+        # Leave recording fixtures for the existing later checks unambiguous.
+        for path in (root / 'record').glob('*.mp4'):
+            path.unlink()
+        write(link, definition, 'OSD_CROSS', 0)
+        write(link, definition, 'OSD_THERMAL_FOV', 0)
+        write(link, definition, 'OSD_RECORD', 0)
+        print('PASS thermal box geometry, source swap, zoom/clipping, and MP4 overlays', flush=True)
+    finally:
+        thermal.close()
+
+
 def integration(backend):
     from test_camera_definition import CameraDefinition, download, write, connect, port, stop, wait_ready, M, receive
     build = ROOT / 'build' / ('sitl' if backend == 'mt11' else backend + '-sitl')
@@ -129,6 +254,7 @@ def integration(backend):
                 definition = CameraDefinition(download(link))
                 viewer = Viewer(rtsp, 'video1')
                 baseline = viewer.frame()
+                overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, root)
                 # Single-lens targets without image sliders otherwise finish
                 # before a useful 5 Hz diagnostic sample window is collected.
                 sample_until = time.monotonic() + 2

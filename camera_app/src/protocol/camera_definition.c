@@ -45,6 +45,13 @@ static const struct ca_camera_parameter parameters[] = {
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
 #endif
+    CONFIG("OSD_CROSS", "Targeting cross"),
+#if APCAM_HAVE_OVERLAY_RECORDING_SELECT
+    CONFIG("OSD_RECORD", "Overlays in recordings"),
+#endif
+#if APCAM_HAVE_THERMAL
+    CONFIG("OSD_THERMAL_FOV", "Thermal field of view in RGB (nominal alignment)"),
+#endif
     CONFIG("LOG_DISARMED", "Log when disarmed"),
     CONFIG("TRACK_METHOD", "Location tracking control method"),
     CONFIG("MAV_POS_TARGET", "Position targeting"),

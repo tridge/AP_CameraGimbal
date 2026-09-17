@@ -3,6 +3,7 @@
 These model control direction and interaction, not a particular sensor's
 radiometry, exposure calibration or lens mechanics. All arrays use RGB order.
 """
+from functools import lru_cache
 import math
 import struct
 
@@ -107,3 +108,44 @@ class ImageControls:
         values = self.exposure or (math.nan,) * 7
         return struct.pack('<QBBHBBi7f', 0, 0, 1, valid,
                            self.exposure_mode if valid else 255, 0, 0, *values)
+
+
+@lru_cache(maxsize=16)
+def _overlay_pixels(width, height, scale, lines):
+    # Cache sparse pixels until geometry changes (e.g. zoom/resolution). Never
+    # rasterize the dashed box in the per-frame Python loop.
+    pixels = {}
+    # Match hardware region stacking: cross first, then each box edge.
+    groups = [[line for line in lines if not line[4]]]
+    groups.extend([line] for line in lines if line[4])
+    for group in groups:
+        for color, radius in ((0, 2 * scale), (255, scale - 1)):
+            for x0, y0, x1, y1, dashed in group:
+                n = max(abs(x1 - x0), abs(y1 - y0))
+                for k in range(n + 1):
+                    if dashed and k // (12 * scale) % 2:
+                        continue
+                    x = x0 + (int((x1 - x0) * k / n) if n else 0)
+                    y = y0 + (int((y1 - y0) * k / n) if n else 0)
+                    for row in range(max(0, y-radius), min(height, y+radius+1)):
+                        for col in range(max(0, x-radius), min(width, x+radius+1)):
+                            pixels[row*width+col] = color
+    return np.array(list(pixels), dtype=np.intp), np.array(list(pixels.values()), dtype=np.uint8)
+
+
+def apply_overlay(image, overlay):
+    """Apply the hardware renderer's geometry after ISP effects, before encoding.
+
+    The scene caches clean images for other streams and still captures; encoders
+    consume their arrays on background threads, so never alter the source array.
+    """
+    lines = overlay.get('lines', [])
+    if not lines:
+        return image
+    indices, values = _overlay_pixels(image.shape[1], image.shape[0], overlay['scale'],
+                                      tuple(tuple(line) for line in lines))
+    if not len(indices):
+        return image
+    image = image.copy()
+    image.reshape(-1, 3)[indices] = values[:, None]
+    return image

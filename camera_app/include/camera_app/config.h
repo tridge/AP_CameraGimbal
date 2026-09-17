@@ -136,6 +136,9 @@ struct ca_config {
     enum ca_video_resolution recording_resolution;
     enum ca_video_codec main_codec;
     enum ca_video_codec sub_codec;
+    bool osd_cross;
+    bool osd_recording;
+    bool osd_thermal_fov;
     int brightness;
     int saturation;
     int contrast;

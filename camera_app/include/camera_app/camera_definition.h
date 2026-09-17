@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#define CA_CAMERA_DEFINITION_VERSION 4
+#define CA_CAMERA_DEFINITION_VERSION 5
 #define CA_CAMERA_DEFINITION_PATH "/camera.xml"
 
 enum ca_camera_operation {

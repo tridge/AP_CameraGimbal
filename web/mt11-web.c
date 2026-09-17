@@ -414,6 +414,7 @@ enum string_id {
     S_P_MAVLINK_UDP,
     S_H_MAVLINK_UDP,
     S_P_LOG_DISARMED, S_H_LOG_DISARMED,
+    S_P_OSD_CROSS, S_H_OSD_CROSS, S_P_OSD_RECORD, S_H_OSD_RECORD, S_P_OSD_THERMAL_FOV, S_H_OSD_THERMAL_FOV,
     S_P_TRACK_METHOD, S_H_TRACK_METHOD, S_OPT_TRACK_ANGLE, S_OPT_TRACK_RATE,
     S_RESTART_REQUIRED,
     S_P_POSITION_TARGETING,
@@ -940,6 +941,12 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_H_MAVLINK_UDP] = {"MAVLink 2 camera and gimbal listener. Set to 0 to disable UDP.", "MAVLink 2 相机与云台监听端口。设为 0 可禁用 UDP。", "MAVLink 2 カメラ／ジンバルの待ち受けポート。0 で UDP を無効にします。"},
     [S_P_LOG_DISARMED] = {"Log when disarmed", "未解锁时记录日志", "非アーム時にログ記録"},
     [S_H_LOG_DISARMED] = {"Write diagnostic BIN logs to SD card logs/. Armed flights are always logged. Applies on Save.", "诊断日志保存至 SD 卡 logs/。解锁时始终记录，保存后生效。", "診断 BIN ログを SD カードの logs/ に保存。アーム時は常に記録。保存時に反映。"},
+    [S_P_OSD_CROSS] = {"Targeting cross", "瞄准十字", "照準クロス"},
+    [S_H_OSD_CROSS] = {"Centre diagonal cross in live video. Recording overlays are controlled separately where supported. Applies immediately.", "在实时视频中心显示对角十字。支持的相机可单独控制录像叠加图形。立即生效。", "ライブ映像の中央に対角クロスを表示。対応機種では録画への表示を別途設定できます。即時適用。"},
+    [S_P_OSD_RECORD] = {"Overlays in recordings", "录像中的叠加图形", "録画へのオーバーレイ"},
+    [S_H_OSD_RECORD] = {"Include enabled overlays in recordings. Disabled keeps recordings clean while live video still shows overlays. Applies immediately.", "在录像中包含已启用的叠加图形。禁用时仅在实时视频中显示。立即生效。", "有効なオーバーレイを録画に含めます。無効の場合もライブ映像には表示されます。即時適用。"},
+    [S_P_OSD_THERMAL_FOV] = {"Thermal FOV box in RGB", "RGB 中的热成像视场框", "RGB 映像の熱画像視野枠"},
+    [S_H_OSD_THERMAL_FOV] = {"Dashed thermal field-of-view box in RGB video; follows RGB zoom. Recording overlays are controlled separately. Assumes aligned lenses; nearby objects may differ due to parallax. Applies immediately.", "RGB 视频中的热成像虚线视场框，随变焦变化。录像叠加图形可单独控制。假设镜头对齐，近距离存在视差。立即生效。", "RGB 映像にズーム連動の熱画像視野枠を表示。録画への表示は別途設定できます。光軸一致を仮定し近距離では視差があります。即時適用。"},
     [S_P_TRACK_METHOD] = {"Tracking control method", "跟踪控制方式", "追尾制御方式"},
     [S_H_TRACK_METHOD] = {"Angle sends absolute positions. Rate follows predicted target motion with pointing-error correction. Applies to geographic ROI tracking; changes apply when saved.", "角度模式发送绝对位置；速率模式结合预测运动与指向误差修正。用于地理 ROI 跟踪，保存后生效。", "角度は絶対位置、速度は予測運動と指向誤差補正で制御します。地理 ROI 追尾に使用し、保存時に反映します。"},
     [S_OPT_TRACK_ANGLE] = {"Angle", "角度", "角度"},
@@ -1740,6 +1747,12 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 63, 1, NULL, 0},
     {"proxy_publish_password", "support_proxy", "publish_password", S_P_PROXY_PUBLISH_PASSWORD, S_H_PROXY_PUBLISH_PASSWORD,
      PARAM_PASSWORD, 0, 127, 1, NULL, 0},
+    {"osd_cross", "overlay", "cross", S_P_OSD_CROSS, S_H_OSD_CROSS,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"osd_recording", "overlay", "recording", S_P_OSD_RECORD, S_H_OSD_RECORD,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"osd_thermal_fov", "overlay", "thermal_fov", S_P_OSD_THERMAL_FOV, S_H_OSD_THERMAL_FOV,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
     {"network_interface", "network", "interface", S_P_NETWORK_INTERFACE, S_H_NETWORK_INTERFACE,
      PARAM_TEXT, 1, 15, 1, NULL, 0},
     {"network_primary_address", "network", "primary_address", S_P_NETWORK_PRIMARY, S_H_NETWORK_PRIMARY,
@@ -1767,7 +1780,7 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
     if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
     if (!strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
-        !strcmp(p->section, "thermal")) return TAB_VIDEO;
+        !strcmp(p->section, "thermal") || !strcmp(p->section, "overlay")) return TAB_VIDEO;
     return TAB_SYSTEM;
 }
 
@@ -1780,7 +1793,7 @@ static const char *replacement_defaults[] = {
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264", "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
-    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "eth0", "", "", "",
+    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "false", "false", "false", "eth0", "", "", "",
 };
 
 
@@ -3394,6 +3407,8 @@ static bool append_update(struct ini_update *updates, size_t capacity, size_t *c
 /* parameters that do not exist on this camera stay out of the form */
 static bool parameter_shown(const struct parameter *parameter)
 {
+    if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
+    if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
     if (!APCAM_HAVE_THERMAL && (!strcmp(parameter->section, "thermal") ||

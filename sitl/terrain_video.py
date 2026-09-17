@@ -30,6 +30,15 @@ def camera_vectors(roll, pitch, yaw):
             (sr * cy - cr * sp * sy, -sr * sy - cr * sp * cy, cr * cp))
 
 
+def set_camera_fov(camera, hfov, output_aspect, thermal_aspect=None):
+    # The MT11 stretches its 5:4 thermal sensor to a 16:9 encoded image.
+    # Preserve the sensor's rays and let the viewport stretch the pixels.
+    aspect = thermal_aspect if thermal_aspect is not None else output_aspect
+    camera.SetUseExplicitAspectRatio(thermal_aspect is not None)
+    camera.SetExplicitAspectRatio(aspect)
+    camera.SetViewAngle(math.degrees(2 * math.atan(math.tan(math.radians(hfov) / 2) / aspect)))
+
+
 def env_int(name, default, minimum, maximum):
     value = int(os.environ.get(name, default))
     if not minimum <= value <= maximum:
@@ -39,14 +48,14 @@ def env_int(name, default, minimum, maximum):
 
 def dependencies(terrain_mode=True):
     # Optional imports stay out of the ordinary SITL build and launcher.
-    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose, ImageControls
+    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose, ImageControls, apply_overlay
     import av
     import numpy as np
     import cv2
     if __package__:
-        from .image_controls import ImageControls
+        from .image_controls import ImageControls, apply_overlay
     else:
-        from image_controls import ImageControls
+        from image_controls import ImageControls, apply_overlay
     cv2.setNumThreads(1)  # encoders already run in parallel; avoid CPU oversubscription
     if not terrain_mode:
         return
@@ -350,6 +359,9 @@ class Scene:
         cam.SetPosition(*pos)
         cam.SetFocalPoint(*self.tc.focal)
         cam.SetViewUp(*up)
+        # Terrain prefetch uses the normal viewport; a previous thermal render
+        # must not leave the camera's narrower explicit aspect active here.
+        cam.SetUseExplicitAspectRatio(False)
         cam.SetClippingRange(0.5, 150000)
         # Terrain's texture LOD uses a vertical FOV. Use the narrowest stream
         # so zooming either view requests enough imagery for both encoders.
@@ -400,8 +412,8 @@ class Scene:
         viewport = (0, 0, width / self.window_size[0], height / self.window_size[1])
         self.ren.SetViewport(*viewport)
         self.capture.SetViewport(*viewport)
-        self.tc.cam.SetViewAngle(math.degrees(2 * math.atan(
-            math.tan(math.radians(hfov) / 2) * height / width)))
+        set_camera_fov(self.tc.cam, hfov, width / height,
+                       record.get('thermal_aspect', width / height) if thermal else None)
         self.window.Render()
         self.capture.Modified()
         self.capture.Update()
@@ -463,7 +475,7 @@ class FixtureScene:
         if not first:
             raise ValueError('Simple video requires CAMERA_APP_SITL_VIDEO1')
         self.sources = {path: Fixture(path) for path in set((first, second, third))}
-        self.paths = [first, second, third, first]
+        self.paths = [first, second, third, first, second]
         self.started = None
 
     def update(self, record):
@@ -537,7 +549,7 @@ def main():
     parser.add_argument('--fd', type=int)
     parser.add_argument('--connect', type=int, help='private loopback connection from Windows camera service')
     parser.add_argument('--token', default='')
-    for stream in (1, 2, 3, 4):
+    for stream in (1, 2, 3, 4, 5):
         parser.add_argument(f'--width{stream}', type=int, default=640)
         parser.add_argument(f'--height{stream}', type=int, default=360)
         parser.add_argument(f'--codec{stream}', choices=('h264', 'h265'), default='h264')
@@ -557,7 +569,7 @@ def main():
     if args.connect is not None and (not 1 <= args.connect <= 65535 or len(args.token) != 32):
         parser.error('invalid private connection')
     sizes = [(args.width1, args.height1), (args.width2, args.height2),
-             (args.width3, args.height3), (args.width4, args.height4)]
+             (args.width3, args.height3), (args.width4, args.height4), (args.width5, args.height5)]
     scene = Scene(sizes, downloads, radius) if terrain_mode else FixtureScene(sizes)
     encoders = [Encoder(size, args.fps, getattr(args, f'codec{i+1}')) for i, size in enumerate(sizes)]
     try:
@@ -582,20 +594,23 @@ def main():
                 # The extra RGB encoding is needed when MT11 routes visible
                 # video to the substream. Keep the RGB recording at main size.
                 visible_sub = record['thermal'][1] and record.get('swap', False)
-                record['fov'].extend([record['fov'][0]] * 2)
-                record['thermal'].extend([False, False])
+                record['fov'].extend([record['fov'][0], record['fov'][0], record['fov'][1]])
+                record['thermal'].extend([False, False, record['thermal'][1]])
                 valid = scene.update(record)
                 force_key = record.get('swap') != previous_swap
                 previous_swap = record.get('swap')
-                active = [True, True, visible_sub, bool(record.get('recording'))]
+                active = [True, True, visible_sub, bool(record.get('recording')),
+                          bool(record.get('recording')) and record['thermal'][1]]
                 scene.controls.exposure = None
                 futures = []
-                for i in range(4):
+                for i in range(5):
                     pixels = scene.render(i, record, valid) if active[i] else None
+                    if pixels is not None:
+                        pixels = apply_overlay(pixels, record.get('overlays', [{}] * 5)[i])
                     if i == 0:  # RGB sensor, before other streams/still captures
                         exposure = scene.controls.exposure_packet()
                     futures.append(pool.submit(encoders[i].encode, pixels, record['pts90k'],
-                                               force_key or (i == 3 and not previous_recording)) if active[i] else None)
+                                               force_key or (i >= 3 and not previous_recording)) if active[i] else None)
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
                 sock.sendall(exposure)

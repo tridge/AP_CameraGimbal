@@ -101,7 +101,7 @@ int main(int argc, char **argv)
     assert(strcmp(ca_thermal_palette_name(config.thermal_palette),
                   "ironbow") == 0);
 
-    assert(ca_config_param_count() == 31U);
+    assert(ca_config_param_count() == 34U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);
@@ -115,6 +115,13 @@ int main(int argc, char **argv)
         assert(ca_config_param_get(&config, i) == value);
     }
     assert(ca_config_param_find("TIMEZONE") == -1);
+    assert(!config.osd_cross && !config.osd_thermal_fov && !config.osd_recording);
+    assert(ca_config_param_save(&config,path,(size_t)ca_config_param_find("OSD_RECORD"),1)==0);
+    assert(config.osd_recording);
+    assert(ca_config_param_save(&config,path,(size_t)ca_config_param_find("OSD_CROSS"),1)==0);
+    assert(config.osd_cross);
+    assert(ca_config_param_save(&config,path,(size_t)ca_config_param_find("OSD_THERMAL_FOV"),1)==0);
+    assert(config.osd_thermal_fov);
     size_t component = (size_t)ca_config_param_find("MAV_CAM_COMP_ID");
     for (unsigned value = 100; value <= 105; value++) {
         assert(ca_config_param_save(&config, path, component, (float)value) == 0);

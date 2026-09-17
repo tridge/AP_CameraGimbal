@@ -23,7 +23,7 @@ M = mavutil.mavlink
 CAMERA = M.MAV_COMP_ID_CAMERA
 GIMBAL = M.MAV_COMP_ID_GIMBAL
 EXPECTED = {
-    "LOG_DISARMED",
+    "LOG_DISARMED", "OSD_CROSS", "OSD_THERMAL_FOV", "OSD_RECORD",
     "PHOTO_SCOPE", "MOUNT_ORIENT", "UART_PROTOCOL", "THERMAL_PALETTE",
     "REC_AUTOSTART", "REC_RESOLUTION", "VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC",
     "VIDEO_SUB_RES", "VIDEO_SUB_CODEC", "IMG_BRIGHTNESS", "IMG_SATURATION",
@@ -179,6 +179,8 @@ def main():
     parser.add_argument("--build", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
+    if args.backend != "mt11":
+        EXPECTED.discard("OSD_THERMAL_FOV")
     repo = pathlib.Path(__file__).resolve().parents[1]
     build = (args.build or repo / "build" / ("sitl" if args.backend == "mt11" else "a8-sitl")).resolve()
     directory = (args.output or pathlib.Path(tempfile.mkdtemp(prefix="camera-mavlink-test-"))).resolve()

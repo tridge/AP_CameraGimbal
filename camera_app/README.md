@@ -986,3 +986,39 @@ files, with transcripts under `build/camera-definition-test/`.
 The format and transport follow the [MAVLink camera definition specification](https://mavlink.io/en/services/camera_def.html),
 [extended parameter protocol](https://mavlink.io/en/services/parameter_ext.html)
 and [FTP protocol](https://mavlink.io/en/services/ftp.html).
+
+### Video overlays
+
+`[overlay] cross` (`OSD_CROSS`) enables an outlined diagonal targeting cross
+with an open centre. `[overlay] thermal_fov` (`OSD_THERMAL_FOV`, MT11 only)
+shows a dashed thermal field-of-view boundary on the RGB image. Both default
+to false and apply immediately through the Video tab, MAVLink parameters,
+camera.xml extended parameters, or INI reload, including during recording.
+They appear in live streams. On MT11, A8 and ZR10, `[overlay] recording`
+(`OSD_RECORD`, "Overlays in recordings") independently enables burning them
+into SD recordings. It defaults to false, keeping recordings clean; changes
+apply even during recording. The cross also appears on thermal video; the
+FOV box appears only on RGB. Z1-Mini currently shares its 1080p live encoder
+with recording and does not expose this toggle. The optional native helper
+supports a cross in both live video and recordings; the retained vendor-ISP
+pipeline cannot draw overlays and logs when `OSD_CROSS` is enabled.
+
+The box uses tangent-space lens projection, current RGB lens/zoom, and the
+thermal sensor's native aspect ratio. A stretched thermal stream does not
+change its physical FOV. Boundaries outside the RGB view are clipped, rather
+than moved onto the edges. This is nominal co-aligned geometry: it does not
+compensate for lens misalignment, distortion or near-field parallax.
+
+MT11 uses encoder regions (one small cross bitmap and up to four narrow box
+strips); A8 uses encoder regions and ZR10 uses VPE output regions. No video is
+decoded or re-encoded for overlays. ZR10 photos using a shared VPE output can
+also include the cross. The Z1-Mini native helper patches only the cross's
+small NV12 region before encoding, using uncached mappings, without copying
+whole frames or inserting a processing queue. These hardware integrations
+need camera testing; SITL pixel, parameter and recording regressions run in CI.
+
+SITL uses the same C geometry as hardware and caches its sparse overlay pixels.
+Separate RGB/thermal recording encoders run only while recording, so stream
+overlays can be selected independently without changing the live image.
+The hardware/SITL raster comparison is `tests/test_overlay.py`; live encoded
+video checks are included in `make sitl-image-controls-test`.

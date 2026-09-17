@@ -62,6 +62,9 @@ void ca_binlog_emit(uint8_t id, const void *data, size_t size)
 }
 static void *close_media(void *opaque) { ca_media_close(opaque); return NULL; }
 
+int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config *s)
+{ (void)m; (void)s; return 0; }
+
 int main(void)
 {
     struct ca_media *media;

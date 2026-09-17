@@ -23,6 +23,7 @@
 
 struct ca_media_impl {
     struct ca_media_config config;
+    struct ca_z1_overlay_control overlay;
     atomic_bool stop, ready, recording;
     pthread_t thread;
     bool started, wait_key, have_pts;
@@ -88,7 +89,7 @@ static void *receiver(void *opaque)
     const char *native_path = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
     if (native_path && *native_path) {
         ca_log("Z1 native AX capture starting; exclusive media ownership required");
-        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m);
+        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m, &m->overlay);
         ca_log("Z1 native AX capture stopped result=%d", result);
         atomic_store(&m->ready, false);
         pthread_mutex_lock(&m->lock);
@@ -242,4 +243,25 @@ int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exp
     if (now<cached.time_us || now-cached.time_us>1000000U) return -ETIMEDOUT;
     *s=cached;
     return s->result;
+}
+
+int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config *settings)
+{
+    int desired=settings->osd_cross;
+    if (atomic_load(&m->overlay.applied)==desired) return 0;
+    const char *helper=getenv("CAMERA_APP_Z1_NATIVE_HELPER");
+    /* The retained vendor ISP has no overlay control channel.  Keep the
+     * setting harmless so it cannot prevent the camera app from starting. */
+    if (!helper || !*helper) {
+        static atomic_bool warned;
+        if (desired && !atomic_exchange(&warned, true))
+            ca_log("OSD_CROSS is configured but unavailable with the retained vendor ISP");
+        return 0;
+    }
+    atomic_store(&m->overlay.desired,desired);
+    atomic_store(&m->overlay.applied,-EINPROGRESS);
+    /* The native receiver acknowledges on its video thread. Waiting here
+     * blocks the MAVLink event loop; the receiver retries after three seconds
+     * of video if no acknowledgement arrives. */
+    return 0;
 }

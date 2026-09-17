@@ -28,7 +28,8 @@ static int receive_exact(int fd, void *data, size_t size, const atomic_bool *sto
 }
 
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
-                         ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque)
+                         ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
+                         struct ca_z1_overlay_control *overlay)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) return -1;
@@ -55,9 +56,75 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     unsigned char *frame = NULL;
     size_t capacity = 0;
     int result = -1;
+    bool awaiting_overlay=false;
+    bool pending_overlay=false;
+    bool overlay_supported=false;
+    bool overlay_warned=false;
+    struct ca_z1_overlay_request overlay_request={0};
+    size_t overlay_request_offset=0;
+    uint32_t next_overlay_sequence=0, awaiting_overlay_sequence=0;
+    unsigned overlay_wait_frames=0;
     while (!atomic_load(stop)) {
+        /* A live helper can lose an acknowledgement while still producing
+         * video. Retry after three seconds of frames rather than leaving the
+         * channel permanently latched busy. */
+        if (awaiting_overlay && overlay_wait_frames >= 180) {
+            awaiting_overlay=false;
+            overlay_wait_frames=0;
+        }
+        if (overlay && overlay_supported && !awaiting_overlay && !pending_overlay &&
+            atomic_load(&overlay->applied)==-EINPROGRESS) {
+            if (++next_overlay_sequence==0) ++next_overlay_sequence;
+            overlay_request=(struct ca_z1_overlay_request){
+                .sequence=next_overlay_sequence,
+                .desired=(uint8_t)atomic_load(&overlay->desired),
+                .reserved={0},
+            };
+            overlay_request_offset=0;
+            pending_overlay=true;
+        }
+        if (pending_overlay) {
+            ssize_t sent=send(sockets[0],(const uint8_t *)&overlay_request+overlay_request_offset,
+                              sizeof(overlay_request)-overlay_request_offset,
+                              MSG_NOSIGNAL|MSG_DONTWAIT);
+            if (sent>0) {
+                overlay_request_offset+=(size_t)sent;
+                if (overlay_request_offset==sizeof(overlay_request)) {
+                    awaiting_overlay=true;
+                    awaiting_overlay_sequence=overlay_request.sequence;
+                    overlay_wait_frames=0;
+                    pending_overlay=false;
+                }
+            } else if (sent<0 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR) {
+                atomic_store(&overlay->applied,-errno);
+                pending_overlay=false;
+            }
+        }
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
+        if (header.magic==CA_Z1_NATIVE_OVERLAY_MAGIC) {
+            if (header.size || header.stream>1 || header.key>4095) break;
+            if (header.pts==CA_Z1_NATIVE_OVERLAY_READY && !header.key) {
+                overlay_supported=true;
+                continue;
+            }
+            /* A legacy ack is not video corruption. Do not send the new
+             * request format to a helper that has not advertised it. */
+            if (!header.pts) continue;
+            /* A previous request can be acknowledged after a retry has
+             * already completed. It is stale, not a video transport error. */
+            if (!awaiting_overlay || header.pts!=awaiting_overlay_sequence) continue;
+            if (overlay) {
+                int applied=header.key ? -(int)header.key : (int)header.stream;
+                /* The user may have changed the desired state while this
+                 * request was in flight; enqueue the new state after its ack. */
+                if ((int)header.stream!=atomic_load(&overlay->desired)) applied=-EINPROGRESS;
+                atomic_store(&overlay->applied,applied);
+            }
+            awaiting_overlay=false;
+            overlay_wait_frames=0;
+            continue;
+        }
         if (header.magic==CA_Z1_NATIVE_AE_MAGIC) {
             struct ca_exposure sample;
             if (header.size!=sizeof(sample) || header.stream || header.key ||
@@ -71,6 +138,13 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             ca_log("Z1 native capture helper sent an invalid frame header");
             break;
         }
+        if (overlay && !overlay_supported && atomic_load(&overlay->applied)==-EINPROGRESS) {
+            if (!overlay_warned) {
+                ca_log("Z1 native helper lacks sequenced overlay support; video remains available");
+                overlay_warned=true;
+            }
+            atomic_store(&overlay->applied,-ENOTSUP);
+        }
         if (header.size > capacity) {
             unsigned char *next = realloc(frame, header.size);
             if (!next) break;
@@ -79,6 +153,7 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
         }
         if (receive_exact(sockets[0], frame, header.size, stop)) break;
         publish(opaque, frame, header.size, header.pts, header.key != 0, header.stream);
+        if (awaiting_overlay && overlay_wait_frames < 180) overlay_wait_frames++;
     }
     if (atomic_load(stop)) result = 0;
     free(frame);
