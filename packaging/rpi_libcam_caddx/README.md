@@ -171,7 +171,7 @@ SERIAL_PASSTIMO = -1    (no timeout, kept across reboots)
 
 then use `CAMERA_APP_UART=udp://<flight controller IP>:15002`. While
 passthrough is active ArduPilot's own mount driver cannot reach the gimbal;
-set `MNT1_TYPE = 0` so only the camera reports the gimbal.
+set `MNT1_TYPE = 6` (MAVLink gimbal protocol v2).
 
 ## Environment variables
 
