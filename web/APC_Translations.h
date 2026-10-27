@@ -378,6 +378,8 @@ enum string_id {
     S_H_NETWORK_INTERFACE,
     S_P_NETWORK_CAPTURE,
     S_H_NETWORK_CAPTURE,
+    S_P_UART_DEVICE_OVERRIDE,
+    S_H_UART_DEVICE_OVERRIDE,
     S_P_NETWORK_VIDEO1_URI,
     S_H_NETWORK_VIDEO1_URI,
     S_NETWORK_CAPTURE_FILES,
@@ -1041,6 +1043,8 @@ static constexpr Translations translations = [] {
     result[S_P_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"};
     result[S_P_NETWORK_CAPTURE] = {"Network capture", "网络抓包", "ネットワークキャプチャ"};
     result[S_H_NETWORK_CAPTURE] = {"Off by default. Save to start or stop capturing all network interfaces, including loopback. Keeps the latest four 16 MiB PCAP files in DCIM/network on the microSD card. Disable before downloading and open the files in Wireshark.", "默认关闭。保存后开始或停止抓取所有网络接口（包括回环）的数据包。在 microSD 卡的 DCIM/network 中保留最新的四个 16 MiB PCAP 文件。下载前请禁用，然后用 Wireshark 打开。", "初期設定は無効です。保存するとループバックを含む全インターフェースのキャプチャを開始・停止します。microSD の DCIM/network に最新の16 MiB PCAPファイルを4個保持します。ダウンロード前に無効にし、Wiresharkで開いてください。"};
+    result[S_P_UART_DEVICE_OVERRIDE] = {"Gimbal link", "云台连接", "ジンバル接続"};
+    result[S_H_UART_DEVICE_OVERRIDE] = {"Serial port on the Pi, or a network address such as udp://IP:PORT or tcp://IP:PORT.", "树莓派上的串口，或网络地址，例如 udp://IP:PORT 或 tcp://IP:PORT。", "Pi のシリアルポート、または udp://IP:PORT や tcp://IP:PORT などのネットワークアドレス。"};
     result[S_P_NETWORK_VIDEO1_URI] = {"Video stream 1 URI", "视频流 1 URI", "映像ストリーム 1 URI"};
     result[S_H_NETWORK_VIDEO1_URI] = {"Complete rtsp:// or rtsps:// URI the GCS should use for video stream 1, for example rtsp://10.0.0.5:8554/video1. Sent as is in the video-stream-information message's URI field. The camera does not check that it serves this path; use the stream alias to serve extra paths. If left blank the URI is built from the Pi's own address, which is a guess when the Pi has several networks. Applies without restarting.", "地面站接收视频流 1 应使用的完整 rtsp:// 或 rtsps:// URI，例如 rtsp://10.0.0.5:8554/video1。通过 video-stream-information 消息的 URI 字段原样发送。相机不会检查是否提供该路径；可使用流别名提供额外路径。留空则根据树莓派自身的地址生成 URI；当树莓派有多个网络时，该地址只是推测。无需重启即可生效。", "GCS が映像ストリーム 1 に使用する完全な rtsp:// または rtsps:// URI（例: rtsp://10.0.0.5:8554/video1）。video-stream-information メッセージの URI フィールドでそのまま送信されます。カメラがこのパスを配信しているかは確認されません。追加のパスにはストリームのエイリアスを使用してください。空欄の場合は Pi 自身のアドレスから URI を生成しますが、Pi に複数のネットワークがある場合は推測になります。再起動なしで反映されます。"};
     result[S_NETWORK_CAPTURE_FILES] = {"Browse network captures", "浏览网络抓包文件", "キャプチャファイルを表示"};

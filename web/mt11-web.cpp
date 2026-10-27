@@ -662,6 +662,11 @@ static const struct option survey_lenses[] = {
     {"zoom", S_SURV_ZOOM},
 #endif
 };
+/* Suggested gimbal links: Raspberry Pi serial ports, then the usual
+ * flight-controller serial passthrough address. */
+static const char *const UART_DEVICE_OVERRIDE_CHOICES[] = {
+    "/dev/serial0", "/dev/ttyAMA0", "/dev/ttyAMA1", "/dev/ttyUSB0", "udp://192.168.144.15:15002",
+};
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -802,6 +807,10 @@ static const struct parameter replacement_parameters[] = {
     {"network_video1_uri", "network", "video1_uri", S_P_NETWORK_VIDEO1_URI, S_H_NETWORK_VIDEO1_URI,
      PARAM_TEXT, 0, 159, 1, NULL, 0},
 #endif
+#if APCAM_HAVE_UART_DEVICE_OVERRIDE
+    {"network_uart_device_override", "network", "uart_device_override", S_P_UART_DEVICE_OVERRIDE, S_H_UART_DEVICE_OVERRIDE,
+     PARAM_TEXT, 0, 159, 1, NULL, 0},
+#endif
     {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
      PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
     {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
@@ -877,6 +886,9 @@ static const char *replacement_defaults[] = {
 #endif
     "", "false", "false", "false", "eth0", "", "", "", "false",
 #if !APCAM_HAVE_NETWORK_CONFIG
+    "",
+#endif
+#if APCAM_HAVE_UART_DEVICE_OVERRIDE
     "",
 #endif
     "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
@@ -2143,6 +2155,8 @@ static bool valid_text_parameter(const struct parameter *parameter,
         if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
         if (!strcmp(parameter->key, "video1_uri"))
             return apcam_video_uri_valid(text);
+        if (!strcmp(parameter->key, "uart_device_override"))
+            return apcam_uart_device_override_valid(text);
         return apcam_ipv4_prefix(text, &address, &prefix);
     }
     if (!strcmp(parameter->key, "alias")) /* one RTSP path segment */
@@ -2196,9 +2210,10 @@ static bool parameter_shown(const struct parameter *parameter)
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
-    /* The host OS owns the interfaces; only capture and the video URI apply. */
+    /* The host OS owns the interfaces; only capture, the video URI and the gimbal link apply. */
     if (!APCAM_HAVE_NETWORK_CONFIG && !strcmp(parameter->section, "network") &&
-        strcmp(parameter->key, "capture") && strcmp(parameter->key, "video1_uri")) return false;
+        strcmp(parameter->key, "capture") && strcmp(parameter->key, "video1_uri") &&
+        strcmp(parameter->key, "uart_device_override")) return false;
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->section,"thermal") &&
         !(APCAM_HAVE_RAW_THERMAL && (!strcmp(parameter->key,"stream_fps") || !strcmp(parameter->key,"record_fps"))) &&
         !(APCAM_HAVE_THERMAL_PALETTE && !strcmp(parameter->key,"palette"))
@@ -4732,6 +4747,8 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
                 page->append(" pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
                 page->append_html(T(parameter->help));
                 page->append("\"");
+            } else if (!strcmp(parameter->form_name, "network_uart_device_override")) {
+                page->append(" list=uart_device_override_choices");
             } else if (!strcmp(parameter->key, "alias")) {
                 page->append(" pattern=\"[A-Za-z0-9._-]*\" title=\"");
                 page->append_html(T(parameter->help));
@@ -4744,6 +4761,16 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
         }
         if (present) page->append_html(display_value);
         page->append("\">");
+        if (!strcmp(parameter->form_name, "network_uart_device_override")) {
+            /* Suggestions only: any valid device or udp:// address can be typed. */
+            page->append("<datalist id=uart_device_override_choices>");
+            for (const char *choice : UART_DEVICE_OVERRIDE_CHOICES) {
+                page->append("<option value=\"");
+                page->append_html(choice);
+                page->append("\">");
+            }
+            page->append("</datalist>");
+        }
     }
     free(submitted_value);
     page->append("<div class=help>");

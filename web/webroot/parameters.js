@@ -61,6 +61,10 @@
     return Boolean(m) && text.length < 160 && !/[^\x21-\x7e]|"/.test(text) &&
       (!m[1] || (Number(m[1]) >= 1 && Number(m[1]) <= 65535));
   };
+  // Keep in step with apcam_uart_device_override_valid() in include/apcam/network.h.
+  const uartDeviceOverride = text => text === '' || (text.length < 160 && (
+    (/^\/dev\/[a-zA-Z0-9._\/-]+$/.test(text) && !text.includes('..')) ||
+    (m => Boolean(m) && (m[1] === 'localhost' || ipv4(m[1])) && Number(m[2]) >= 1 && Number(m[2]) <= 65535)(/^(?:udp|tcp):\/\/([^:]+):([0-9]{1,5})$/.exec(text))));
   const number = text => text.split('.').reduce((v, n) => ((v << 8) | Number(n)) >>> 0, 0);
   const host = text => ipv4(text) && Number(text.split('.')[0]) > 0 && Number(text.split('.')[0]) !== 127 && Number(text.split('.')[0]) < 224;
   function invalid(field, message) {
@@ -77,6 +81,7 @@
     for (const name of ['proxy_host', 'network_interface', 'main_alias', 'sub_alias']) {
       if (!/^[a-zA-Z0-9_.-]*$/.test(value(name))) invalid(get(name));
     }
+    if (get('network_uart_device_override') && !uartDeviceOverride(value('network_uart_device_override'))) invalid(get('network_uart_device_override'));
     if (value('network_video1_uri') && !videoUri(value('network_video1_uri'))) invalid(get('network_video1_uri'));
     const parseAddress = text => {
       const parts = text.split('/');
