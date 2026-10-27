@@ -77,6 +77,10 @@
 #ifndef APCAM_HAVE_NETWORK_CONFIG
 #define APCAM_HAVE_NETWORK_CONFIG 1
 #endif
+/* Targets whose gimbal link can be set in the configuration (RPi only) set this to 1. */
+#ifndef APCAM_HAVE_UART_DEVICE_OVERRIDE
+#define APCAM_HAVE_UART_DEVICE_OVERRIDE 0
+#endif
 #ifndef APCAM_LOG_ROOT
 #define APCAM_LOG_ROOT "/mnt/logs"
 #endif

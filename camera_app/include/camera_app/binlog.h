@@ -21,7 +21,7 @@ enum ca_packet_protocol { CA_PACKET_SIYI=1, CA_PACKET_MT11, CA_PACKET_SIYI_MCU,
                           CA_PACKET_XFROBOT, CA_PACKET_XFROBOT_MCU, CA_PACKET_SIYI_LONG,
                           CA_PACKET_CADDX };
 enum ca_packet_link { CA_PACKET_UDP=1, CA_PACKET_TCP, CA_PACKET_UART,
-                      CA_PACKET_MCU_UART, CA_PACKET_MCU_UDP };
+                      CA_PACKET_MCU_UART, CA_PACKET_MCU_UDP, CA_PACKET_MCU_TCP };
 struct __attribute__((packed)) ca_log_packet {
     uint64_t time_us;
     uint32_t packet_id;

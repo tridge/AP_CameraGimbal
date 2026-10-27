@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""RPi video stream 1 URI: configured URI, live reload, rejection and automatic fallback."""
+"""RPi video stream 1 URI: configured URI, live reload, rejection and automatic fallback.
+Also checks that changing the gimbal UART device override asks for a restart."""
 import os
 import pathlib
 import socket
@@ -34,13 +35,14 @@ def wait_path(path, process, timeout=8.0):
     raise TimeoutError(path)
 
 
-def write_config(path, video1_uri, telemetry="misb"):
+def write_config(path, video1_uri, telemetry="misb", uart_device_override='""'):
     # Replace the file so the camera app's change detection always sees it.
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
         "[general]\ntimezone = UTC\n"
         "[mavlink]\nsystem_id = 1\n"
         f"[network]\nvideo1_uri = {video1_uri}\n"
+        f"uart_device_override = {uart_device_override}\n"
         f"[video]\ntelemetry = {telemetry}\n",
         encoding="ascii",
     )
@@ -70,6 +72,19 @@ def wait_uri(connection, predicate, timeout=5.0):
             return uri
         time.sleep(0.2)
     raise AssertionError(f"unexpected stream URI {uri!r}")
+
+
+def wait_config_state(status, process, state, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    seen = None
+    while time.monotonic() < deadline:
+        if status.exists():
+            seen = status.read_text(encoding="ascii").split("\n")[0].split()[2]
+            if seen == state:
+                return
+        assert process.poll() is None, "camera app exited"
+        time.sleep(0.1)
+    raise AssertionError(f"config state {seen!r}, expected {state!r}")
 
 
 def main():
@@ -120,6 +135,13 @@ def main():
             write_config(config, '""', telemetry="apcg")
             wait_uri(connection, lambda uri: uri.endswith("/video1"))
             assert process.poll() is None, "camera app restarted"
+
+            # The gimbal link is only read at startup, so saving it needs a restart.
+            status = pathlib.Path(str(ready) + ".config")
+            write_config(config, '""')
+            wait_config_state(status, process, "applied")
+            write_config(config, '""', uart_device_override="/dev/ttyAMA0")
+            wait_config_state(status, process, "restart")
             connection.close()
         finally:
             process.terminate()
@@ -129,7 +151,8 @@ def main():
                 process.kill()
                 output, _ = process.communicate()
         assert "Video 1 URI must be blank or an rtsp:// or rtsps:// URI" in output, output
-    print("PASS RPi video 1 URI: configured, live reload, invalid kept previous, automatic")
+    print("PASS RPi video 1 URI: configured, live reload, invalid kept previous, automatic;\n"
+          "     a changed UART device override needs a restart")
 
 
 if __name__ == "__main__":

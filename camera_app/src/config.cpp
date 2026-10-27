@@ -281,6 +281,11 @@ static int read_config(struct ca_config *config, FILE *file,
         errno = EINVAL;
         goto fail;
     }
+    if (!apcam_uart_device_override_valid(parsed.uart_device_override)) {
+        snprintf(error, error_size, "Gimbal link must be blank, a /dev serial device, udp://IPv4:PORT or tcp://IPv4:PORT");
+        errno = EINVAL;
+        goto fail;
+    }
     *config = parsed;
     return 0;
 

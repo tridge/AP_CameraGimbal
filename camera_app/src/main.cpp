@@ -306,7 +306,7 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
 static void usage(const char *program)
 {
 #if APCAM_TARGET == APCAM_TARGET_RPI_LIBCAM_CADDX
-    ca_log("Usage: %s [--backend " APCAM_NAME "] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
+    ca_log("Usage: %s [--backend " APCAM_NAME "] [--uart DEVICE|udp://IPv4:PORT|tcp://IPv4:PORT] [--port PORT] "
            "[--config PATH]", program);
 #else
     ca_log("Usage: %s [--backend mt11|a8|zr10|zt30|z1mini] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
@@ -367,6 +367,11 @@ int APC_CameraApp::run(int argc, char **argv)
                config_error[0] != '\0' ? config_error : strerror(errno));
         return 2;
     }
+#if APCAM_HAVE_UART_DEVICE_OVERRIDE
+    /* A configured override replaces --uart and CAMERA_APP_UART. */
+    if (app_config.uart_device_override[0] != '\0')
+        uart_device = app_config.uart_device_override;
+#endif
     #ifdef CAMERA_APP_ZT30_RAM
     ca_zt30::ram_app_configure(app_config);
     #endif

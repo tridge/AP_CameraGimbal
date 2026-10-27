@@ -190,6 +190,9 @@ struct ca_config {
     /* Complete URI advertised for stream 1 on host-OS targets; empty = built
      * from the host. Size: APCAM_VIDEO_URI_SIZE. */
     char video1_uri[160];
+    /* Replaces --uart and CAMERA_APP_UART when not empty (targets with
+     * APCAM_HAVE_UART_DEVICE_OVERRIDE). Size: APCAM_UART_DEVICE_OVERRIDE_SIZE. */
+    char uart_device_override[160];
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;

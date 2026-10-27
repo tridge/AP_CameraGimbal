@@ -2600,7 +2600,8 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     bool restart = memcmp(&desired.support, &server->settings.support, sizeof(desired.support)) != 0 ||
         memcmp(&desired.network, &server->settings.network, sizeof(desired.network)) != 0 ||
         strcmp(desired.main_alias, server->settings.main_alias) != 0 ||
-        strcmp(desired.sub_alias, server->settings.sub_alias) != 0;
+        strcmp(desired.sub_alias, server->settings.sub_alias) != 0 ||
+        strcmp(desired.uart_device_override, server->settings.uart_device_override) != 0;
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         if (!live_config_parameter(i) && ca_config_param_get(&desired, i) != ca_config_param_get(&server->settings, i)) restart = true;
     }

@@ -1,5 +1,6 @@
 /* CADDX gimbal (same as XFRobot C20-T), 115200 8N1 UART, or UDP for a
- * flight controller's serial passthrough (udp://IPv4:PORT).
+ * flight controller's serial passthrough (udp://IPv4:PORT), or TCP
+ * (tcp://IPv4:PORT, reconnected if the link drops).
  * The protocol matches ArduPilot's AP_Mount_CADDX driver: one 10-byte angle
  * command, A5 5A, lock mode, roll/pitch/yaw as 12-bit fractions of a turn
  * and a big-endian CRC16-CCITT. The gimbal sends no feedback, so the reported
@@ -16,11 +17,12 @@
 #include "camera_app/backend.h"
 #include "camera_app/binlog.h"
 #include "camera_app/log.h"
-#include "camera_app/udp_transport.h"
+#include "camera_app/tcp_transport.h"
 #include "caddx.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
@@ -35,15 +37,18 @@
 #define CADDX_ROLL_LOCK 0x02U
 #define CADDX_SEND_MS 20U
 #define CADDX_RATE_TIMEOUT_MS 300U
+#define CADDX_RECONNECT_MS 1000U
+#define CADDX_CONNECT_TIMEOUT_MS 5000U
 #define CADDX_RATE_MAX (60.0f * DEG_RAD)
 #define DEG_RAD (3.14159265358979323846f / 180.0f)
 
 struct ca_backend {
     struct ca_backend_config config;
     int fd;
-    bool datagram, commanded;
+    bool linked, udp, tcp, connected, reported, commanded;
+    const char *device;
     float pitch, yaw, pitch_rate, yaw_rate;
-    uint64_t last_tx, rate_time;
+    uint64_t last_tx, rate_time, last_connect;
     uint8_t tx[CADDX_PACKET_SIZE];
     size_t tx_pending;
 };
@@ -109,11 +114,22 @@ int ca_backend_open(struct ca_backend **out, const struct ca_backend_config *c)
         *out = b;
         return 0;
     }
-    b->datagram = strncmp(device, "udp://", 6) == 0;
-    b->fd = b->datagram ? ca_open_udp_transport(device)
-                        : open(device, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
-    if (b->fd < 0) goto fail;
-    if (!b->datagram) {
+    b->device = device;
+    b->udp = strncmp(device, "udp://", 6) == 0;
+    b->tcp = strncmp(device, "tcp://", 6) == 0;
+    b->last_connect = now_ms();
+    b->fd = b->udp ? ca_open_udp_transport(device)
+          : b->tcp ? ca_open_tcp_transport(device)
+          : open(device, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    if (b->fd < 0) {
+        /* A TCP peer that cannot be reached yet (for example no route to the
+         * flight controller during boot) is retried by tcp_service(). */
+        if (!b->tcp || errno == EINVAL) goto fail;
+        ca_log("CADDX gimbal: cannot open %s: %s; retrying", device, strerror(errno));
+        b->reported = true;
+    }
+    b->linked = true;
+    if (!b->udp && !b->tcp) {
         struct termios t;
         if (flock(b->fd, LOCK_EX | LOCK_NB) || tcgetattr(b->fd, &t)) goto fail;
         cfmakeraw(&t);
@@ -135,11 +151,17 @@ fail:;
     return -1;
 }
 
-/* A UDP link is not polled by the main loop: an ICMP error from an
- * unreachable passthrough (for example while the flight controller reboots)
- * would report POLLERR there and stop the camera app. periodic() reads it
- * instead, which also consumes any pending socket error. */
-int ca_backend_fd(const struct ca_backend *b) { return b && !b->datagram ? b->fd : -1; }
+/* A network link is not polled by the main loop: an ICMP error from an
+ * unreachable passthrough (for example while the flight controller reboots),
+ * or a dropped TCP connection, would report POLLERR/POLLHUP there and stop the
+ * camera app. periodic() services it instead, which also consumes any pending
+ * socket error and reconnects TCP. */
+int ca_backend_fd(const struct ca_backend *b) { return b && !b->udp && !b->tcp ? b->fd : -1; }
+
+static uint8_t mcu_link(const struct ca_backend *b)
+{
+    return b->tcp ? CA_PACKET_MCU_TCP : b->udp ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART;
+}
 
 /* The gimbal is not known to reply; log anything received for analysis. */
 int ca_backend_handle_fd(struct ca_backend *b)
@@ -149,29 +171,90 @@ int ca_backend_handle_fd(struct ca_backend *b)
     ssize_t n = read(b->fd, data, sizeof(data));
     if (n < 0) return errno == EAGAIN || errno == EINTR || errno == ECONNREFUSED ? 0 : -1;
     if (n > 0)
-        ca_binlog_packet(false, CA_PACKET_CADDX, b->datagram ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+        ca_binlog_packet(false, CA_PACKET_CADDX, mcu_link(b),
                          0, 0, data, (size_t)n);
     return 0;
 }
 
-static void drain_datagrams(struct ca_backend *b)
+static void drain_udp(struct ca_backend *b)
 {
     for (unsigned i = 0; i < 16U; i++) {
         uint8_t data[256];
         ssize_t n = recv(b->fd, data, sizeof(data), MSG_DONTWAIT);
         if (n < 0) return; /* EAGAIN, or a pending error now consumed */
         if (n > 0)
-            ca_binlog_packet(false, CA_PACKET_CADDX, CA_PACKET_MCU_UDP, 0, 0, data, (size_t)n);
+            ca_binlog_packet(false, CA_PACKET_CADDX, mcu_link(b), 0, 0, data, (size_t)n);
     }
+}
+
+static void tcp_drop(struct ca_backend *b, const char *why)
+{
+    if (!b->reported) ca_log("CADDX gimbal: %s %s; retrying", b->device, why);
+    b->reported = true; /* once until it connects again, not every second */
+    if (b->fd >= 0) close(b->fd);
+    b->fd = -1;
+    b->connected = false;
+    b->tx_pending = 0;
+    b->last_connect = now_ms();
+}
+
+/* Connects, and reconnects after a drop; true when data can be sent. */
+static bool tcp_service(struct ca_backend *b)
+{
+    const uint64_t now = now_ms();
+    if (b->fd < 0) {
+        if (now - b->last_connect < CADDX_RECONNECT_MS) return false;
+        b->last_connect = now;
+        b->fd = ca_open_tcp_transport(b->device);
+        return false;
+    }
+    if (!b->connected) {
+        struct pollfd item = {.fd = b->fd, .events = POLLOUT};
+        if (poll(&item, 1, 0) <= 0) {
+            if (now - b->last_connect > CADDX_CONNECT_TIMEOUT_MS) tcp_drop(b, "connect timed out");
+            return false;
+        }
+        int error = 0;
+        socklen_t length = sizeof(error);
+        if (getsockopt(b->fd, SOL_SOCKET, SO_ERROR, &error, &length) != 0 || error) {
+            tcp_drop(b, "refused the connection");
+            return false;
+        }
+        b->connected = true;
+        b->reported = false;
+        ca_log("CADDX gimbal: connected to %s", b->device);
+    }
+    for (unsigned i = 0; i < 16U; i++) {
+        uint8_t data[256];
+        ssize_t n = recv(b->fd, data, sizeof(data), MSG_DONTWAIT);
+        if (n > 0) {
+            ca_binlog_packet(false, CA_PACKET_CADDX, mcu_link(b), 0, 0, data, (size_t)n);
+        } else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            tcp_drop(b, "closed the connection");
+            return false;
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+static ssize_t link_write(struct ca_backend *b, const uint8_t *data, size_t size)
+{
+    ssize_t n = b->tcp ? send(b->fd, data, size, MSG_NOSIGNAL) : write(b->fd, data, size);
+    if (n < 0 && b->tcp && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        tcp_drop(b, "write failed");
+    return n;
 }
 
 void ca_backend_periodic(struct ca_backend *b)
 {
-    if (!b || b->fd < 0) return;
-    if (b->datagram) drain_datagrams(b);
+    if (!b || !b->linked) return;
+    if (b->udp) drain_udp(b);
+    if (b->tcp && !tcp_service(b)) return;
     if (!b->commanded) return;
     if (b->tx_pending) {
-        ssize_t n = write(b->fd, b->tx + sizeof(b->tx) - b->tx_pending, b->tx_pending);
+        ssize_t n = link_write(b, b->tx + sizeof(b->tx) - b->tx_pending, b->tx_pending);
         if (n > 0) b->tx_pending -= (size_t)n;
         return;
     }
@@ -188,22 +271,22 @@ void ca_backend_periodic(struct ca_backend *b)
     apcam_transform(&apcam_angle_command[b->config.orientation == CA_MOUNT_INVERTED], command, command, false);
     ca_caddx_pack(b->tx, command[0] * DEG_RAD, command[1] * DEG_RAD, command[2] * DEG_RAD);
     b->tx_pending = sizeof(b->tx);
-    ca_binlog_packet(true, CA_PACKET_CADDX, b->datagram ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+    ca_binlog_packet(true, CA_PACKET_CADDX, mcu_link(b),
                      0, 0, b->tx, sizeof(b->tx));
-    ssize_t n = write(b->fd, b->tx, b->tx_pending);
+    ssize_t n = link_write(b, b->tx, b->tx_pending);
     if (n > 0) b->tx_pending -= (size_t)n;
-    else if (n < 0 && b->datagram) b->tx_pending = 0; /* datagrams are not resumable */
+    else if (n < 0 && b->udp) b->tx_pending = 0; /* datagrams are not resumable */
 }
 
 int ca_backend_request_gimbal_attitude(struct ca_backend *b)
 {
-    if (!b || b->fd < 0) { errno = ENOTSUP; return -1; }
+    if (!b || !b->linked) { errno = ENOTSUP; return -1; }
     return 0;
 }
 
 bool ca_backend_gimbal_attitude(const struct ca_backend *b, struct ca_gimbal_attitude *a)
 {
-    if (!b || !a || b->fd < 0 || !b->commanded) return false;
+    if (!b || !a || !b->linked || !b->commanded) return false;
     *a = {};
     a->pitch_rad = b->pitch;
     a->yaw_rad = b->yaw;
@@ -214,7 +297,7 @@ bool ca_backend_gimbal_attitude(const struct ca_backend *b, struct ca_gimbal_att
 
 int ca_backend_set_gimbal_angles(struct ca_backend *b, float pitch, float yaw)
 {
-    if (!b || b->fd < 0) { errno = ENOTSUP; return -1; }
+    if (!b || !b->linked) { errno = ENOTSUP; return -1; }
     if (!isfinite(pitch) || !isfinite(yaw)) { errno = EINVAL; return -1; }
     b->pitch = clamp(pitch, APCAM_GIMBAL_PITCH_MIN * DEG_RAD, APCAM_GIMBAL_PITCH_MAX * DEG_RAD);
     b->yaw = clamp(yaw, APCAM_GIMBAL_YAW_MIN * DEG_RAD, APCAM_GIMBAL_YAW_MAX * DEG_RAD);
@@ -227,7 +310,7 @@ int ca_backend_set_gimbal_angles(struct ca_backend *b, float pitch, float yaw)
 
 int ca_backend_set_gimbal_rates(struct ca_backend *b, float pitch, float yaw)
 {
-    if (!b || b->fd < 0) { errno = ENOTSUP; return -1; }
+    if (!b || !b->linked) { errno = ENOTSUP; return -1; }
     if (!isfinite(pitch) || !isfinite(yaw)) { errno = EINVAL; return -1; }
     b->pitch_rate = clamp(pitch, -CADDX_RATE_MAX, CADDX_RATE_MAX);
     b->yaw_rate = clamp(yaw, -CADDX_RATE_MAX, CADDX_RATE_MAX);
@@ -252,7 +335,7 @@ int ca_backend_handle_siyi(struct ca_backend *b, const uint8_t *p, size_t n)
     (void)b; (void)p; (void)n; errno = ENOTSUP; return -1;
 }
 
-bool ca_backend_has_gimbal(const struct ca_backend *b) { return b && b->fd >= 0; }
+bool ca_backend_has_gimbal(const struct ca_backend *b) { return b && b->linked; }
 
 void ca_backend_close(struct ca_backend *b)
 {

@@ -46,6 +46,47 @@ static void video_uri_validation(void)
     assert(!apcam_video_uri_valid(longest));
 }
 
+/* [network] uart_device_override: what apcam_uart_device_override_valid() accepts and rejects, and the ini key. */
+static void uart_device_override(void)
+{
+    const char *valid[] = {
+        "", "/dev/ttyAMA0", "/dev/serial0", "/dev/serial/by-id/usb-x_y-if00",
+        "udp://192.168.144.15:15002", "udp://localhost:1", "udp://10.0.0.1:65535",
+        "tcp://192.168.144.15:15002", "tcp://localhost:5760",
+    };
+    const char *invalid[] = {
+        "/dev/", "/dev/../etc/passwd", "/etc/passwd", "ttyAMA0", "/dev/tty AMA0", "udp://",
+        "udp://192.168.144.15", "udp://192.168.144.15:", "udp://192.168.144.15:0",
+        "udp://192.168.144.15:65536", "udp://192.168.144.15:123456", "udp://example.com:15002",
+        "udp://300.1.1.1:5", "udp://192.168.144.15:80x", "tcp://", "tcp://192.168.144.15",
+        "tcp://example.com:15002", "tcp://192.168.144.15:0", "http://192.168.144.15:80",
+    };
+    for (const char *link : valid) assert(apcam_uart_device_override_valid(link));
+    for (const char *link : invalid) assert(!apcam_uart_device_override_valid(link));
+    static const struct { const char *ini; bool loads; const char *value; } cases[] = {
+        {"[network]\ncapture = false\n", true, ""},
+        {"[network]\nuart_device_override = \"\"\n", true, ""},
+        {"[network]\nuart_device_override = /dev/ttyAMA1\n", true, "/dev/ttyAMA1"},
+        {"[network]\nuart_device_override = udp://192.168.144.15:15002\n", true, "udp://192.168.144.15:15002"},
+        {"[network]\nuart_device_override = http://192.168.144.15\n", false, NULL},
+        {"[network]\nuart_device_override = /dev/../etc/passwd\n", false, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[] = "/tmp/camera-uart-override-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        size_t length = strlen(cases[i].ini);
+        assert(write(fd, cases[i].ini, length) == (ssize_t)length);
+        close(fd);
+        struct ca_config config;
+        ca_config_defaults(&config);
+        char error[256] = "";
+        assert((ca_config_load(&config, path, error, sizeof(error)) == 0) == cases[i].loads);
+        if (cases[i].loads) assert(strcmp(config.uart_device_override, cases[i].value) == 0);
+        unlink(path);
+    }
+}
+
 /* Reference packets from ArduPilot's AP_Mount_CADDX encoding (roll/pitch locked). */
 static void caddx_packets(void)
 {
@@ -150,6 +191,104 @@ static void caddx_udp(void)
     assert(ca_backend_set_gimbal_angles(backend, NAN, 0) < 0 && errno == EINVAL);
     ca_backend_close(backend);
     close(server);
+}
+
+/* The TCP transport: connects when the first command is due, sends the same packet,
+ * and reconnects after the peer closes the connection. */
+static void caddx_tcp(void)
+{
+    int server = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int one = 1;
+    struct sockaddr_in address = {};
+    socklen_t length = sizeof(address);
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0);
+    assert(bind(server, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(server, 2) == 0);
+    assert(getsockname(server, (struct sockaddr *)&address, &length) == 0);
+    char device[64];
+    snprintf(device, sizeof(device), "tcp://127.0.0.1:%u", ntohs(address.sin_port));
+
+    struct ca_backend_config config = {};
+    config.uart_device = device;
+    struct ca_backend *backend = NULL;
+    assert(ca_backend_open(&backend, &config) == 0);
+    assert(ca_backend_fd(backend) < 0); /* serviced by periodic(), like UDP */
+    assert(ca_backend_has_gimbal(backend));
+    assert(ca_backend_set_gimbal_angles(backend, -45 * DEG, 90 * DEG) == 0);
+
+    static const uint8_t expected[10] = {0xa5, 0x5a, 0x03, 0x00, 0x00, 0x00, 0x0e, 0x40, 0x72, 0xa5};
+    for (int round = 0; round < 2; round++) {
+        struct pollfd item = {.fd = server, .events = POLLIN};
+        int client = -1;
+        for (int i = 0; i < 300 && client < 0; i++) {
+            ca_backend_periodic(backend);
+            if (poll(&item, 1, 10) == 1) client = accept(server, NULL, NULL);
+        }
+        assert(client >= 0);
+        uint8_t packet[16];
+        ssize_t got = -1;
+        struct pollfd data = {.fd = client, .events = POLLIN};
+        for (int i = 0; i < 300 && got < 0; i++) {
+            ca_backend_periodic(backend);
+            if (poll(&data, 1, 10) == 1) got = recv(client, packet, sizeof(packet), 0);
+        }
+        assert(got >= 10 && memcmp(packet, expected, sizeof(expected)) == 0);
+        close(client); /* the next round must reconnect */
+    }
+    ca_backend_close(backend);
+    close(server);
+}
+
+/* A TCP peer that is not listening yet must not stop the backend opening: it connects
+ * once the peer appears. */
+static void caddx_tcp_late_server(void)
+{
+    int one = 1;
+    struct sockaddr_in address = {};
+    socklen_t length = sizeof(address);
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int probe = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    assert(probe >= 0 && bind(probe, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(getsockname(probe, (struct sockaddr *)&address, &length) == 0);
+    close(probe); /* nothing listens on this port yet */
+    char device[64];
+    snprintf(device, sizeof(device), "tcp://127.0.0.1:%u", ntohs(address.sin_port));
+
+    struct ca_backend_config config = {};
+    config.uart_device = device;
+    struct ca_backend *backend = NULL;
+    assert(ca_backend_open(&backend, &config) == 0);
+    assert(ca_backend_has_gimbal(backend));
+    assert(ca_backend_set_gimbal_angles(backend, -45 * DEG, 90 * DEG) == 0);
+    for (int i = 0; i < 5; i++) ca_backend_periodic(backend); /* refused; nothing to send to */
+
+    int server = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    assert(server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0);
+    assert(bind(server, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(server, 1) == 0);
+    struct pollfd item = {.fd = server, .events = POLLIN};
+    int client = -1;
+    for (int i = 0; i < 400 && client < 0; i++) {
+        ca_backend_periodic(backend);
+        if (poll(&item, 1, 10) == 1) client = accept(server, NULL, NULL);
+    }
+    assert(client >= 0);
+    uint8_t packet[16];
+    ssize_t got = -1;
+    struct pollfd data = {.fd = client, .events = POLLIN};
+    for (int i = 0; i < 300 && got < 0; i++) {
+        ca_backend_periodic(backend);
+        if (poll(&data, 1, 10) == 1) got = recv(client, packet, sizeof(packet), 0);
+    }
+    assert(got >= 10 && packet[0] == 0xa5 && packet[1] == 0x5a);
+    close(client);
+    close(server);
+    ca_backend_close(backend);
+
+    /* An address that cannot be parsed is still a configuration error. */
+    config.uart_device = "tcp://not-an-address:1";
+    assert(ca_backend_open(&backend, &config) < 0);
 }
 
 /* With one stream the SupportProxy video2 port and name are not offered, so a stored
@@ -289,6 +428,7 @@ int main(void)
     single_stream_support_proxy();
     video_encoder_settings();
     video1_uri();
+    uart_device_override();
     struct ca_config settings;
     ca_config_defaults(&settings);
     struct ca_rpi_image_controls c;
@@ -341,6 +481,8 @@ int main(void)
     caddx_packets();
     caddx_udp();
     caddx_udp_unreachable();
+    caddx_tcp();
+    caddx_tcp_late_server();
     puts("rpi_libcam_caddx image controls and CADDX gimbal passed");
     return 0;
 }

@@ -38,7 +38,9 @@
 #define APCAM_WEB_CONTROL_MAVLINK 1
 #define APCAM_HAVE_OVERLAY_RECORDING_SELECT 0
 #define APCAM_HAVE_GIMBAL_RATES 0
-/* The gimbal needs CAMERA_APP_UART; without it no gimbal is advertised. */
+/* The gimbal needs a UART device ([network] uart_device_override, --uart or
+ * CAMERA_APP_UART); without one no gimbal is advertised. */
+#define APCAM_HAVE_UART_DEVICE_OVERRIDE 1
 #define APCAM_GIMBAL_OPTIONAL 1
 #define APCAM_SUPPRESS_DUPLICATE_ANGLES 0
 #define APCAM_WEB_CENTER_COMMAND 3
