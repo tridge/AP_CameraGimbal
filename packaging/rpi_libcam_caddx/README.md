@@ -22,8 +22,7 @@ contrast, saturation, exposure compensation, ISO, shutter, metering and white
 balance) can be changed from the GCS while streaming.
 
 The web interface is served at `http://<pi>:8080/`. The CADDX gimbal is
-controlled over a UART, or through a flight controller's serial passthrough;
-see [Gimbal](#gimbal).
+controlled over a UART; see [Gimbal](#gimbal).
 
 Photos are taken from the GCS (including interval capture) or the web
 Photos page and saved as JPEGs with GPS metadata under
@@ -141,22 +140,19 @@ setting and delete its `video-address.conf` systemd drop-in.
 The CADDX gimbal uses the protocol of ArduPilot's `AP_Mount_CADDX` driver
 (115200 8N1). It sends no feedback, so the attitude reported to the GCS is the
 commanded target. Nothing is sent to the gimbal until the first gimbal command.
-Set the link with `CAMERA_APP_UART`, for example with a systemd drop-in:
+Set the link on the web Parameters page (`[network] uart_device_override`, "Gimbal link"). Pick
+a suggestion or type another value: a serial device such as `/dev/ttyAMA0`, or
+a network address as `udp://IPv4:PORT` or `tcp://IPv4:PORT` (TCP reconnects
+if the connection drops). A change needs
+a camera-app restart. When the setting is blank, `--uart` is used, and if that
+is not given, the `CAMERA_APP_UART` environment variable.
 
-```sh
-sudo mkdir -p /etc/systemd/system/ap-cameragimbal.service.d
-printf '[Service]\nEnvironment=CAMERA_APP_UART=/dev/ttyAMA0\n' |
-    sudo tee /etc/systemd/system/ap-cameragimbal.service.d/gimbal-uart.conf
-sudo systemctl daemon-reload
-sudo systemctl restart ap-cameragimbal
-```
-
-Without `CAMERA_APP_UART` no gimbal is advertised: camera-app sends no gimbal
+Without a link no gimbal is advertised: camera-app sends no gimbal
 heartbeat or `GIMBAL_DEVICE_INFORMATION` and reports gimbal device ID 0 in
 `CAMERA_INFORMATION`, so a gimbal connected to the flight controller is not
 duplicated.
 
-When the gimbal is wired to the flight controller instead, ArduPilot's serial
+If the gimbal is wired to the flight controller instead, ArduPilot's serial
 passthrough can forward it to the Pi over Ethernet. For a gimbal on SERIAL3
 and network port 2 as a UDP server:
 
@@ -169,12 +165,14 @@ SERIAL_PASS2 = 22       (network ports are numbered from 21)
 SERIAL_PASSTIMO = -1    (no timeout, kept across reboots)
 ```
 
-then use `CAMERA_APP_UART=udp://<flight controller IP>:15002`. While
-passthrough is active ArduPilot's own mount driver cannot reach the gimbal;
-set `MNT1_TYPE = 6` (MAVLink gimbal protocol v2).
+then set the Gimbal link to `udp://<flight controller IP>:15002`, for example
+`udp://192.168.144.15:15002`. While passthrough is active ArduPilot's own CADDX
+mount driver cannot reach the gimbal; set `MNT1_TYPE = 6` (MAVLink gimbal
+protocol v2).
 
 ## Environment variables
 
 - `CAMERA_APP_RPI_CAMERA`: libcamera camera ID (default: first camera).
 - `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
-- `CAMERA_APP_UART`: gimbal link, a serial device or `udp://IPv4:PORT`.
+- `CAMERA_APP_UART`: gimbal link, a serial device, `udp://IPv4:PORT` or `tcp://IPv4:PORT`; used
+  when `--uart` and the Gimbal link setting are not given.
