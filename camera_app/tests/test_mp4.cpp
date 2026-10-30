@@ -91,7 +91,9 @@ int main(int argc, char **argv)
     struct ca_fmp4 *fragmented = NULL;
     struct stream_file output = {.fd = -1};
     char fragmented_path[4096];
-    if (argc != 3 || stat(argv[1], &st) < 0 || st.st_size <= 0) return 2;
+    if ((argc != 3 && argc != 4) || stat(argv[1], &st) < 0 || st.st_size <= 0) return 2;
+    const bool misb = argc == 4 && !strcmp(argv[3], "misb");
+    ca_video_metadata_set_format(misb ? CA_VIDEO_TELEMETRY_MISB : CA_VIDEO_TELEMETRY_APCG);
     uint8_t *data = (uint8_t*)(malloc((size_t)st.st_size));
     int fd = open(argv[1], O_RDONLY);
     if (data == NULL || fd < 0 || read(fd, data, (size_t)st.st_size) != st.st_size) return 3;
@@ -139,7 +141,8 @@ int main(int argc, char **argv)
         fsync(output.fd) < 0 || close(output.fd) < 0) return 8;
     assert(frames > 0U); /* fixture must contain per-frame AUDs */
     free(data);
-    check_index(argv[2], frames);
-    puts("PASS H.264 MP4 and fragmented-MP4 muxing");
+    if (!misb) check_index(argv[2], frames);
+    puts(misb ? "PASS MISB MPEG-TS and compatible fragmented-MP4 preview muxing" :
+                "PASS H.264 MP4 and fragmented-MP4 muxing");
     return 0;
 }

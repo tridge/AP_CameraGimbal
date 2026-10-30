@@ -1,10 +1,12 @@
 #include "camera_app/rtsp.h"
 #include "camera_app/video_metadata.h"
+#include "camera_app/misb.h"
 #include "camera_app/support_video.h"
 #include "camera_app/log.h"
 #include <cstdlib>
 #include <cstdio>
 #include <limits>
+#include <algorithm>
 
 #include "EventLoop.h"
 #include "H264Source.h"
@@ -89,11 +91,16 @@ static std::string base64(const std::vector<uint8_t> &data)
 class CodecParameters {
 public:
     explicit CodecParameters(ca_video_codec codec) : codec_(codec) {}
-    void update(const uint8_t *data, size_t size)
+    int update(const uint8_t *data, size_t size, ca_misb_ts *misb)
     {
         size_t offset = 0, nal, length;
+        bool picture = false;
         std::lock_guard<std::mutex> lock(mutex_);
         while (ca_annexb_next(data, size, &offset, &nal, &length)) {
+            if (!length) continue;
+            picture |= ca_video_nal_is_vcl(codec_, data[nal]);
+            // Cache small parameter sets without packaging an unused format.
+            if (misb && ca_misb_ts_cache_nal(misb, codec_, data+nal, length)<0) return -1;
             // Bound the SDP size as well as cached encoder data.
             if (length < 2 || length > 512) continue;
             const unsigned type = codec_ == CA_VIDEO_H265 ? (data[nal] >> 1) & 63 : data[nal] & 31;
@@ -108,6 +115,7 @@ public:
             }
             if (parameter) parameter->assign(data + nal, data + nal + length);
         }
+        return picture ? 1 : 0;
     }
     std::string attribute()
     {
@@ -204,11 +212,40 @@ private:
     uint32_t timestamp_ = 0;
 };
 
+/* RFC 2250 MPEG-TS over RTP. Each payload holds whole 188-byte TS packets;
+ * the marker signals discontinuities, not the end of a video access unit. */
+class TransportStreamSource : public xop::MediaSource {
+public:
+    TransportStreamSource() { payload_=33; clock_rate_=90000; }
+    std::string GetMediaDescription(uint16_t port) override {
+        return "m=video " + std::to_string(port) + " RTP/AVP 33";
+    }
+    std::string GetAttribute() override { return "a=rtpmap:33 MP2T/90000"; }
+    bool HandleFrame(xop::MediaChannelId channel,xop::AVFrame frame) override {
+        if(frame.size%188) return false;
+        for(size_t at=0;at<frame.size;) {
+            const size_t n=std::min(size_t(7*188),size_t(frame.size)-at);
+            xop::RtpPacket packet;
+            packet.type=frame.type; packet.timestamp=frame.timestamp;
+            packet.size=RTP_TCP_HEAD_SIZE+RTP_HEADER_SIZE+n;
+            memcpy(packet.data.get()+RTP_TCP_HEAD_SIZE+RTP_HEADER_SIZE,frame.buffer.get()+at,n);
+            if(!send_frame_callback_ || !send_frame_callback_(channel,packet)) return false;
+            at+=n;
+        }
+        return true;
+    }
+};
+
 struct ca_rtsp {
     struct stream {
         ca_support_video *publisher = nullptr;
         std::shared_ptr<CodecParameters> parameters;
         xop::MediaSessionId session_id;
+        xop::MediaSessionId misb_session = 0;
+        ca_misb_ts misb;
+        uint64_t misb_pts = 0;
+        uint32_t misb_last_timestamp = 0;
+        bool misb_clock_started = false;
         std::vector<xop::MediaSessionId> aliases;
         enum ca_video_codec codec;
         unsigned frame_rate;
@@ -221,9 +258,9 @@ struct ca_rtsp {
     std::mutex mutex;
 };
 
-static void add_stream(ca_rtsp *rtsp, xop::MediaSessionId session_id,
+static bool add_stream(ca_rtsp *rtsp, xop::MediaSessionId session_id,
                        enum ca_video_codec codec, unsigned frame_rate,
-                       std::shared_ptr<CodecParameters> parameters)
+                       std::shared_ptr<CodecParameters> parameters, const char *path)
 {
     ca_rtsp::stream stream;
     stream.parameters = std::move(parameters);
@@ -234,7 +271,16 @@ static void add_stream(ca_rtsp *rtsp, xop::MediaSessionId session_id,
                                 ? xop::H265Source::GetTimestamp()
                                 : xop::H264Source::GetTimestamp();
     stream.timestamp_step = 90000U / frame_rate;
+    if(ca_video_metadata_format()==CA_VIDEO_TELEMETRY_MISB) {
+        const std::string name=std::string(path)+".misb";
+        auto *session=xop::MediaSession::CreateNew(name);
+        if(!session) return false;
+        session->AddSource(xop::channel_0,new TransportStreamSource);
+        stream.misb_session=rtsp->server->AddSession(session);
+        if(!stream.misb_session) return false;
+    }
     rtsp->streams.push_back(stream);
+    return true;
 }
 
 extern "C" int ca_rtsp_open(struct ca_rtsp **result, unsigned port,
@@ -254,7 +300,7 @@ extern "C" int ca_rtsp_open(struct ca_rtsp **result, unsigned port,
     session->AddSource(xop::channel_0, new AccessUnitSource(codec, frame_rate, parameters));
     xop::MediaSessionId session_id = rtsp->server->AddSession(session);
     if (session_id == 0) return -1;
-    add_stream(rtsp.get(), session_id, codec, frame_rate, parameters);
+    if(!add_stream(rtsp.get(), session_id, codec, frame_rate, parameters, path)) return -1;
     *result = rtsp.release();
     return 0;
 }
@@ -273,7 +319,7 @@ extern "C" int ca_rtsp_add_video(struct ca_rtsp *rtsp, const char *path,
     xop::MediaSessionId session_id = rtsp->server->AddSession(session);
     if (session_id == 0) return -1;
     *stream_id = static_cast<unsigned>(rtsp->streams.size());
-    add_stream(rtsp, session_id, codec, frame_rate, parameters);
+    if(!add_stream(rtsp, session_id, codec, frame_rate, parameters, path)) return -1;
     return 0;
 }
 
@@ -305,6 +351,14 @@ extern "C" void ca_rtsp_add_config_aliases(struct ca_rtsp *rtsp,
     }
 }
 
+static int collect_ts(void *opaque,const void *data,size_t length)
+{
+    auto &bytes=*static_cast<std::vector<uint8_t> *>(opaque);
+    const auto *p=static_cast<const uint8_t *>(data);
+    bytes.insert(bytes.end(),p,p+length);
+    return 0;
+}
+
 static int push_video(struct ca_rtsp *rtsp, unsigned stream_id,
                       const uint8_t *data, size_t length, bool key_frame,
                       float hfov_deg, bool timed, uint32_t timestamp)
@@ -313,35 +367,62 @@ static int push_video(struct ca_rtsp *rtsp, unsigned stream_id,
     std::lock_guard<std::mutex> lock(rtsp->mutex);
     if (stream_id >= rtsp->streams.size()) return -1;
     ca_rtsp::stream &stream = rtsp->streams[stream_id];
-    stream.parameters->update(data, length);
+    int picture=stream.parameters->update(data, length, stream.misb_session ? &stream.misb : nullptr);
+    if(picture<0) return -1;
     if (timed) stream.next_timestamp = timestamp;
-    uint8_t *annotated = nullptr;
-    size_t annotated_length = 0;
-    int inserted = ca_video_metadata_insert(stream.codec, data, length,
-                                             stream.next_timestamp, hfov_deg,
-                                             &annotated, &annotated_length);
-    if (inserted < 0) return -1;
-    if (inserted == 0) {
-        annotated = static_cast<uint8_t *>(std::malloc(length));
-        if (annotated == nullptr) return -1;
-        std::memcpy(annotated, data, length);
-        annotated_length = length;
+    const uint32_t stamp=stream.next_timestamp;
+    // Advance the source clock even when every live output is idle.
+    if(picture) stream.next_timestamp += stream.timestamp_step;
+    bool elementary=stream.publisher || rtsp->server->HasPlayingClients(stream.session_id);
+    for(auto alias:stream.aliases) elementary |= rtsp->server->HasPlayingClients(alias);
+    if(elementary) {
+        uint8_t *annotated=nullptr;
+        size_t annotated_length=0;
+        int inserted=ca_video_metadata_insert(stream.codec,data,length,stamp,hfov_deg,
+                                               &annotated,&annotated_length);
+        if(inserted<0) return -1;
+        if(!inserted) {
+            annotated=static_cast<uint8_t *>(std::malloc(length));
+            if(!annotated) return -1;
+            std::memcpy(annotated,data,length); annotated_length=length;
+        }
+        xop::AVFrame frame;
+        frame.buffer=std::shared_ptr<uint8_t>(annotated,std::free);
+        if(annotated_length>std::numeric_limits<uint32_t>::max()) return -1;
+        frame.size=annotated_length;
+        frame.type=key_frame ? xop::VIDEO_FRAME_I : xop::VIDEO_FRAME_P;
+        frame.timestamp=stamp;
+        ca_support_video_push(stream.publisher,annotated,annotated_length,stamp,key_frame);
+        rtsp->server->PushFrame(stream.session_id,xop::channel_0,frame);
+        for(auto alias:stream.aliases) rtsp->server->PushFrame(alias,xop::channel_0,frame);
     }
-    xop::AVFrame frame;
-    frame.buffer = std::shared_ptr<uint8_t>(annotated, std::free);
-    if (annotated_length > std::numeric_limits<uint32_t>::max()) return -1;
-    frame.size = static_cast<uint32_t>(annotated_length);
-    frame.type = key_frame ? xop::VIDEO_FRAME_I : xop::VIDEO_FRAME_P;
-    frame.timestamp = stream.next_timestamp;
-    ca_support_video_push(stream.publisher, annotated, annotated_length,
-                           frame.timestamp, key_frame);
-    bool sent = rtsp->server->PushFrame(stream.session_id, xop::channel_0, frame);
-    for (xop::MediaSessionId alias : stream.aliases)
-        sent = rtsp->server->PushFrame(alias, xop::channel_0, frame) || sent;
-    // The stream clock must advance even without a local RTSP viewer; an
-    // independent SupportProxy publisher still consumes these access units.
-    if (inserted != 0) stream.next_timestamp += stream.timestamp_step;
-    return sent ? 0 : -1;
+    if(stream.misb_session) {
+        if(!stream.misb_clock_started) stream.misb_pts=stamp;
+        else stream.misb_pts+=uint32_t(stamp-stream.misb_last_timestamp);
+        stream.misb_last_timestamp=stamp; stream.misb_clock_started=true;
+        if(!rtsp->server->HasPlayingClients(stream.misb_session)) {
+            // A new viewer must start on an IDR with the cached headers.
+            stream.misb.started=false;
+            return 0;
+        }
+        ca_metadata metadata;
+        timespec utc;
+        ca_metadata_snapshot(&metadata); metadata.hfov_deg=hfov_deg;
+        auto bytes=std::make_shared<std::vector<uint8_t>>();
+        if(clock_gettime(CLOCK_REALTIME,&utc)<0 ||
+           ca_misb_ts_write(&stream.misb,stream.codec,data,length,stream.misb_pts,
+                            key_frame,&metadata,&utc,collect_ts,bytes.get())<0) return -1;
+        if(!bytes->empty()) {
+            if(bytes->size()>std::numeric_limits<uint32_t>::max()) return -1;
+            xop::AVFrame ts;
+            ts.buffer=std::shared_ptr<uint8_t>(bytes,bytes->data());
+            ts.size=bytes->size();
+            ts.type=key_frame ? xop::VIDEO_FRAME_I : xop::VIDEO_FRAME_P;
+            ts.timestamp=stamp;
+            rtsp->server->PushFrame(stream.misb_session,xop::channel_0,ts);
+        }
+    }
+    return 0;
 }
 
 extern "C" int ca_rtsp_push_h264_stream(struct ca_rtsp *rtsp, unsigned stream_id,
@@ -406,6 +487,7 @@ extern "C" void ca_rtsp_close(struct ca_rtsp *rtsp)
         if (rtsp->server) {
             for (const ca_rtsp::stream &stream : rtsp->streams) {
                 rtsp->server->RemoveSession(stream.session_id);
+                if(stream.misb_session) rtsp->server->RemoveSession(stream.misb_session);
                 for (xop::MediaSessionId alias : stream.aliases)
                     rtsp->server->RemoveSession(alias);
             }

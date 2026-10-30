@@ -230,6 +230,10 @@ enum string_id {
     S_H_MAIN_RESOLUTION_A8,
     S_P_MAIN_CODEC,
     S_H_MAIN_CODEC,
+    S_P_VIDEO_TELEMETRY,
+    S_H_VIDEO_TELEMETRY,
+    S_OPT_META_APCG,
+    S_OPT_META_MISB,
     S_P_SUB_RESOLUTION,
     S_H_SUB_RESOLUTION_MT11,
     S_H_SUB_RESOLUTION_A8,
@@ -888,6 +892,10 @@ static constexpr Translations translations = [] {
     result[S_H_MAIN_RESOLUTION_MT11] = {"RGB resolution of rtsp://CAMERA:8554/video1; thermal output is limited to 1280 x 720.", "rtsp://CAMERA:8554/video1 的 RGB 分辨率；热成像输出上限为 1280 x 720。", "rtsp://CAMERA:8554/video1 の RGB 解像度。サーマル出力は 1280 x 720 が上限です。"};
     result[S_H_MAIN_RESOLUTION_A8] = {"Resolution of rtsp://CAMERA:8554/video1.", "rtsp://CAMERA:8554/video1 的分辨率。", "rtsp://CAMERA:8554/video1 の解像度。"};
     result[S_P_MAIN_CODEC] = {"Main RTSP codec", "主 RTSP 流编码格式", "メイン RTSP コーデック"};
+    result[S_P_VIDEO_TELEMETRY] = {"Video telemetry format", "视频遥测格式", "映像テレメトリー形式"};
+    result[S_H_VIDEO_TELEMETRY] = {"Applies after app restart. MISB adds /video1.misb (and /video2.misb when available) with video and KLV in MPEG-TS, and saves .ts recordings. Normal RTSP/browser previews retain APCG JSON telemetry.", "重启应用后生效。MISB 添加 /video1.misb（如有则包含 /video2.misb），以 MPEG-TS 传输视频和 KLV，并保存 .ts 录像。普通 RTSP/浏览器预览保留 APCG JSON 遥测。", "アプリ再起動後に反映。MISB は映像とKLVのMPEG-TSを /video1.misb（対応時は /video2.misb）で配信し、.ts で録画します。通常のRTSP・ブラウザープレビューはAPCG JSONを維持します。"};
+    result[S_OPT_META_APCG] = {"APCG JSON (default)", "APCG JSON（默认）", "APCG JSON（初期値）"};
+    result[S_OPT_META_MISB] = {"MISB ST 0601 KLV / MPEG-TS", "MISB ST 0601 KLV / MPEG-TS", "MISB ST 0601 KLV / MPEG-TS"};
     result[S_H_MAIN_CODEC] = {"Codec of rtsp://CAMERA:8554/video1.", "rtsp://CAMERA:8554/video1 的编码格式。", "rtsp://CAMERA:8554/video1 のコーデック。"};
     result[S_P_SUB_RESOLUTION] = {"Sub RTSP resolution", "子 RTSP 流分辨率", "サブ RTSP 解像度"};
     result[S_H_SUB_RESOLUTION_MT11] = {"RGB resolution of rtsp://CAMERA:8554/video2; thermal output is limited to 1280 x 720.", "rtsp://CAMERA:8554/video2 的 RGB 分辨率；热成像输出上限为 1280 x 720。", "rtsp://CAMERA:8554/video2 の RGB 解像度。サーマル出力は 1280 x 720 が上限です。"};

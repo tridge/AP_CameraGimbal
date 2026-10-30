@@ -606,6 +606,9 @@ static const struct option replacement_codec_options[] = {
     { "h265", S_OPT_CODEC_H265 },
 #endif
 };
+static const struct option telemetry_options[] = {
+    {"apcg", S_OPT_META_APCG}, {"misb", S_OPT_META_MISB},
+};
 static const struct option palette_options[] = {
     {"white_hot", S_OPT_PAL_WHITE_HOT}, {"sepia", S_OPT_PAL_SEPIA},
     {"ironbow", S_OPT_PAL_IRONBOW}, {"rainbow", S_OPT_PAL_RAINBOW},
@@ -700,6 +703,8 @@ static const struct parameter replacement_parameters[] = {
     {"main_resolution", "stream.main", "resolution", S_P_MAIN_RESOLUTION,
      TARGET_TEXT(S_H_MAIN_RESOLUTION_MT11, S_H_MAIN_RESOLUTION_A8),
      PARAM_ENUM, 0, 0, 0, main_resolution_options, sizeof(main_resolution_options) / sizeof(main_resolution_options[0])},
+    {"video_telemetry", "video", "telemetry", S_P_VIDEO_TELEMETRY, S_H_VIDEO_TELEMETRY,
+     PARAM_ENUM, 0, 0, 0, telemetry_options, sizeof(telemetry_options) / sizeof(telemetry_options[0])},
     {"main_codec", "stream.main", "codec", S_P_MAIN_CODEC, S_H_MAIN_CODEC,
      PARAM_ENUM, 0, 0, 0, replacement_codec_options, sizeof(replacement_codec_options) / sizeof(replacement_codec_options[0])},
 #if APCAM_HAVE_VIDEO_BITRATE
@@ -833,7 +838,7 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
         return TAB_NETWORK;
     if (!strcmp(p->section, "survey")) return TAB_SURVEY;
     if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
-    if (!strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
+    if (!strcmp(p->section, "video") || !strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
         !strcmp(p->section, "thermal") || !strcmp(p->section, "overlay")) return TAB_VIDEO;
     return TAB_SYSTEM;
@@ -851,7 +856,7 @@ static const char *replacement_defaults[] = {
 #if APCAM_HAVE_RAW_THERMAL
     "5", "5",
 #endif
-    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
+    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "apcg", "h264",
 #if APCAM_HAVE_VIDEO_BITRATE
     APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS),
 #endif
@@ -4313,6 +4318,7 @@ static const char *file_mime_type(const char *path)
     if (strcasecmp(ext, "webp") == 0) return "image/webp";
     if (strcasecmp(ext, "bmp") == 0) return "image/bmp";
     if (strcasecmp(ext, "mp4") == 0 || strcasecmp(ext, "m4v") == 0) return "video/mp4";
+    if (strcasecmp(ext, "ts") == 0) return "video/mp2t";
     if (strcasecmp(ext, "webm") == 0) return "video/webm";
     if (strcasecmp(ext, "mov") == 0) return "video/quicktime";
     if (strcasecmp(ext, "mkv") == 0) return "video/x-matroska";
@@ -4334,7 +4340,7 @@ static bool mime_is_image(const char *mime)
 
 static bool mime_is_video(const char *mime)
 {
-    return strncmp(mime, "video/", 6) == 0;
+    return strncmp(mime, "video/", 6) == 0 && strcmp(mime, "video/mp2t") != 0;
 }
 
 static bool path_is_below(const char *root, const char *path)

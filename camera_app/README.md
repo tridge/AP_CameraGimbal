@@ -368,7 +368,78 @@ when the persistent file is absent. Both paths preserve camera-local changes.
 
 ## Video telemetry metadata
 
-Every H.264/H.265 RTSP video frame carries an unregistered user-data SEI NAL
+`VIDEO_META_FMT` selects the interoperable video telemetry output on every
+hardware target and SITL port. Its persistent values are **0: APCG JSON**
+(the default) and **1: MISB KLV**. Set it through MAVLink or the web Parameters
+page, or use `[video] telemetry = apcg` / `misb` in `camera.ini`. Changes apply
+after restarting camera-app; saving a change preserves the active stream and
+recording formats until then. Future formats will receive new enum values.
+
+With MISB selected, open `rtsp://CAMERA:8554/video1.misb` or, on two-stream
+cameras, `rtsp://CAMERA:8554/video2.misb` in a MISB-capable viewer. These
+endpoints carry MPEG-TS over RTP (MP2T, payload type 33), containing
+the configured H.264/H.265 video and a separate, frame-synchronous KLV stream.
+Recordings use H.264 plus KLV in `.ts` files, including both visible and thermal
+recordings where supported. Files can be downloaded for playback in an FMV
+viewer; the Files page does not offer HTML video playback for `.ts` files.
+The regular `/video1`, `/video2`, configured aliases and browser previews retain
+the existing APCG JSON SEI format described below. MAVLink stream discovery
+advertises the selected format as the primary streams (IDs 1 and 2), with codec,
+geometry, FOV, thermal flags and independent start/stop status. In MISB mode the
+APCG compatibility previews follow raw thermal (whose ID 3 is preserved); an
+MT11 with raw thermal advertises APCG previews as streams 4 and 5. Live KLV/TS
+packaging and APCG SEI insertion run only for formats with a playing viewer.
+Codec headers and source clocks are retained while idle so a viewer can join
+at the next keyframe. An enabled SupportProxy publisher remains a consumer of
+APCG video even without a local viewer. SupportProxy currently relays
+and advertises only the regular previews and raw thermal.
+
+MISB output implements the ST 0601.8 UAS Datalink Local Set and ST 1402
+synchronous MPEG-TS carriage: metadata stream type `0x15`, PES stream ID `0xfc`,
+metadata descriptors and access-unit cells, with the same PTS as the associated
+video frame. Every local set includes a microsecond UTC timestamp, version and
+checksum. Available fields include sensor position/MSL altitude, platform
+heading/pitch/roll, horizontal/vertical FOV and sensor-relative azimuth,
+elevation and roll. Stabilized gimbal feedback is transformed relative to the
+full platform attitude. Unavailable/non-finite measurements are omitted; values
+outside ST 0601 angle ranges use its out-of-range representation. Full-range
+pitch and roll tags 90/91 use 32-bit values across +/-90 degrees; legacy tags
+6/7 are retained for older viewers and report out-of-range beyond +/-20/50.
+
+MISB video also carries the complete APCG JSON snapshot in unregistered SEI,
+using the same metadata snapshot, UTC and video PTS as KLV. This preserves
+inverted attitudes, zoom, velocities, source ages and rates for our tools,
+without redefining standard MISB tags. MISB viewers can ignore the SEI and read
+KLV; they retain the range and precision of the standard fields they support.
+MAVProxy/mavvidplay prefer APCG SEI when present, including in MISB recordings.
+This adds hundreds of metadata bytes per frame; idle streams still do no
+telemetry packaging.
+
+Encoding precision varies by field (it does not imply sensor accuracy):
+
+| Field | APCG JSON step | Standard MISB KLV step |
+| --- | --- | --- |
+| UTC | 1 microsecond | 1 microsecond |
+| Latitude/longitude | 1e-7 degree source integers | About 4.2e-8 / 8.4e-8 degree |
+| Platform pitch/roll | 1e-6 radian (about 0.000057 degree) | About 0.000000042 degree in tags 90/91 |
+| Platform heading | About 0.000057 degree | About 0.00549 degree |
+| Horizontal FOV | 0.0001 degree | About 0.00275 degree |
+| MSL altitude | 0.001 metre | About 0.304 metre |
+
+The accompanying SEI retains APCG precision for every field it carries.
+
+Live image dimensions are read from the encoder SPS, including crop, to derive
+vertical FOV from horizontal FOV. Both FOVs remain nominal pinhole estimates.
+UTC and pose use the existing streaming/recording handoff snapshot rather than
+hardware exposure time; recording uses the configured constant frame rate, as
+with MP4. Ground intersections, terrain-derived corners and slant range are not
+generated. The independent lossless 16-bit thermal stream and its Matroska
+recordings retain their existing format.
+
+The shared muxer uses the existing encoded frames without re-encoding. MISB
+selection and encoding do not depend on the vendor SDK or platform libraries.
+
+Every regular H.264/H.265 RTSP preview frame carries an unregistered user-data SEI NAL
 with telemetry, immediately before its first video slice. Both streams use
 this path on MT11 and A8. H.264 MP4 recordings and the browser's fragmented
 MP4 video also carry one telemetry SEI per frame. Original encoder SEI is

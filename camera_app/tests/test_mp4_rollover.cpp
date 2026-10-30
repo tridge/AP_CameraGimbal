@@ -39,7 +39,8 @@ extern "C" ssize_t __wrap_pwrite64(int fd, const void *data, size_t size, off64_
 
 int main(int argc, char **argv)
 {
-    assert(argc == 5);
+    assert(argc == 5 || argc == 6);
+    if(argc==6) ca_video_metadata_set_format(CA_VIDEO_TELEMETRY_MISB);
     filesystem = strtol(argv[3], NULL, 0);
     sparse = !strcmp(argv[4], "large") || !strcmp(argv[4], "no-idr");
     bool expected_failure = !strcmp(argv[4], "collision") || filesystem == -1;

@@ -223,6 +223,11 @@ sitl-angle-hold-test: sitl a8_sitl zr10_sitl
 	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend zr10 --build $(ZR10_SITL_BUILD)
 	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend zr10 --build $(ZR10_SITL_BUILD) --orientation inverted
 
+.PHONY: sitl-misb-telemetry-test
+sitl-misb-telemetry-test: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl
+	$(SITL_VIDEO_PYTHON) sitl/test_misb_telemetry.py
+	$(SITL_VIDEO_PYTHON) sitl/test_misb_telemetry.py --codec h265
+
 sitl-video-telemetry-test: sitl
 	python3 sitl/test_video_telemetry.py --backend mt11 --build $(SITL_BUILD) --check-stale
 	python3 sitl/test_video_telemetry.py --backend mt11 --build $(SITL_BUILD) --codec hevc

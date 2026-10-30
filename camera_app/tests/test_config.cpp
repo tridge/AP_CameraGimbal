@@ -78,6 +78,7 @@ int main(int argc, char **argv)
     assert(config.mavlink_camera_component_id == 100U);
     assert(config.mavlink_tcp_port == 14550U);
     assert(config.mavlink_udp_port == 14550U);
+    assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_APCG);
 
     fd = mkstemp(path);
     assert(fd >= 0);
@@ -101,6 +102,16 @@ int main(int argc, char **argv)
                  "iso = 800\nshutter = 1/250\nmetering = spot\n"
                  "white_balance = cloudy\n");
     assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    const size_t telemetry = (size_t)ca_config_param_find("VIDEO_META_FMT");
+    assert(ca_config_param_save(&config, path, telemetry, CA_VIDEO_TELEMETRY_MISB) == 0);
+    ca_config_defaults(&config);
+    assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB);
+    assert(ca_config_param_save(&config, path, telemetry, 2) < 0);
+    assert(ca_config_param_save(&config, path, telemetry, -1) < 0);
+    assert(ca_config_param_save(&config, path, telemetry, .5f) < 0);
+    assert(ca_config_param_save(&config, path, telemetry, NAN) < 0);
+    assert(ca_config_param_save(&config, path, telemetry, CA_VIDEO_TELEMETRY_APCG) == 0);
     assert(strcmp(config.timezone, "Australia/Brisbane") == 0);
     assert(config.photo_scope == CA_PHOTO_SCOPE_ALL);
     assert(strcmp(ca_photo_scope_name(config.photo_scope), "all") == 0);
@@ -131,7 +142,7 @@ int main(int argc, char **argv)
                   "ironbow") == 0);
     assert(strcmp(config.main_alias, "main.264") == 0 && config.sub_alias[0] == '\0');
 
-    assert(ca_config_param_count() == 53U);
+    assert(ca_config_param_count() == 54U);
     const ca_config_option *survey_options;
     int survey_min, survey_max;
     assert(config.survey.pattern==CA_SURVEY_BOTH);

@@ -1,4 +1,5 @@
 #include "camera_app/src/backends/zt30/recording.h"
+#include "camera_app/video_metadata.h"
 #include <atomic>
 #include <cassert>
 #include <cerrno>
@@ -11,6 +12,8 @@ struct ca_mp4 { FILE *file;unsigned stream; };
 static unsigned opens=0,closes=0,writes[2]{},fail_open=0;
 static bool fail_write=false,raw_active=false;
 static std::vector<std::string> files;
+static const char *extension="mp4";
+const char *ca_video_recording_extension() { return extension; }
 int ca_mp4_open(ca_mp4 **out,const char *path,unsigned w,unsigned h,unsigned fps) {
     assert(w && h && (fps==30 || fps==15));
     if(++opens==fail_open) { errno=EIO;return -1; }
@@ -44,5 +47,10 @@ int main(int argc,char **argv) {
     std::thread consumer([&] { uint64_t pts=10;while(recorder.active())recorder.frame(0,frame,pts++,true,58); });
     assert(recorder.set(false)==0);consumer.join();
     assert(!recorder.active() && closes==7);
+    extension="ts";
+    assert(recorder.set(true)==0);
+    const std::string misb_path=recorder.path();
+    assert(misb_path.size()>3 && misb_path.substr(misb_path.size()-3)==".ts");
+    assert(recorder.set(false)==0 && closes==9);
     puts("PASS ZT30 recording: keyframe gates, paired writers, unique paths, I/O rollback and concurrent stop");
 }

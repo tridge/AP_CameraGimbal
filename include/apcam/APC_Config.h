@@ -133,6 +133,10 @@ private:
         { "h265", CA_VIDEO_H265 },
 #endif
     };
+    inline static constexpr ca_config_option telemetry_options[] = {
+        {"apcg", CA_VIDEO_TELEMETRY_APCG},
+        {"misb", CA_VIDEO_TELEMETRY_MISB},
+    };
     inline static constexpr ca_config_option palette_options[] = {
         {"white_hot", CA_PALETTE_WHITE_HOT}, {"sepia", CA_PALETTE_SEPIA},
         {"ironbow", CA_PALETTE_IRONBOW}, {"rainbow", CA_PALETTE_RAINBOW},
@@ -183,6 +187,9 @@ private:
     };
 
     inline static constexpr Field _fields[] = {
+        {"video", "telemetry", Kind::Enum, offsetof(ca_config, video_telemetry_format),
+         sizeof(ca_video_telemetry_format), telemetry_options,
+         sizeof(telemetry_options) / sizeof(telemetry_options[0]), 0, 0, "VIDEO_META_FMT"},
 #ifdef CAMERA_APP_ZT30_DEV
         {"thermal", "hfov_cd", Kind::Uint, offsetof(ca_config, thermal_hfov_cd), sizeof(unsigned), NULL, 0, 0, 17900, "THERMAL_HFOV_CD"},
 #endif

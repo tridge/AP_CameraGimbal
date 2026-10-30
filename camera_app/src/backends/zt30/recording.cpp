@@ -1,5 +1,6 @@
 #include "recording.h"
 #include "camera_app/log.h"
+#include "camera_app/video_metadata.h"
 #include <cerrno>
 #include <cstdio>
 #include <ctime>
@@ -23,7 +24,8 @@ int Recording::paths_for_capture() {
     if(mkdir(directory.c_str(),0700) && errno!=EEXIST)return -1;
     for(unsigned suffix=0;suffix<1000;suffix++) {
         const std::string stem=directory+"/"+day+"_"+std::to_string(int64_t(now))+"_"+std::to_string(suffix);
-        paths[0]=stem+"_A.mp4";paths[1]=stem+"_I.mp4";
+        paths[0]=stem+"_A."+ca_video_recording_extension();
+        paths[1]=stem+"_I."+ca_video_recording_extension();
         struct stat st{};
         if(!lstat(paths[0].c_str(),&st) || errno!=ENOENT)continue;
         if(!lstat(paths[1].c_str(),&st) || errno!=ENOENT)continue;

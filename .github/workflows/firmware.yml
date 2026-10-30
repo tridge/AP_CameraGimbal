@@ -100,6 +100,12 @@ jobs:
         run: make zt30_sitl-test
       - name: Test RTSP buffer ownership and TCP socket options
         run: make -C camera_app xop-test
+      - name: Test both telemetry formats on every simulator
+        run: |
+          make -C camera_app tests/test_misb
+          camera_app/tests/test_misb
+          make -C camera_app rtsp-demand-test
+          make sitl-misb-telemetry-test
       - name: Test C++ web buffer ownership and escaping
         run: |
           make -C web tests/test_string_buffer

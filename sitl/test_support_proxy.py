@@ -65,9 +65,12 @@ def run_case(args, directory, fixture, signing=True, password=True, codec='h264'
         keydb_lib.set_video_publish_pass(db, engineer, PASSWORD)
     db.transaction_prepare_commit(); db.transaction_commit(); db.close()
     config = directory / 'camera.ini'
+    extension = '.ts' if args.telemetry_format == 'misb' else '.mp4'
     mavlink_enabled = args.case not in ('disabled', 'video-only')
     streams = 1 if args.case == 'single-video' else 2
-    config.write_text(f'''[mavlink]
+    config.write_text(f'''[video]
+telemetry = {args.telemetry_format}
+[mavlink]
 system_id = 0
 [recording]
 autorecord = true
@@ -141,7 +144,7 @@ network_gateway = 192.0.2.1
         feeder = threading.Thread(target=feed); feeder.start()
         if args.case == 'disabled':
             time.sleep(3)
-            assert camera.poll() is None and any(recordings.rglob('*.mp4'))
+            assert camera.poll() is None and any(recordings.rglob('*'+extension))
             assert 'SupportProxy MAVLink UDP connected' not in (directory / 'camera.log').read_text()
             assert 'RTSP publisher' not in (directory / 'proxy.log').read_text()
             assert 'have UDP conn1' not in (directory / 'proxy.log').read_text()
@@ -241,11 +244,11 @@ network_gateway = 192.0.2.1
             print('PASS raw thermal: MAVLink discovery, native 16-bit samples and capture telemetry through proxy', flush=True)
         check_raw()
         if args.reconnect:
-            before = sum(p.stat().st_size for p in recordings.rglob('*.mp4'))
+            before = sum(p.stat().st_size for p in recordings.rglob('*'+extension))
             connected = (directory / 'camera.log').read_text().count('publishing')
             stop_group(proxy)
             time.sleep(3)
-            after = sum(p.stat().st_size for p in recordings.rglob('*.mp4'))
+            after = sum(p.stat().st_size for p in recordings.rglob('*'+extension))
             assert after > before and camera.poll() is None, 'proxy outage interrupted local recording'
             proxy = subprocess.Popen([str(args.proxy / 'supportproxy')], cwd=directory,
                                      stdout=proxy_log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -273,6 +276,7 @@ def main():
     parser.add_argument('--build', type=Path, default=REPO / 'build/sitl')
     parser.add_argument('--proxy', type=Path, default=REPO.parent / 'SupportProxy')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--telemetry-format', choices=['apcg', 'misb'], default='apcg')
     parser.add_argument('--case', choices=['signed', 'session', 'hevc', 'disabled', 'video-only', 'single-video'], default='signed')
     parser.add_argument('--reconnect', action='store_true')
     parser.add_argument('--raw-thermal', action='store_true')

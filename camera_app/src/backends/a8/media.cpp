@@ -13,6 +13,7 @@
 #include <dlfcn.h>
 #include "camera_app/video_fov.h"
 #include "camera_app/mp4.h"
+#include "camera_app/video_metadata.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/still.h"
 
@@ -253,8 +254,8 @@ static int make_recording_path(struct APC_Media_A8_State *media)
     for (unsigned suffix = 0; suffix < 1000U; suffix++) {
         int length = snprintf(media->recording_path,
                               sizeof(media->recording_path),
-                              "%s/%s_%lld_A%s.mp4", directory, day,
-                              (long long)now, suffix == 0U ? "" : "_next");
+                              "%s/%s_%lld_A%s.%s", directory, day,
+                              (long long)now, suffix == 0U ? "" : "_next", ca_video_recording_extension());
         if (length < 0 || (size_t)length >= sizeof(media->recording_path)) {
             errno = ENAMETOOLONG;
             return -1;

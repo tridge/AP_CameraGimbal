@@ -10,6 +10,7 @@
 #include "camera_app/live_video_server.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/mp4.h"
+#include "camera_app/video_metadata.h"
 #include "camera_app/log.h"
 #include "camera_app/still.h"
 #include <errno.h>
@@ -188,8 +189,8 @@ int APC_Media_RPiLibcam::set_recording(bool active)
         struct stat st;
         if (stat(m->config.record_root, &st) || !S_ISDIR(st.st_mode)) { result = -1; goto done; }
         struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
-        int n = snprintf(m->path, sizeof(m->path), "%s/RPI_%lld_%09ld.mp4",
-                         m->config.record_root, (long long)now.tv_sec, now.tv_nsec);
+        int n = snprintf(m->path, sizeof(m->path), "%s/RPI_%lld_%09ld.%s",
+                         m->config.record_root, (long long)now.tv_sec, now.tv_nsec, ca_video_recording_extension());
         if (n < 0 || n >= (int)sizeof(m->path)) { errno = ENAMETOOLONG; result = -1; goto done; }
         if (ca_mp4_open(&m->mp4, m->path, m->width, m->height, frame_rate(false)) < 0) { result = -1; goto done; }
         m->wait_key = true;

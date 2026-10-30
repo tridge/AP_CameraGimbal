@@ -26,6 +26,7 @@
 #include "camera_app/log.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/mp4.h"
+#include "camera_app/video_metadata.h"
 #include "camera_app/sitl_terrain.h"
 
 #include <pthread.h>
@@ -740,9 +741,9 @@ int APC_Media_SITL::set_recording(bool active)
         /* Reserve unique names even after a simulator restart. */
         for (unsigned i = 0U; i < media->record_channels; i++) {
             int n = snprintf(media->recording_path[i], sizeof(media->recording_path[i]),
-                             "%s/SITL_%u_XXXXXX.mp4", media->record_root, i);
+                             "%s/SITL_%u_XXXXXX.%s", media->record_root, i, ca_video_recording_extension());
             if (n < 0 || (size_t)n >= sizeof(media->recording_path[i])) { result = -1; break; }
-            int fd = mkstemps(media->recording_path[i], 4);
+            int fd = mkstemps(media->recording_path[i], 1+strlen(ca_video_recording_extension()));
             if (fd < 0) { result = -1; break; }
             close(fd);
             unlink(media->recording_path[i]);
