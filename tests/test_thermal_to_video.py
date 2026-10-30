@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import struct
 from pathlib import Path
 import sys
 import tempfile
@@ -114,6 +115,70 @@ class ThermalArchiveTests(unittest.TestCase):
         for name in ('../escape.bin', '/escape.bin', 'a/b.bin', 'a\\b.bin', 'C:escape.bin', '\0.bin'):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 thermal.output_name(dict(original_filename=name, frame_id=1))
+
+    def write_tlog(self):
+        from pymavlink.dialects.v20 import ardupilotmega as mavlink
+        writer = mavlink.MAVLink(None, srcSystem=1, srcComponent=1)
+        path = self.root / 'flight.tlog'
+        start = thermal.filename_time(Path(self.names[0])) / 1000
+        with path.open('wb') as dest:
+            for dt in (-0.1, 0.1):
+                # Deliberately reset boot time: matching must use tlog UTC.
+                boot = 90000 if dt < 0 else 5
+                messages = [mavlink.MAVLink_attitude_message(boot, 0.1, 0.2, 0.3, 0, 0, 0.4),
+                            mavlink.MAVLink_global_position_int_message(
+                                boot, -350000000, 1490000000, 600000, 50000, 100, 200, -100, 0)]
+                for name, value in [('CROLL', 2), ('CPITCH', -70), ('CYAW', 179 if dt < 0 else -179),
+                                    ('TMIN', 3.5), ('TMAX', 42.25), ('SIYI_LIDR', 120.5)]:
+                    messages.append(mavlink.MAVLink_named_value_float_message(boot, name.encode(), value))
+                for message in messages:
+                    dest.write(struct.pack('>Q', round((start + dt) * 1e6)))
+                    dest.write(message.pack(writer))
+        return path
+
+    def test_tlog_encode_and_update_preserve_pixels_and_timestamps(self):
+        import av
+        log = self.write_tlog()
+        thermal.encode(self.source, self.video)
+        updated = self.root / 'updated.mkv'
+        result = thermal.update_metadata(self.video, updated, tlog=log)
+        self.assertEqual(result['coverage']['gimbal_attitude'], 3)
+        with av.open(str(self.video)) as old, av.open(str(updated)) as new:
+            old_packets = [p for p in old.demux(video=0) if p.size]
+            new_packets = [p for p in new.demux(video=0) if p.size]
+            self.assertEqual([(p.pts, bytes(p)) for p in old_packets], [(p.pts, bytes(p)) for p in new_packets])
+            metadata = thermal.packet_metadata(new_packets[0])
+            snapshot = metadata['telemetry']
+            self.assertEqual(snapshot['position']['alt_amsl_m'], 600)
+            self.assertEqual(snapshot['position']['alt_relative_m'], 50)
+            self.assertEqual(snapshot['velocity']['vn_m_s'], 1)
+            self.assertAlmostEqual(snapshot['gimbal_attitude']['pitch_rad'], math.radians(-70), places=6)
+            self.assertAlmostEqual(abs(snapshot['gimbal_attitude']['yaw_rad']), math.pi, places=6)
+            self.assertEqual(metadata['gimbal_pose_source']['pitch']['name'], 'CPITCH')
+            self.assertEqual(snapshot['named_values']['TMAX']['value'], 42.25)
+            self.assertEqual(snapshot['named_values']['TMIN']['value'], 3.5)
+            self.assertEqual(snapshot['named_values']['SIYI_LIDR']['value'], 120.5)
+            self.assertEqual(snapshot['named_values']['TMAX']['method'], 'previous')
+            self.assertEqual(snapshot['named_values']['TMAX']['age_ms'], 100)
+        extracted = self.root / 'updated-raw'
+        self.assertEqual(thermal.extract(updated, extracted)['checksums_verified'], 3)
+        encoded = self.root / 'with-tlog.mkv'
+        thermal.encode(self.source, encoded, tlog=log)
+        with av.open(str(encoded)) as c:
+            self.assertIsNotNone(thermal.packet_metadata(next(c.demux(video=0)))['telemetry']['gimbal_attitude'])
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            thermal.update_metadata(self.video, updated, tlog=log)
+        # A clean packet-boundary cut must never publish a partial archive.
+        data = self.video.read_bytes()
+        self.video.write_bytes(data[:data.rfind(bytes.fromhex('1f43b675'))])
+        broken = self.root / 'broken.mkv'
+        with self.assertRaisesRegex(ValueError, 'incomplete archive'):
+            thermal.update_metadata(self.video, broken, tlog=log)
+        self.assertFalse(broken.exists())
+
+    def test_camera_timestamp_with_host_timestamp_suffix(self):
+        path = Path('2026-08-28_02-08-32_5_I_2026_08_28_12_08_32_359.bin')
+        self.assertEqual(thermal.filename_time(path), thermal.filename_time(Path(self.names[0])))
 
 
 
@@ -236,6 +301,58 @@ class ReconstructedTelemetryTests(unittest.TestCase):
         _, columns, _ = series
         self.assertAlmostEqual(columns['pitch_rad'][0], math.radians(-35))
         self.assertAlmostEqual(columns['yaw_rad'][1], math.radians(40))
+
+    def test_long_gaps_are_not_interpolated(self):
+        telemetry = self.telemetry()
+        telemetry.max_gap_ms = 200
+        self.assertIsNone(telemetry.sample(1500, 0)['gimbal_attitude'])
+        self.assertIsNotNone(telemetry.sample(1000, 0)['gimbal_attitude'])
+        self.assertIsNotNone(telemetry.sample(2000, 0)['gimbal_attitude'])
+
+    def test_named_sources_gaps_invalid_values_and_yaw_wrap(self):
+        named = {('CYAW', 1, 1): ([1000, 1200, 10000], [179, -179, 90]),
+                 ('CYAW', 252, 231): ([1000, 1200], [0, 0]),
+                 ('TMAX', 252, 231): ([1000, 1200], [20, 50]),
+                 ('SIYI_LIDR', 1, 1): ([1000, 1200], [10, 0])}
+        telemetry = thermal.TlogTelemetry({}, named, 'flight.tlog', max_gap_ms=2000)
+        yaw = telemetry.named_sample('CYAW', 1100, angle=True)
+        self.assertAlmostEqual(yaw['value'], 180)
+        self.assertEqual(yaw['source']['system_id'], 1)
+        self.assertEqual(telemetry.named_sample('TMAX', 1100)['value'], 20)
+        self.assertEqual(telemetry.named_sample('TMAX', 1100)['age_ms'], 100)
+        self.assertFalse(telemetry.named_sample('SIYI_LIDR', 1300)['valid'])
+        self.assertIsNone(telemetry.named_sample('CYAW', 5000, angle=True))
+        self.assertEqual(telemetry.named_sample('CYAW', 1800, angle=True)['method'], 'nearest')
+        self.assertIsNone(telemetry.named_sample('TMAX', 5000))
+        self.assertIsNone(telemetry.named_sample('TMAX', 500))
+        # An exact finite sample survives an invalid neighbour; the interval
+        # touching the invalid angle cannot supply a reconstructed pose.
+        named[('CYAW', 1, 1)] = ([1000, 1200], [179, float('nan')])
+        del named[('CYAW', 252, 231)]
+        self.assertTrue(telemetry.named_sample('CYAW', 1000, angle=True)['valid'])
+        self.assertFalse(telemetry.named_sample('CYAW', 1100, angle=True)['valid'])
+
+    def test_temperature_log_anomaly_is_retained_and_flagged(self):
+        named = {(name, 252, 231): ([1000], [value])
+                 for name, value in [('TMIN', 645.21), ('TMAX', 16.79)]}
+        snap = thermal.TlogTelemetry({}, named, 'flight.tlog').sample(1000, 0)
+        low = snap['named_values']['TMIN']
+        self.assertEqual(low['value'], 645.21)
+        self.assertFalse(low['valid'])
+        self.assertEqual(low['invalid_reason'], 'logged_minimum_exceeds_maximum')
+        self.assertTrue(snap['named_values']['TMAX']['valid'])
+
+    def test_measured_tlog_wins_and_old_stale_metadata_is_removed(self):
+        telemetry = thermal.CombinedTelemetry()
+        telemetry.tlog = thermal.TlogTelemetry({}, {
+            (name, 1, 1): ([1000, 2000], [value, value])
+            for name, value in [('CROLL', 0), ('CPITCH', -75), ('CYAW', 20)]}, 'flight.tlog')
+        existing = self.telemetry().sample(1500, 0)
+        existing['position']['age_ms'] = 700000
+        result = telemetry.sample(1500, 0, existing, dict(pitch='demanded'))
+        self.assertAlmostEqual(result['gimbal_attitude']['pitch_rad'], math.radians(-75), places=6)
+        self.assertIsNone(result['position'])
+        self.assertEqual(telemetry.gimbal_source['pitch']['name'], 'CPITCH')
 
 
 if __name__ == '__main__':

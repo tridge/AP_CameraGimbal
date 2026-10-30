@@ -74,7 +74,9 @@ invalid input, checksum errors and incomplete archives are rejected.
 
 By default, playback timing comes from the camera filenames
 `YYYY-MM-DD_HH-MM-SS_MILLISECONDS_I.bin`, sorted by parsed time (so `_13` is
-13 milliseconds, before `_100`). If any filename lacks that format, file
+13 milliseconds, before `_100`). Names with an additional host reception timestamp,
+such as `2026-08-28_03-08-46_548_I_2026_08_28_13_08_46_880.bin`, also use the
+first (camera UTC) timestamp. If any filename lacks that format, file
 modification times are used for ordering and timing instead. `--fps 5` overrides
 playback timing with a fixed 5 Hz cadence while retaining original names and
 modification times. This does not resample or discard any frames. Gaps in the
@@ -84,8 +86,8 @@ The per-frame `apcg.thermal.v1` metadata includes temperature range, original
 filename, file modification time in nanoseconds, source SHA-256 and archive frame
 count. `capture_monotonic_us` is reconstructed elapsed time plus one microsecond,
 marked `capture_clock=reconstructed_relative` and `timestamp_source=legacy_*`;
-it is not a recovered hardware clock. Filename timezone is not assumed. Old raw
-files have no vehicle/gimbal pose, so `telemetry` is null unless a dataflash log
+it is not a recovered hardware clock. Camera filenames are treated as UTC. Old raw
+files have no vehicle/gimbal pose, so `telemetry` is null unless `--bin` or `--tlog`
 is supplied. Display rotation is 180 degrees by default (upright MT11);
 `--rotation 0` changes this metadata only.
 
@@ -103,6 +105,51 @@ vehicle-relative yaw, converting earth-referenced yaw with the vehicle yaw. The
 chosen source per axis is recorded in each frame's `gimbal_pose_source`. This
 needs `pymavlink`. Requires filenames or modification times that already sit on
 the same absolute UTC clock as the log; it does not resample frames.
+
+`--tlog FLIGHT.tlog` adds SIYI measurements from `NAMED_VALUE_FLOAT`: `CROLL`,
+`CPITCH`, `CYAW` are degrees, with level roll/pitch and vehicle-relative yaw, and
+take priority over dataflash `MNT` (including demanded angles). The sender's yaw
+sign is already converted by the SIYI driver; the converter does not negate it.
+Position, velocity and vehicle attitude from `GLOBAL_POSITION_INT` / `ATTITUDE`
+fill missing dataflash fields, so `--tlog` can also be used without `--bin`.
+Timestamp matching uses the tlog's reception UTC. Named values often reuse an
+older `ATTITUDE.time_boot_ms`, and aircraft reboots invalidate a single boot-time
+offset. Reception timestamps retain transport delay; this is not hardware exposure
+synchronisation.
+
+The snapshot's `telemetry.named_values` contains `TMIN`, `TMAX` (degrees Celsius),
+`SIYI_LIDR` and the SIYI module's `RFND` (slant range in metres). Each entry is
+null when unavailable, otherwise it contains `value`, `unit`, `valid`, `age_ms`,
+`sample_utc_us`, `method` and `source` (log, message, name, system/component IDs and
+clock basis). Temperatures and range hold the most recent actual measurement;
+they are not interpolated. Zero/negative lidar distances are retained with
+`valid=false`. A simultaneously logged `TMIN > TMAX` is flagged invalid while
+preserving its value: older SIYI readers can report negative temperatures as
+unsigned values around 655 C. No undocumented correction is applied to the log.
+These measurements remain separate from `minimum_c`/`maximum_c`, which describe
+the raw frame's pixels using its stored temperature scale.
+
+`--max-telemetry-gap SECONDS` defaults to 2. Longer gaps are not interpolated.
+Gimbal angles can use a nearest measurement within half that interval at a gap's
+edge; their `gimbal_pose_source` records the method, sender, age and sample UTC
+per axis. Angles otherwise interpolate between samples from the same sender,
+following the shortest arc. Scalar named measurements expire after the full
+interval. Missing pose fields remain null; increasing the limit trades temporal
+accuracy for coverage.
+
+For an existing archive, update telemetry without decoding/re-encoding any video:
+
+```sh
+python3 tools/thermal_to_video.py --update-metadata old.mkv with-telemetry.mkv \
+    --bin FLIGHT.bin --tlog flight1/flight.tlog
+```
+
+The update preserves encoded FFV1 packets, playback and capture timestamps,
+pixel checksums and original file metadata. Existing valid vehicle telemetry is
+retained when `--bin` is omitted, with tlog data filling missing fields. A complete
+single-track converter archive with its frame count is required; the output must
+not exist. The final report counts frames with each pose/measurement available
+(invalid measurements are excluded).
 
 `--extract --metadata` additionally writes a matching `.json` for each `.bin`.
 Extraction also accepts recordings of the new camera stream; without original

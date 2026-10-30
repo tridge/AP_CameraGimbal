@@ -3,13 +3,16 @@
 
 Encode:  thermal_to_video.py CAPTURE_DIRECTORY OUTPUT.mkv
 Extract: thermal_to_video.py --extract INPUT.mkv OUTPUT_DIRECTORY
+Update:  thermal_to_video.py --update-metadata INPUT.mkv OUTPUT.mkv --tlog FLIGHT.tlog
 Requires numpy and PyAV >=18.1. Existing outputs are never overwritten.
 
 Old captures carry only a timestamp, so their per-frame telemetry is null.
 Pass --bin FLIGHT.bin (an ArduPilot dataflash log) to reconstruct each frame's
 position, velocity, and vehicle and gimbal attitude from the log, matched to the
 frame's absolute UTC time, filling the apcg.telemetry.v1 snapshot. This also
-requires pymavlink.
+requires pymavlink. --tlog also supplies measured SIYI CROLL/CPITCH/CYAW (degrees,
+level roll/pitch, vehicle-relative yaw), TMIN/TMAX (Celsius) and SIYI_LIDR (metres).
+Tlog timestamps are reception UTC, not the frequently reused time_boot_ms.
 """
 import argparse
 import bisect
@@ -35,7 +38,8 @@ TELEMETRY_SCHEMA = 'apcg.telemetry.v1'
 GPS_UNIX_EPOCH = 315964800  # 1980-01-06 UTC, in Unix seconds
 GPS_LEAP_SECONDS = 18       # GPS minus UTC; constant since 2017-01
 # Milliseconds are an integer, not a decimal fraction: _13 means 13 ms.
-FILENAME_TIME = re.compile(r'^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d{1,3})(?:_\d+)?_I\.bin$')
+FILENAME_TIME = re.compile(r'^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d{1,3})(?:_\d+)?_I'
+                           r'(?:_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}_\d{1,3})?\.bin$')
 
 
 def uint(value):
@@ -116,7 +120,8 @@ class BinTelemetry:
     yields null for that field, so frames captured before the log started (or
     after it ended) keep a reconstructed clock with a null pose."""
 
-    def __init__(self, series, source_name, gimbal_yaw_earth=False, gimbal_source=None):
+    def __init__(self, series, source_name, gimbal_yaw_earth=False, gimbal_source=None,
+                 max_gap_ms=2000):
         self.series = series  # name -> (times, {column: values}, angle_columns)
         self.source_name = source_name
         # This gimbal log carries earth-referenced yaw; sample() subtracts the
@@ -124,6 +129,7 @@ class BinTelemetry:
         self.gimbal_yaw_earth = gimbal_yaw_earth
         # Which MNT field each gimbal axis came from (actual vs demanded).
         self.gimbal_source = gimbal_source
+        self.max_gap_ms = max_gap_ms
 
     def _interp(self, name, utc_ms):
         entry = self.series.get(name)
@@ -136,6 +142,8 @@ class BinTelemetry:
         lo = max(0, hi - 1)
         span = times[hi] - times[lo]
         fraction = (utc_ms - times[lo]) / span if span else 0.0
+        if 0 < fraction < 1 and span > self.max_gap_ms:
+            return None, None
         out = {}
         for column, values in columns.items():
             a, b = values[lo], values[hi]
@@ -199,7 +207,7 @@ class BinTelemetry:
         return snapshot
 
 
-def load_bin_telemetry(bin_path):
+def load_bin_telemetry(bin_path, max_gap_ms=2000):
     """Read the pose time-series a dataflash log needs to reconstruct telemetry.
 
     GPS week/ms give absolute UTC against each record's boot-relative TimeUS, so
@@ -233,7 +241,8 @@ def load_bin_telemetry(bin_path):
         raise ValueError('%s has no GPS UTC; cannot align frame timestamps' % bin_path.name)
     boot_ms = statistics.median(boot_offsets) * 1000.0
     built, gimbal_yaw_earth, gimbal_source = build_telemetry_series(rows, boot_ms)
-    return BinTelemetry(built, bin_path.name, gimbal_yaw_earth, gimbal_source)
+    log.close()
+    return BinTelemetry(built, bin_path.name, gimbal_yaw_earth, gimbal_source, max_gap_ms)
 
 
 def euler_yaw_rate_series(rate_records, attitude, boot_ms):
@@ -349,6 +358,200 @@ def build_gimbal(records, boot_ms, rad):
     return (times, data, {'yaw_rad'}), yaw_earth, source
 
 
+class TlogTelemetry(BinTelemetry):
+    """Reception-time telemetry; keep named-value senders separate when interpolating.
+
+    Angles use bounded interpolation. Temperatures and range use the last actual
+    measurement, with its timestamp and age, rather than invented intermediate
+    measurements. No boot-clock alignment is attempted: SIYI's local MAVProxy
+    messages reuse the most recent ATTITUDE timestamp and the aircraft may reboot.
+    """
+
+    def __init__(self, series, named, source_name, max_gap_ms=2000):
+        super().__init__(series, source_name, max_gap_ms=max_gap_ms)
+        self.named = named
+
+    def named_sample(self, name, utc_ms, angle=False):
+        candidates = []
+        for (key, sysid, compid), (times, values) in self.named.items():
+            if key != name or not times:
+                continue
+            hi = bisect.bisect_right(times, utc_ms)
+            lo = hi - 1
+            method = 'previous'
+            if angle and 0 < hi < len(times) and times[hi] - times[lo] <= self.max_gap_ms:
+                span = times[hi] - times[lo]
+                fraction = (utc_ms - times[lo]) / span
+                value = values[lo] if fraction == 0 else math.degrees(
+                    _lerp_angle(math.radians(values[lo]), math.radians(values[hi]), fraction))
+                nearest = lo if utc_ms - times[lo] <= times[hi] - utc_ms else hi
+                age = abs(utc_ms - times[nearest])
+                method = 'linear_shortest_arc'
+            elif angle:
+                nearest = min((i for i in (lo, hi) if 0 <= i < len(times)),
+                              key=lambda i: abs(times[i] - utc_ms))
+                age = abs(times[nearest] - utc_ms)
+                # At the edge of a long outage, only a nearby real sample is useful.
+                if age > self.max_gap_ms / 2:
+                    continue
+                value = values[nearest]
+                method = 'nearest'
+            else:
+                if lo < 0:
+                    continue
+                nearest = lo
+                age = utc_ms - times[lo]
+                value = values[lo]
+            if age > self.max_gap_ms:
+                continue
+            valid = math.isfinite(value)
+            if name in ('SIYI_LIDR', 'RFND') and valid:
+                valid = value > 0
+            record = dict(value=value if math.isfinite(value) else None,
+                          unit='deg' if angle else 'm' if name in ('SIYI_LIDR', 'RFND') else 'degC',
+                          age_ms=round(age), sample_utc_us=round(times[nearest] * 1000),
+                          valid=valid, method=method,
+                          source=dict(log=self.source_name, message='NAMED_VALUE_FLOAT',
+                                      name=name, system_id=sysid, component_id=compid,
+                                      timestamp_basis='tlog_reception_utc'))
+            candidates.append((not valid, age, sysid, compid, record))
+        return min(candidates, key=lambda c: c[:4])[-1] if candidates else None
+
+    def sample(self, utc_ms, pts_ms):
+        snapshot = super().sample(utc_ms, pts_ms)
+        axes = {axis: self.named_sample(name, utc_ms, angle=True)
+                for axis, name in (('roll', 'CROLL'), ('pitch', 'CPITCH'), ('yaw', 'CYAW'))}
+        self.gimbal_source = None
+        if all(record is not None and record['valid'] for record in axes.values()):
+            snapshot['gimbal_attitude'] = {
+                axis + '_rad': round(_wrap_pi(math.radians(record['value'])), 6)
+                for axis, record in axes.items()}
+            snapshot['gimbal_attitude']['age_ms'] = max(r['age_ms'] for r in axes.values())
+            self.gimbal_source = {axis: dict(record['source'], method=record['method'],
+                                            age_ms=record['age_ms'], sample_utc_us=record['sample_utc_us'])
+                                  for axis, record in axes.items()}
+            self.gimbal_source['yaw_frame'] = 'vehicle'
+        snapshot['named_values'] = {name: self.named_sample(name, utc_ms)
+                                   for name in ('TMIN', 'TMAX', 'SIYI_LIDR', 'RFND')}
+        low, high = (snapshot['named_values'][key] for key in ('TMIN', 'TMAX'))
+        if (low and high and low['valid'] and high['valid'] and
+                low['source']['system_id'] == high['source']['system_id'] and
+                low['source']['component_id'] == high['source']['component_id'] and
+                abs(low['sample_utc_us'] - high['sample_utc_us']) < 50000 and low['value'] > high['value']):
+            # Old SIYI readers decoded negative int16 temperatures as uint16.
+            # Preserve the logged value, but don't label e.g. 645 C as valid.
+            low['valid'] = False
+            low['invalid_reason'] = 'logged_minimum_exceeds_maximum'
+        return snapshot
+
+
+def load_tlog_telemetry(path, max_gap_ms=2000):
+    try:
+        from pymavlink import mavutil
+    except ImportError as error:
+        raise RuntimeError('Install pymavlink for --tlog: python3 -m pip install pymavlink') from error
+    if not path.is_file():
+        raise ValueError('tlog not found: %s' % path)
+    log = mavutil.mavlink_connection(str(path))
+    named, vehicle = {}, {}
+    print('Reading telemetry from %s' % path, flush=True)
+    try:
+        while True:
+            message = log.recv_match(type=['NAMED_VALUE_FLOAT', 'ATTITUDE', 'GLOBAL_POSITION_INT'])
+            if message is None:
+                break
+            kind = message.get_type()
+            stamp = message._timestamp * 1000
+            if not math.isfinite(stamp) or stamp < 946684800000:
+                continue  # a timestamped tlog with an absolute UTC clock is required
+            if kind == 'NAMED_VALUE_FLOAT':
+                name = message.name
+                if isinstance(name, bytes):
+                    name = name.decode('ascii', errors='replace')
+                name = name.rstrip('\0')
+                if name in ('CROLL', 'CPITCH', 'CYAW', 'TMIN', 'TMAX', 'SIYI_LIDR', 'RFND'):
+                    key = (name, message.get_srcSystem(), message.get_srcComponent())
+                    named.setdefault(key, []).append((stamp, message.value))
+            else:
+                key = (message.get_srcSystem(), message.get_srcComponent())
+                vehicle.setdefault(key, {}).setdefault(kind, []).append((stamp, message))
+    finally:
+        log.close()
+
+    def ordered(records):
+        # A duplicate UTC stamp uses the last received value. Sorting also handles
+        # small reception-clock regressions without making bisect unreliable.
+        return sorted(dict(records).items())
+
+    named = {key: tuple(zip(*ordered(records))) for key, records in named.items()}
+    # Never combine vehicle poses from different aircraft/components. Choose the
+    # sender with the most position samples (ATTITUDE count breaks ties).
+    senders = [key for key, rows in vehicle.items() if rows.get('GLOBAL_POSITION_INT')]
+    if len({key[0] for key in senders}) > 1:
+        raise ValueError('tlog contains multiple aircraft; supply a log for one aircraft')
+    rows = vehicle[max(vehicle, key=lambda k: (len(vehicle[k].get('GLOBAL_POSITION_INT', [])),
+                                              len(vehicle[k].get('ATTITUDE', []))))] if vehicle else {}
+    series = {}
+
+    def add(name, kind, readers, angles=()):
+        records = ordered(rows.get(kind, []))
+        usable = [(t, [read(m) for read in readers.values()]) for t, m in records]
+        if name != 'vehicle_rate':
+            usable = [(t, v) for t, v in usable if all(math.isfinite(x) for x in v)]
+        if usable:
+            series[name] = ([t for t, _ in usable],
+                            {key: [v[i] for _, v in usable] for i, key in enumerate(readers)}, set(angles))
+
+    add('position', 'GLOBAL_POSITION_INT', {
+        'lat_e7': lambda m: m.lat, 'lon_e7': lambda m: m.lon,
+        'alt_amsl_m': lambda m: m.alt / 1000, 'alt_relative_m': lambda m: m.relative_alt / 1000})
+    add('velocity', 'GLOBAL_POSITION_INT', {
+        'vn_m_s': lambda m: m.vx / 100, 've_m_s': lambda m: m.vy / 100, 'vd_m_s': lambda m: m.vz / 100})
+    add('vehicle_attitude', 'ATTITUDE', {
+        'roll_rad': lambda m: m.roll, 'pitch_rad': lambda m: m.pitch, 'yaw_rad': lambda m: m.yaw}, ('yaw_rad',))
+    add('vehicle_rate', 'ATTITUDE', {
+        'yaw_rate_rad_s': lambda m: ((m.pitchspeed * math.sin(m.roll) + m.yawspeed * math.cos(m.roll)) /
+                                   math.cos(m.pitch)) if abs(math.cos(m.pitch)) >= 1e-3 else float('nan')})
+    if not named and not series:
+        raise ValueError('tlog has no usable timestamped camera or vehicle telemetry')
+    return TlogTelemetry(series, named, path.name, max_gap_ms)
+
+
+class CombinedTelemetry:
+    """Prefer dataflash vehicle pose and measured tlog gimbal pose, per frame."""
+
+    def __init__(self, bin_log=None, tlog=None, max_gap_ms=2000):
+        self.bin = load_bin_telemetry(bin_log, max_gap_ms) if bin_log else None
+        self.tlog = load_tlog_telemetry(tlog, max_gap_ms) if tlog else None
+        self.source_name = ', '.join(str(p) for p in (bin_log, tlog) if p)
+        self.max_gap_ms = max_gap_ms
+        self.gimbal_source = None
+
+    def sample(self, utc_ms, pts_ms, existing=None, gimbal_source=None):
+        base = self.bin.sample(utc_ms, pts_ms) if self.bin else dict(existing or {})
+        self.gimbal_source = self.bin.gimbal_source if self.bin else gimbal_source
+        other = self.tlog.sample(utc_ms, pts_ms) if self.tlog else {}
+        base.update(schema=TELEMETRY_SCHEMA, utc_us=round(utc_ms * 1000), pts90k=round(pts_ms * 90))
+        for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude'):
+            value = base.get(key)
+            if value is not None and value.get('age_ms', float('inf')) > self.max_gap_ms:
+                value = None
+            if key == 'gimbal_attitude' and value is not None and not all(
+                    axis + '_rad' in value for axis in ('roll', 'pitch', 'yaw')):
+                value = None
+            if (key == 'gimbal_attitude' and other.get(key)) or value is None:
+                value = other.get(key)
+                if key == 'gimbal_attitude':
+                    self.gimbal_source = self.tlog.gimbal_source if self.tlog and value else None
+            base[key] = value
+        base['heading_rad'] = base['vehicle_attitude']['yaw_rad'] if base['vehicle_attitude'] else None
+        base.setdefault('zoom', None)
+        base.setdefault('hfov_deg', None)
+        if self.tlog:
+            base['named_values'] = other['named_values']
+        return base
+
+
 def inputs(directory, fps=None):
     if not directory.is_dir():
         raise ValueError('encoding input must be a directory')
@@ -396,12 +599,12 @@ def dependencies():
     return av, np
 
 
-def encode(directory, output, fps=None, rotation=180, bin_log=None):
+def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, max_gap_ms=2000):
     av, np = dependencies()
     entries, timestamps, duration_ns, timing = inputs(directory, fps)
     if output.exists():
         raise ValueError('output already exists: %s' % output)
-    telemetry = load_bin_telemetry(bin_log) if bin_log is not None else None
+    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms) if bin_log or tlog else None
     codec = av.CodecContext.create('ffv1', 'w')
     codec.width, codec.height = WIDTH, HEIGHT
     codec.pix_fmt = 'gray16le'
@@ -472,6 +675,85 @@ def packet_metadata(packet):
     if type(m.get('frame_id')) is not int or m['frame_id'] < 1:
         raise ValueError('invalid frame ID')
     return m
+
+
+def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
+    """Copy encoded FFV1 packets verbatim, replacing only their telemetry JSON."""
+    av, _ = dependencies()
+    if not source.is_file():
+        raise ValueError('metadata update input must be a Matroska file')
+    if output.exists():
+        raise ValueError('output already exists: %s' % output)
+    if not bin_log and not tlog:
+        raise ValueError('metadata update needs --bin or --tlog')
+    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.' + output.name + '.', suffix='.tmp', dir=output.parent)
+    temporary = Path(name)
+    count, expected_count = 0, None
+    coverage = {k: 0 for k in ('position', 'vehicle_attitude', 'gimbal_attitude', 'TMIN', 'TMAX', 'SIYI_LIDR')}
+    start = last_report = time.monotonic()
+    try:
+        with os.fdopen(fd, 'wb') as dest, av.open(str(source)) as container:
+            if len(container.streams.video) != 1 or container.streams.video[0].codec_context.name != 'ffv1':
+                raise ValueError('expected one FFV1 video track')
+            if len(container.streams) != 1:
+                raise ValueError('metadata update only supports a single-track thermal archive')
+            stream = container.streams.video[0]
+            if not container.duration or not stream.codec_context.extradata:
+                raise ValueError('missing archive duration or FFV1 CodecPrivate')
+            duration_ns = round(1e9 / stream.average_rate) if stream.average_rate else 200000000
+            dest.write(matroska_header(stream.codec_context.extradata, duration_ns, container.duration / 1000))
+            for packet in container.demux(stream):
+                if not packet.size:
+                    continue
+                if packet.is_corrupt or not packet.is_keyframe or packet.pts is None:
+                    raise ValueError('expected intact independently coded FFV1 packets with timestamps')
+                pts = packet.pts * packet.time_base * 1000
+                if pts.denominator != 1 or pts < 0:
+                    raise ValueError('expected nonnegative millisecond archive timestamps')
+                pts = int(pts)
+                metadata = packet_metadata(packet)
+                total = metadata.get('archive_frame_count')
+                if count == 0:
+                    expected_count = total
+                if (type(total) is not int or total < 1 or total != expected_count or
+                        metadata['frame_id'] != count + 1):
+                    raise ValueError('missing or inconsistent archive frame count/order')
+                existing = metadata.get('telemetry')
+                stamp_us = existing.get('utc_us') if isinstance(existing, dict) else None
+                if not isinstance(stamp_us, (int, float)) or not math.isfinite(stamp_us) or stamp_us <= 0:
+                    stamp = filename_time(Path(output_name(metadata)))
+                    if stamp is None:
+                        raise ValueError('frame has no absolute UTC timestamp')
+                else:
+                    stamp = stamp_us / 1000
+                snapshot = telemetry.sample(stamp, pts, existing, metadata.get('gimbal_pose_source'))
+                metadata['telemetry'] = snapshot
+                if telemetry.gimbal_source:
+                    metadata['gimbal_pose_source'] = telemetry.gimbal_source
+                else:
+                    metadata.pop('gimbal_pose_source', None)
+                dest.write(matroska_frame(bytes(packet), metadata, pts))
+                count += 1
+                for key in coverage:
+                    value = snapshot.get(key) if key in snapshot else snapshot.get('named_values', {}).get(key)
+                    if value is not None and value.get('valid', True):
+                        coverage[key] += 1
+                now = time.monotonic()
+                if now - last_report >= 10:
+                    print('  %u frames updated, %.1f MB written' % (count, dest.tell()/1e6), flush=True)
+                    last_report = now
+            if not count or count != expected_count:
+                raise ValueError('incomplete archive: read %u of %s frames' % (count, expected_count))
+            dest.flush()
+            os.fsync(dest.fileno())
+        os.link(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    result = dict(frames=count, coverage=coverage, matroska_bytes=output.stat().st_size)
+    print('Updated %u frames without re-encoding: %s' % (count, json.dumps(result)), flush=True)
+    return result
 
 
 def output_name(metadata):
@@ -563,12 +845,18 @@ def main():
     parser.add_argument('input', type=Path)
     parser.add_argument('output', type=Path)
     parser.add_argument('--extract', action='store_true', help='extract raw .bin files instead of encoding')
+    parser.add_argument('--update-metadata', action='store_true',
+                        help='update an existing thermal archive without re-encoding its FFV1 video')
     parser.add_argument('--metadata', action='store_true', help='also extract per-frame .json sidecars')
     parser.add_argument('--fps', type=float, help='override capture timing with a fixed playback frame rate')
-    parser.add_argument('--rotation', type=int, choices=(0, 180), default=180,
+    parser.add_argument('--rotation', type=int, choices=(0, 180),
                         help='display rotation metadata; raw pixels are never rotated (default: 180)')
     parser.add_argument('--bin', dest='bin_log', type=Path,
                         help='ArduPilot dataflash log to reconstruct per-frame telemetry from')
+    parser.add_argument('--tlog', type=Path,
+                        help='timestamped MAVLink log for measured SIYI attitude, temperatures and range')
+    parser.add_argument('--max-telemetry-gap', type=float, default=2.0, metavar='SECONDS',
+                        help='maximum interpolation gap / named measurement age (default: 2 seconds)')
     args = parser.parse_args()
     if args.fps is not None and (not math.isfinite(args.fps) or not 0 < args.fps <= 1000):
         parser.error('--fps must be finite and between 0 and 1000')
@@ -576,13 +864,25 @@ def main():
         parser.error('--fps is only for encoding')
     if args.extract and args.bin_log is not None:
         parser.error('--bin is only for encoding')
+    if args.extract and (args.tlog is not None or args.update_metadata):
+        parser.error('--tlog and --update-metadata cannot be used with --extract')
+    if args.update_metadata and args.fps is not None:
+        parser.error('--fps cannot be used with --update-metadata')
+    if args.rotation is not None and (args.extract or args.update_metadata):
+        parser.error('--rotation is only for encoding raw frames')
+    if not math.isfinite(args.max_telemetry_gap) or args.max_telemetry_gap <= 0:
+        parser.error('--max-telemetry-gap must be finite and positive')
     if not args.extract and args.metadata:
         parser.error('--metadata is only for extraction')
     try:
         if args.extract:
             extract(args.input, args.output, args.metadata)
+        elif args.update_metadata:
+            update_metadata(args.input, args.output, args.bin_log, args.tlog, args.max_telemetry_gap * 1000)
         else:
-            encode(args.input, args.output, args.fps, args.rotation, args.bin_log)
+            encode(args.input, args.output, args.fps, args.rotation if args.rotation is not None else 180,
+                   args.bin_log, args.tlog,
+                   args.max_telemetry_gap * 1000)
     except (OSError, ValueError, RuntimeError, EOFError) as error:
         parser.exit(1, 'thermal_to_video: %s\n' % error)
 
