@@ -286,6 +286,8 @@ static int open_recording(ca_thermal_stream *s)
     std::string stem = s->video_path;
     if (stem.size() >= 4 && stem.compare(stem.size()-4, 4, ".mp4") == 0)
         stem.resize(stem.size()-4);
+    else if (stem.size() >= 3 && stem.compare(stem.size()-3, 3, ".ts") == 0)
+        stem.resize(stem.size()-3);
     for (unsigned part=0; part<10000; part++) {
         s->record_path = stem + ".raw" + (part ? "-" + std::to_string(part) : "") + ".mkv";
         s->record_fd = open(s->record_path.c_str(), O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0644);

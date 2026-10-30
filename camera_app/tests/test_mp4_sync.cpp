@@ -84,7 +84,8 @@ static void release_sync(void)
 int main(int argc, char **argv)
 {
     struct stat st;
-    assert(argc == 2 && stat(argv[1], &st) == 0 && st.st_size > 0);
+    assert((argc == 2 || argc == 3) && stat(argv[1], &st) == 0 && st.st_size > 0);
+    if(argc==3) ca_video_metadata_set_format(CA_VIDEO_TELEMETRY_MISB);
     uint8_t *data = (uint8_t*)(malloc((size_t)st.st_size));
     assert(data != NULL);
     int input = open(argv[1], O_RDONLY);

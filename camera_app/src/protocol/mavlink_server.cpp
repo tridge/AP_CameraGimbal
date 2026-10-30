@@ -139,6 +139,7 @@ struct ca_mavlink_server {
     uint8_t camera_mode;
     struct survey_runtime *survey;
     bool stream_enabled[APCAM_NUM_STREAMS];
+    bool misb_stream_enabled[APCAM_NUM_STREAMS];
 #if APCAM_HAVE_THERMAL
     uint32_t thermal_interval_ms[APCAM_NUM_STREAMS];
     uint64_t last_thermal_ms[APCAM_NUM_STREAMS];
@@ -927,16 +928,53 @@ static void broadcast_image_captured(struct ca_mavlink_server *server,
 }
 
 /* Whether a stream is streaming; false for a stream the target does not have. */
-static bool stream_running(const struct ca_mavlink_server *server, unsigned index)
+static bool stream_running(const struct ca_mavlink_server *server, unsigned index, bool misb=false)
 {
-    return index < APCAM_NUM_STREAMS && server->stream_enabled[index];
+    return index < APCAM_NUM_STREAMS &&
+        (misb ? server->misb_stream_enabled[index] : server->stream_enabled[index]);
+}
+
+static unsigned base_stream_count()
+{
+    return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
+}
+
+/* Primary IDs use the selected format; compatibility previews follow raw
+ * thermal (ID 3). SupportProxy relays only the APCG preview format. */
+static unsigned stream_count(const ca_mavlink_server *server, const route *destination=nullptr)
+{
+    return base_stream_count() +
+        (server->settings.video_telemetry_format==CA_VIDEO_TELEMETRY_MISB &&
+         (!destination || destination->kind!=ROUTE_PROXY) ? APCAM_NUM_STREAMS : 0U);
+}
+
+static unsigned stream_source(const ca_mavlink_server *server, unsigned id)
+{
+    if(id>=1 && id<=APCAM_NUM_STREAMS) return id;
+    const unsigned base=base_stream_count();
+    return id>base && id<=stream_count(server) ? id-base : 0U;
+}
+
+static bool stream_uses_misb(const ca_mavlink_server *server, unsigned id,
+                              const route *destination=nullptr)
+{
+    return server->settings.video_telemetry_format==CA_VIDEO_TELEMETRY_MISB &&
+        id>=1 && id<=APCAM_NUM_STREAMS && (!destination || destination->kind!=ROUTE_PROXY);
+}
+
+static bool raw_thermal_stream(unsigned id)
+{
+    return ca_thermal_stream_available() && id==CA_RAW_THERMAL_STREAM_ID;
 }
 
 static void stream_properties(const struct ca_mavlink_server *server,
                               unsigned stream_id, unsigned *width,
                               unsigned *height, enum ca_video_codec *codec,
-                              uint16_t *flags)
+                              uint16_t *flags, const route *destination=nullptr)
 {
+    const bool misb=stream_uses_misb(server,stream_id,destination);
+    const unsigned source=stream_source(server,stream_id);
+    if(source) stream_id=source;
     bool thermal = APCAM_HAVE_THERMAL_VIDEO &&
         (ca_media_thermal_main(server->media) ? stream_id == 1U
                                              : stream_id == 2U);
@@ -944,14 +982,14 @@ static void stream_properties(const struct ca_mavlink_server *server,
     if (stream_id == 2U) {
         ca_video_resolution_size(server->settings.sub_resolution, width, height);
         *codec = server->settings.sub_codec;
-        *flags = stream_running(server, 1U) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
+        *flags = stream_running(server, 1U, misb) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
                                             : 0U;
     } else
     #endif
     {
         ca_video_resolution_size(server->settings.main_resolution, width, height);
         *codec = server->settings.main_codec;
-        *flags = stream_running(server, 0U) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
+        *flags = stream_running(server, 0U, misb) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
                                             : 0U;
     }
     if (thermal) {
@@ -1008,11 +1046,6 @@ static void send_camera_fov(struct ca_mavlink_server *server, const struct route
     (void)send_message(server, route, &message);
 }
 
-static unsigned stream_count()
-{
-    return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
-}
-
 /* The main stream bitrate in bits per second, as MAVLink reports it. A target
  * without the setting, or with it set to automatic (0), reports the nominal
  * 4096 kbps. */
@@ -1037,12 +1070,14 @@ static void send_stream_information(struct ca_mavlink_server *server,
 #else
     info.bitrate = main_bitrate_bps(server);
 #endif
-    info.count = stream_count();
+    info.count = stream_count(server,route);
     info.type = VIDEO_STREAM_TYPE_RTSP;
     unsigned width, height;
     enum ca_video_codec codec;
-    if (stream_id < 1U || stream_id > stream_count()) stream_id = 1U;
-    stream_properties(server, stream_id, &width, &height, &codec, &info.flags);
+    if (stream_id < 1U || stream_id > stream_count(server,route)) stream_id = 1U;
+    const unsigned source=stream_source(server,stream_id);
+    const bool misb=stream_uses_misb(server,stream_id,route);
+    stream_properties(server, stream_id, &width, &height, &codec, &info.flags,route);
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
 #ifdef CAMERA_APP_ZT30_DEV
@@ -1052,7 +1087,10 @@ static void send_stream_information(struct ca_mavlink_server *server,
     info.resolution_v = (uint16_t)height;
     info.hfov = (uint16_t)lroundf(ca_media_hfov(server->media, thermal));
     info.stream_id = (uint8_t)stream_id;
-    put_text(info.name, sizeof(info.name), thermal ? "Thermal" : "Visible");
+    put_text(info.name, sizeof(info.name), misb ?
+        (thermal ? "Thermal MISB KLV" : "Visible MISB KLV") :
+        (stream_id>base_stream_count() ? (thermal ? "Thermal APCG JSON" : "Visible APCG JSON") :
+                                       (thermal ? "Thermal" : "Visible")));
     char uri[160];
     int length = 0;
     if (route->kind == ROUTE_PROXY) {
@@ -1066,18 +1104,18 @@ static void send_stream_information(struct ca_mavlink_server *server,
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
 #if !APCAM_HAVE_NETWORK_CONFIG
         // A configured URI (validated when loaded) replaces the one built here.
-        if (stream_id == 1U && server->settings.video1_uri[0]) {
+        if (!misb && source == 1U && server->settings.video1_uri[0]) {
             length = snprintf(uri, sizeof(uri), "%s", server->settings.video1_uri);
         } else
 #endif
         {
             (void)route_local_ipv4(server, route, host);
-            length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u", host,
-                              server->rtsp_port, stream_id);
+            length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u%s", host,
+                              server->rtsp_port, source ? source : stream_id, misb ? ".misb" : "");
         }
     }
     if (length > 0 && (size_t)length < sizeof(uri)) put_text(info.uri, sizeof(info.uri), uri);
-    if (stream_id == CA_RAW_THERMAL_STREAM_ID) {
+    if (raw_thermal_stream(stream_id)) {
         info.type = CA_VIDEO_STREAM_TYPE_HTTP_MATROSKA;
         info.bitrate = 0; // lossless content-dependent bitrate
         info.framerate = ca_thermal_stream_fps();
@@ -1117,9 +1155,9 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.bitrate = main_bitrate_bps(server);
     unsigned width, height;
     enum ca_video_codec codec;
-    if (stream_id < 1U || stream_id > stream_count()) stream_id = 1U;
+    if (stream_id < 1U || stream_id > stream_count(server,route)) stream_id = 1U;
     stream_properties(server, stream_id, &width, &height, &codec,
-                      &status.flags);
+                      &status.flags,route);
     (void)codec;
     status.framerate = ca_media_frame_rate(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U);
@@ -1130,7 +1168,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.resolution_v = (uint16_t)height;
     status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U));
-    if (stream_id == CA_RAW_THERMAL_STREAM_ID) {
+    if (raw_thermal_stream(stream_id)) {
         status.bitrate = 0; status.framerate = ca_thermal_stream_fps();
         status.resolution_h = 640; status.resolution_v = 512;
         status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,true));
@@ -1151,9 +1189,9 @@ static bool send_stream_selection(struct ca_mavlink_server *server,
                                   const struct route *route,
                                   uint32_t message_id, unsigned stream_id)
 {
-    if (stream_id > stream_count()) return false;
+    if (stream_id > stream_count(server,route)) return false;
     unsigned first = stream_id == 0U ? 1U : stream_id;
-    unsigned last = stream_id == 0U ? stream_count() : stream_id;
+    unsigned last = stream_id == 0U ? stream_count(server,route) : stream_id;
     for (unsigned stream = first; stream <= last; stream++) {
         if (message_id == MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION) {
             send_stream_information(server, route, stream);
@@ -1864,17 +1902,23 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         return MAV_RESULT_ACCEPTED;
     case MAV_CMD_VIDEO_START_STREAMING:
     case MAV_CMD_VIDEO_STOP_STREAMING: {
-        if (!isfinite(params[0]) || params[0] < 0 || params[0] > stream_count() || floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
+        if (!isfinite(params[0]) || params[0] < 0 || params[0] > stream_count(server,route) || floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
         unsigned stream = (unsigned)params[0];
         bool enabled = command == MAV_CMD_VIDEO_START_STREAMING;
         if (stream == 0U) {
             ca_thermal_stream_enable(enabled);
-            for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = enabled;
+            for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
+                server->stream_enabled[i] = enabled;
+                server->misb_stream_enabled[i] = enabled;
+            }
         }
         // stream_count() only admits the raw stream when it is available,
         // whether through the local listener or SupportProxy alone.
-        else if (stream == CA_RAW_THERMAL_STREAM_ID) ca_thermal_stream_enable(enabled);
-        else if (stream <= APCAM_NUM_STREAMS) server->stream_enabled[stream - 1U] = enabled;
+        else if (raw_thermal_stream(stream)) ca_thermal_stream_enable(enabled);
+        else if (unsigned source=stream_source(server,stream)) {
+            if(stream_uses_misb(server,stream,route)) server->misb_stream_enabled[source-1] = enabled;
+            else server->stream_enabled[source-1] = enabled;
+        }
         else return MAV_RESULT_DENIED;
         send_stream_status(server, route, stream == 0U ? 1U : stream);
         return MAV_RESULT_ACCEPTED;
@@ -2328,6 +2372,7 @@ static bool live_config_parameter(size_t index)
                     !strcmp(name,"MAV_POS_TARGET") || !strcmp(name,"TRACK_METHOD") || !strcmp(name,"THERMAL_PALETTE") || !strcmp(name,"THERMAL_HFOV_CD") || !strcmp(name,"OSD_THERMAL_FOV"));
 #else
     const char *name = ca_config_param_name(index);
+    if (strcmp(name, "VIDEO_META_FMT") == 0) return false;
     if (strcmp(name, "PHOTO_SCOPE") == 0) return true;
     if (strcmp(name, "THERMAL_PALETTE") == 0) return APCAM_HAVE_THERMAL;
     int camera_index = ca_camera_param_find(name);
@@ -2768,16 +2813,12 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
     switch (p->operation) {
     case CA_CAMERA_MODE: return set_camera_mode(server,(unsigned)value)==MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_CONFIG:
-#ifdef CAMERA_APP_ZT30_DEV
         if(live_config_parameter((size_t)p->config_index))
             return apply_camera_config(server,(size_t)p->config_index,value);
         if (ca_config_param_save(&server->parameters, server->config_path,
                                  (size_t)p->config_index, value) < 0) return -1;
         parameter_status(server, "Parameter saved; restart required");
         return 0;
-#else
-        return apply_camera_config(server, (size_t)p->config_index, value);
-#endif
     case CA_CAMERA_ZOOM:
         server->zoom_rate = 0;
         return !APCAM_ZOOM_SELECTS_LENS && APCAM_TARGET!=APCAM_TARGET_ZT30 ? set_selected_zoom(server, value) :
@@ -3351,7 +3392,10 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->survey->session=realtime_us();
     { char path[4096]; snprintf(path,sizeof(path),"%s.survey.command",server->config_path); unlink(path); }
     server->camera_mode = APCAM_HAVE_PHOTO ? 0 : 1;
-    for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = true;
+    for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
+        server->stream_enabled[i] = true;
+        server->misb_stream_enabled[i] = true;
+    }
 #if APCAM_HAVE_THERMAL
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
         server->thermal_interval_ms[i] = THERMAL_DEFAULT_INTERVAL_MS;

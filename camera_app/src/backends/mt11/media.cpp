@@ -15,6 +15,7 @@
 #include "camera_app/APC_Media_Backend.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/mp4.h"
+#include "camera_app/video_metadata.h"
 #include "camera_app/raw_thermal.h"
 #include "camera_app/raw_thermal_server.h"
 #include "camera_app/thermal_stream.h"
@@ -418,14 +419,14 @@ static int make_recording_path(struct APC_Media_MT11_State *media)
     for (unsigned suffix = 0; suffix < 1000U; suffix++) {
         int rgb_length = snprintf(media->recording_path[0],
                                   sizeof(media->recording_path[0]),
-                                  "%s/%s_%lld_A%s.mp4", directory, day,
+                                  "%s/%s_%lld_A%s.%s", directory, day,
                                   (long long)now,
-                                  suffix == 0U ? "" : "_next");
+                                  suffix == 0U ? "" : "_next", ca_video_recording_extension());
         int thermal_length = snprintf(media->recording_path[1],
                                       sizeof(media->recording_path[1]),
-                                      "%s/%s_%lld_I%s.mp4", directory, day,
+                                      "%s/%s_%lld_I%s.%s", directory, day,
                                       (long long)now,
-                                      suffix == 0U ? "" : "_next");
+                                      suffix == 0U ? "" : "_next", ca_video_recording_extension());
         if (rgb_length < 0 || thermal_length < 0 ||
             (size_t)rgb_length >= sizeof(media->recording_path[0]) ||
             (size_t)thermal_length >= sizeof(media->recording_path[1])) {

@@ -17,6 +17,7 @@
 #include "camera_app/backend.h"
 #include "camera_app/manual_control.h"
 #include "camera_app/config.h"
+#include "camera_app/video_metadata.h"
 #ifdef CAMERA_APP_ZT30_DEV
 #include "apcam/APC_ZT30_Config.h"
 #endif
@@ -375,6 +376,7 @@ int APC_CameraApp::run(int argc, char **argv)
                "visible video is 1280x720 H264, recording/OSD/targeting disabled; INI preserved");
     }
     #endif
+    ca_video_metadata_set_format(app_config.video_telemetry_format);
     if (APC_Timezone::apply(app_config.timezone) < 0) {
         ca_log("cannot apply timezone %s: %s", app_config.timezone,
                strerror(errno));

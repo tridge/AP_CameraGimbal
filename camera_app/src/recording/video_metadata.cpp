@@ -10,6 +10,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+static enum ca_video_telemetry_format telemetry_format = CA_VIDEO_TELEMETRY_APCG;
+
+void ca_video_metadata_set_format(enum ca_video_telemetry_format format)
+{
+    telemetry_format = format;
+}
+
+enum ca_video_telemetry_format ca_video_metadata_format(void)
+{
+    return telemetry_format;
+}
+
+const char *ca_video_recording_extension(void)
+{
+    return telemetry_format == CA_VIDEO_TELEMETRY_MISB ? "ts" : "mp4";
+}
+
 /* AP_CameraGimbal telemetry schema v1. Keep this UUID stable across releases. */
 const uint8_t ca_video_metadata_uuid[16] = {
     0x8d, 0x64, 0x6b, 0x4e, 0x55, 0x6f, 0x4a, 0x90,

@@ -8,6 +8,7 @@ public:
     static bool editable(const APC_Config::Field &field)
     {
         const char *s = field.section, *k = field.key;
+        if (!strcmp(s, "video")) return true;
         if (!strcmp(s, "general") || !strcmp(s, "logging") || !strcmp(s, "capture") ||
             !strcmp(s, "image") || !strcmp(s,"survey")) return true;
         if(!strcmp(s,"overlay"))return true;

@@ -1,7 +1,7 @@
 # No camera-app/package guard bypass. This builds only the RAM diagnostic.
 ZT30_XOP_ROOT := $(abspath camera_app/build/xop)
 ZT30_XOP_SRC := $(filter-out $(ZT30_XOP_ROOT)/xop/RtspConnection.cpp $(ZT30_XOP_ROOT)/xop/RtpConnection.cpp $(ZT30_XOP_ROOT)/net/TaskScheduler.cpp,$(wildcard $(ZT30_XOP_ROOT)/net/*.cpp $(ZT30_XOP_ROOT)/xop/*.cpp))
-ZT30_STREAM_SRC := tools/zt30_rgb_probe.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp camera_app/src/streaming/rtsp_xop.cpp camera_app/src/streaming/support_video.cpp camera_app/src/recording/video_metadata.cpp camera_app/src/recording/metadata.cpp camera_app/src/log.cpp
+ZT30_STREAM_SRC := tools/zt30_rgb_probe.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp camera_app/src/streaming/rtsp_xop.cpp camera_app/src/streaming/support_video.cpp camera_app/src/recording/video_metadata.cpp camera_app/src/recording/misb.cpp camera_app/src/recording/misb_ts.cpp camera_app/src/recording/metadata.cpp camera_app/src/log.cpp
 ZT30_STREAM_XOP := $(ZT30_XOP_SRC) camera_app/build/xop_rtsp_connection.cpp camera_app/build/xop_rtp_connection.cpp
 ZT30_STREAM_OBJECTS := $(patsubst %.cpp,build/zt30/stream/%.o,$(ZT30_STREAM_SRC)) $(patsubst $(ZT30_XOP_ROOT)/%.cpp,build/zt30/stream/xop/%.o,$(ZT30_XOP_SRC)) build/zt30/stream/patched-rtsp.o build/zt30/stream/patched-rtp.o build/zt30/stream/patched-scheduler.o
 ZT30_STREAM_FLAGS := -std=gnu++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Icamera_app/include -Iinclude -I$(ZT30_XOP_ROOT) -I$(ZT30_XOP_ROOT)/net -I$(ZT30_XOP_ROOT)/xop -I$(ZT30_XOP_ROOT)/3rdpart -include cstdint

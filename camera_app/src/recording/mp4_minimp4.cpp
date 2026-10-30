@@ -11,6 +11,7 @@
 
 #include "camera_app/mp4.h"
 #include "camera_app/video_metadata.h"
+#include "camera_app/misb.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -39,6 +40,8 @@ APC_STATIC_ASSERT(sizeof(off_t) >= 8, "Recording requires 64-bit file offsets");
 struct ca_mp4_keyframe { uint64_t offset, time; };
 
 struct ca_mp4_file {
+    ca_video_telemetry_format format;
+    ca_misb_ts misb;
     int fd;
     int directory_fd;
     pthread_t sync_thread;
@@ -75,8 +78,7 @@ struct ca_mp4 {
     char *path;
     unsigned width, height, frame_rate, part;
     uint64_t roll_bytes;
-    uint8_t *headers;
-    size_t headers_length;
+    std::vector<uint8_t> headers;
     int error;
     /* At most one completed file can await its final background flush. */
     struct ca_mp4_file *retired;
@@ -406,12 +408,15 @@ static int file_open(struct ca_mp4_file **result, const char *path,
     writer->hard_limit = fs.f_type == CA_MSDOS_SUPER_MAGIC ? CA_FAT_MAX_BYTES : INT64_MAX;
 #endif
     writer->frame_duration = 90000U / frame_rate;
+    writer->format = ca_video_metadata_format();
+    writer->misb.width=width; writer->misb.height=height;
     /* Append-only fragments keep completed frames playable before close and
      * after a crash; the movie header is emitted with the first video frame. */
-    writer->mux = MP4E_open(1, 1, writer, write_at);
-    if (writer->mux == NULL ||
+    if(writer->format!=CA_VIDEO_TELEMETRY_MISB)
+        writer->mux = MP4E_open(1, 1, writer, write_at);
+    if ((writer->format!=CA_VIDEO_TELEMETRY_MISB && (writer->mux == NULL ||
         mp4_h26x_write_init(&writer->h264, writer->mux,
-                            (int)width, (int)height, 0) != MP4E_STATUS_OK ||
+                            (int)width, (int)height, 0) != MP4E_STATUS_OK)) ||
         start_recording_sync(writer) < 0) {
         int saved_errno = errno != 0 ? errno : EIO;
         if (writer->mux != NULL) (void)MP4E_close(writer->mux);
@@ -500,6 +505,15 @@ static int write_h264(mp4_h26x_writer_t *h264, unsigned frame_duration,
     return 1;
 }
 
+static int write_ts(void *opaque,const void *data,size_t length)
+{
+    auto *writer=static_cast<ca_mp4_file *>(opaque);
+    if(length>writer->hard_limit-writer->bytes) { errno=EFBIG; return -1; }
+    if(pwrite_all(writer->fd,static_cast<const uint8_t *>(data),length,writer->bytes)<0) return -1;
+    writer->bytes+=length;
+    return 0;
+}
+
 static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *annex_b,
                       size_t length, uint64_t pts, bool key_frame, float hfov_deg)
 {
@@ -510,6 +524,24 @@ static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *anne
     char json[CA_VIDEO_METADATA_JSON_MAX];
     size_t json_length = 0U;
     if (writer == NULL) { errno = EINVAL; return -1; }
+    if(writer->format==CA_VIDEO_TELEMETRY_MISB) {
+        ca_metadata metadata;
+        timespec utc;
+        ca_metadata_snapshot(&metadata); metadata.hfov_deg=hfov_deg;
+        if(clock_gettime(CLOCK_REALTIME,&utc)<0) return -1;
+        std::vector<uint8_t> bytes;
+        const auto collect=[](void *opaque,const void *data,size_t size) {
+            auto &out=*static_cast<std::vector<uint8_t> *>(opaque);
+            const auto *p=static_cast<const uint8_t *>(data);
+            out.insert(out.end(),p,p+size);
+            return 0;
+        };
+        int result=ca_misb_ts_write(&writer->misb,CA_VIDEO_H264,annex_b,length,
+            writer->next_pts90k,key_frame,&metadata,&utc,collect,&bytes);
+        if(result>0 && write_ts(writer,bytes.data(),bytes.size())<0) return -1;
+        if(result>0) writer->next_pts90k+=writer->frame_duration;
+        return result;
+    }
     /* index the fragments that start with an IDR, as the muxer marks them */
     size_t offset = 0U, nal, nal_length;
     writer->pending_key = false;
@@ -551,9 +583,11 @@ static int file_close(struct ca_mp4_file *writer)
 {
     int result = 0;
     if (writer == NULL) return 0;
-    mp4_h26x_write_close(&writer->h264);
-    if (MP4E_close(writer->mux) != MP4E_STATUS_OK) result = -1;
-    if (result == 0 && write_index(writer) < 0) result = -1;
+    if(writer->mux) {
+        mp4_h26x_write_close(&writer->h264);
+        if (MP4E_close(writer->mux) != MP4E_STATUS_OK) result = -1;
+        if (result == 0 && write_index(writer) < 0) result = -1;
+    }
     free(writer->keyframes);
     writer->keyframes = NULL;
     if (writer->sync_started) {
@@ -586,27 +620,8 @@ static int cache_headers(struct ca_mp4 *writer, const uint8_t *data, size_t leng
         unsigned type = data[nal] & 31U;
         if (type == 5U) *idr = true;
         if (type != 7U && type != 8U) continue;
-        size_t scan = 0, old, old_length;
-        bool found = false;
-        while (ca_annexb_next(writer->headers, writer->headers_length,
-                             &scan, &old, &old_length)) {
-            if (old_length == n && !memcmp(writer->headers + old, data + nal, n)) {
-                found = true;
-                break;
-            }
-        }
-        if (found) continue;
-        if (writer->headers_length > CA_MP4_HEADERS_MAX - 4U ||
-            n > CA_MP4_HEADERS_MAX - 4U - writer->headers_length) {
-            errno = EOVERFLOW;
+        if (ca_video_cache_parameter_set(writer->headers, CA_VIDEO_H264, data + nal, n) < 0)
             return -1;
-        }
-        uint8_t *headers = (uint8_t*)(realloc(writer->headers, writer->headers_length + 4U + n));
-        if (!headers) return -1;
-        writer->headers = headers;
-        memcpy(headers + writer->headers_length, "\0\0\0\1", 4);
-        memcpy(headers + writer->headers_length + 4, data + nal, n);
-        writer->headers_length += 4U + n;
     }
     return 0;
 }
@@ -646,8 +661,8 @@ static int roll_file(struct ca_mp4 *writer)
     }
     {
     /* Seed the decoder configuration without adding a video sample or SEI. */
-    if (writer->headers_length &&
-        file_write_h264(next, writer->headers, writer->headers_length, 0, false, 0) < 0)
+    if (!writer->headers.empty() &&
+        file_write_h264(next, writer->headers.data(), writer->headers.size(), 0, false, 0) < 0)
         goto fail;
     writer->retired = writer->file;
     atomic_store(&writer->retire_done, false);
@@ -749,7 +764,6 @@ int ca_mp4_close(struct ca_mp4 *writer)
     int error = writer->error;
     if (file_close(writer->file) < 0 && !error) error = errno ? errno : EIO;
     if (reap_file(writer, true) < 0 && !error) error = errno ? errno : EIO;
-    free(writer->headers);
     free(writer->path);
     delete writer;
     if (error) { errno = error; return -1; }

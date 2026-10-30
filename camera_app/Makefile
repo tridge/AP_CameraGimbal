@@ -146,6 +146,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 	$(SS928_MPP_ROOT)/lib/linux/3rdparty/libiniparser.a \
 	$(XOP_COMPAT_LIB)
 
+MISB_SOURCES := src/recording/misb.cpp src/recording/misb_ts.cpp
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.cpp) src/main.cpp \
 	src/config.cpp \
 	src/log.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/protocol/manual_control.cpp \
@@ -166,7 +167,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/raw_thermal.cpp src/streaming/thermal_stream.cpp \
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
-	src/recording/video_metadata.cpp \
+	src/recording/video_metadata.cpp $(MISB_SOURCES) \
 	$(CONTROL_DIR)/control.cpp
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
@@ -221,6 +222,13 @@ XOP_HOST_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,$(SITL_OBJDIR)/xop/%.o,\
 	$(XOP_HOST_SOURCES)) $(SITL_OBJDIR)/xop/xop/RtspConnection.o \
 	$(SITL_OBJDIR)/xop/xop/RtpConnection.o
 SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
+# Use the prepared XOP sources on MT11 as well. Demand tracking adds atomic
+# playback state, so every object must share the updated class layout.
+ifeq ($(CAMERA_BACKEND),mt11)
+MT11_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/mt11-xop/%.o,\
+    $(filter-out $(RTSP_ROOT)/net/BufferWriter.cpp $(RTSP_ROOT)/net/SocketUtil.cpp,$(XOP_HOST_SOURCES)))
+OBJECTS += $(MT11_XOP_OBJECTS)
+endif
 # Our adapter includes vendor headers before compiler-generated .d files exist.
 build/rtsp_xop.o build/$(CAMERA_BACKEND)/rtsp_xop.o $(SITL_OBJDIR)/rtsp_xop.o: | $(XOP_PREPARE_STAMP)
 
@@ -440,7 +448,7 @@ tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rat
 
 $(TARGETING_TEST_TARGET): tests/test_targeting.cpp src/protocol/targeting.cpp
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lm
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread -lm
 
 $(STILL_TEST_TARGET): tests/test_still.cpp src/recording/still.cpp \
 		src/recording/metadata.cpp
@@ -559,6 +567,13 @@ build/xop_rtp_connection.o: build/xop_rtp_connection.cpp
 
 # Replace the vendor archive's scalar-delete buffer and no-op TCP_NODELAY
 # implementation with the same corrected sources used by SITL/ARM cameras.
+build/mt11-xop/%.o: $(RTSP_ROOT)/%.cpp | $(XOP_PREPARE_STAMP)
+	@mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+		-I$(RTSP_ROOT)/3rdpart -include cstdint -O2 -pipe -Wall -Wextra -Wno-error -Wno-error=unused-parameter \
+		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
+
 build/xop_buffer_writer.o: $(RTSP_ROOT)/net/BufferWriter.cpp
 	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -O2 -pipe -Wall -Wextra -Werror -std=c++11 -c $< -o $@
@@ -674,12 +689,15 @@ tests/test_support_mavlink: tests/test_support_mavlink.cpp src/protocol/support_
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -lpthread -lm
 
-$(VIDEO_METADATA_TEST_TARGET): tests/test_video_metadata.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp
+$(VIDEO_METADATA_TEST_TARGET): tests/test_video_metadata.cpp src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread -lm
 
+tests/test_misb: tests/test_misb.cpp src/recording/misb.cpp src/recording/misb_ts.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread -lm
+
 $(MP4_TEST_TARGET): tests/test_mp4.cpp src/recording/mp4_minimp4.cpp \
-                    src/recording/video_metadata.cpp src/recording/metadata.cpp \
+                    src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
@@ -690,14 +708,14 @@ $(E5739_TEST_TARGET): tests/test_e5739.cpp $(BACKEND_DIR)/e5739.cpp src/log.cpp
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lm
 
 $(MP4_SYNC_TEST_TARGET): tests/test_mp4_sync.cpp src/recording/mp4_minimp4.cpp \
-                    src/recording/video_metadata.cpp src/recording/metadata.cpp \
+                    src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ $(filter %.cpp,$^) -Wl,--wrap=fdatasync -Wl,--wrap=fstatfs64 -lpthread -lm
 
 $(MP4_ROLLOVER_TEST_TARGET): tests/test_mp4_rollover.cpp src/recording/mp4_minimp4.cpp \
-                    src/recording/video_metadata.cpp src/recording/metadata.cpp \
+                    src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
@@ -730,15 +748,15 @@ $(RAW_THERMAL_SERVER_TEST_TARGET): tests/test_raw_thermal_server.cpp \
 $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
                                   src/streaming/live_video_server.cpp \
                                   src/recording/mp4_minimp4.cpp src/log.cpp \
-                                  src/recording/video_metadata.cpp src/recording/metadata.cpp \
+                                  src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp \
                                   $(MINIMP4_HEADER)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
-		src/log.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp -lpthread -lm
+		src/log.cpp src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp -lpthread -lm
 
-test: survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: tests/test_misb survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -757,6 +775,7 @@ test: survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-
 	python3 ../tests/test_targets.py
 	python3 ../tests/test_a8_service.py
 	./$(VIDEO_METADATA_TEST_TARGET)
+	./tests/test_misb
 	./$(CONFIG_TEST_TARGET) camera.ini
 	./$(TARGETING_TEST_TARGET)
 	./$(E5739_TEST_TARGET)
@@ -776,6 +795,7 @@ test: survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-
 	./$(LIVE_VIDEO_SERVER_TEST_TARGET) tests/test.h264
 	./$(MP4_TEST_TARGET) tests/test.h264 tests/test.mp4
 	./$(MP4_SYNC_TEST_TARGET) tests/test.h264
+	./$(MP4_SYNC_TEST_TARGET) tests/test.h264 misb
 	python3 tests/test_mp4_rollover.py
 	grep -aq 'tfdt' tests/test.mp4.fragmented
 	ffprobe -v error -select_streams v:0 -count_frames \
@@ -811,6 +831,7 @@ install-init: $(APP_INIT) $(APP_SELECTION) $(TIMESYNC)
 	$(SSH) $(SSH_HOST) 'set -eu; chmod 0755 $(REMOTE_TIMESYNC).new $(REMOTE_APP_SELECTION).new $(REMOTE_APP_INIT).new; /bin/fsync $(REMOTE_TIMESYNC).new; /bin/fsync $(REMOTE_APP_SELECTION).new; /bin/fsync $(REMOTE_APP_INIT).new; mv $(REMOTE_TIMESYNC).new $(REMOTE_TIMESYNC); /bin/fsync /app/bin; test -x $(REMOTE_TIMESYNC); mv $(REMOTE_APP_SELECTION).new $(REMOTE_APP_SELECTION); /bin/fsync /app; test -x $(REMOTE_APP_SELECTION); mv $(REMOTE_APP_INIT).new $(REMOTE_APP_INIT); /bin/fsync /app; test -x $(REMOTE_APP_INIT); sha256sum $(REMOTE_TIMESYNC) $(REMOTE_APP_SELECTION) $(REMOTE_APP_INIT)'
 
 clean:
+	rm -f tests/test_misb
 	rm -f tests/test_gimbal_rate
 	rm -f tests/test_telemetry_time tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
@@ -1011,6 +1032,19 @@ build/mt11/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/ther
 	mkdir -p $(@D)
 	$(call progress,Linking $@)
 	aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra -Werror -static -I$(THERMAL_CODECS_ROOT)/aarch64/include -o $@ $< $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm
+
+.PHONY: rtsp-demand-test
+rtsp-demand-test: build/tests/test_rtsp_demand
+	./build/tests/test_rtsp_demand
+
+build/tests/test_rtsp_demand: tests/test_rtsp_demand.cpp src/streaming/rtsp_xop.cpp \
+ $(XOP_HOST_OBJECTS) src/recording/video_metadata.cpp $(MISB_SOURCES) src/recording/metadata.cpp \
+ src/streaming/support_video.cpp src/log.cpp
+	@mkdir -p $(dir $@)
+	$(HOST_CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+		-O2 -std=gnu++17 -o $@ $(filter-out src/streaming/rtsp_xop.cpp,$^) -lpthread -lm
+
+test: rtsp-demand-test
 
 # ASan detects the vendor's old new[]/scalar-delete mismatch on both queue
 # draining and connection shutdown; TCP_NODELAY verifies the socket fix.

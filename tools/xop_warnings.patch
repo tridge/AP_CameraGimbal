@@ -243,3 +243,144 @@
      { return nullptr; }
 
      bool has_auth_info_ = false;
+--- a/xop/RtpConnection.h
++++ b/xop/RtpConnection.h
+@@ -5,6 +5,7 @@
+ #define XOP_RTP_CONNECTION_H
+
+ #include <cstdint>
++#include <atomic>
+ #include <vector>
+ #include <string>
+ #include <memory>
+@@ -64,6 +65,8 @@
+
+     std::string GetMulticastIp(MediaChannelId channel_id) const;
+
++    bool IsPlaying() const { return playing_.load(); }
++
+     void Play();
+     void Record();
+     void Teardown();
+@@ -94,6 +97,7 @@
+     TransportMode transport_mode_;
+     bool is_multicast_ = false;
+
++    std::atomic_bool playing_{false};
+     bool is_closed_ = false;
+     bool has_key_frame_ = false;
+
+--- a/xop/RtpConnection.cpp
++++ b/xop/RtpConnection.cpp
+@@ -156,11 +156,14 @@
+
+ void RtpConnection::Play()
+ {
++    bool playing = false;
+     for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
+         if (media_channel_info_[chn].is_setup) {
+             media_channel_info_[chn].is_play = true;
+-        }
+-    }
++            playing = true;
++        }
++    }
++    playing_.store(playing);
+ }
+
+ void RtpConnection::Record()
+@@ -175,6 +178,7 @@
+
+ void RtpConnection::Teardown()
+ {
++    playing_.store(false);
+     if(!is_closed_) {
+         is_closed_ = true;
+         for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
+--- a/xop/MediaSession.h
++++ b/xop/MediaSession.h
+@@ -62,6 +62,8 @@
+
+     MediaSessionId GetMediaSessionId()
+     { return session_id_; }
++
++    bool HasPlayingClients();
+
+     uint32_t GetNumClient() const
+     { return (uint32_t)clients_.size(); }
+--- a/xop/MediaSession.cpp
++++ b/xop/MediaSession.cpp
+@@ -212,6 +212,16 @@
+     return true;
+ }
+
++bool MediaSession::HasPlayingClients()
++{
++    std::lock_guard<std::mutex> lock(map_mutex_);
++    for (const auto &entry : clients_) {
++        auto client = entry.second.lock();
++        if (client && client->IsPlaying()) return true;
++    }
++    return false;
++}
++
+ bool MediaSession::AddClient(SOCKET rtspfd, std::shared_ptr<RtpConnection> rtp_conn)
+ {
+     std::lock_guard<std::mutex> lock(map_mutex_);
+--- a/xop/RtspServer.h
++++ b/xop/RtspServer.h
+@@ -25,6 +25,8 @@
+     MediaSessionId AddSession(MediaSession* session);
+     void RemoveSession(MediaSessionId sessionId);
+
++    bool HasPlayingClients(MediaSessionId sessionId);
++
+     bool PushFrame(MediaSessionId sessionId, MediaChannelId channelId, AVFrame frame);
+
+ private:
+--- a/xop/RtspServer.cpp
++++ b/xop/RtspServer.cpp
+@@ -75,6 +75,12 @@
+     return nullptr;
+ }
+
++bool RtspServer::HasPlayingClients(MediaSessionId session_id)
++{
++    auto session = LookMediaSession(session_id);
++    return session && session->HasPlayingClients();
++}
++
+ bool RtspServer::PushFrame(MediaSessionId session_id, MediaChannelId channel_id, AVFrame frame)
+ {
+     std::shared_ptr<MediaSession> sessionPtr = nullptr;
+--- a/xop/RtpConnection.cpp
++++ b/xop/RtpConnection.cpp
+@@ -62,6 +62,6 @@
+     media_channel_info_[channel_id].rtp_channel = rtp_channel;
+     media_channel_info_[channel_id].rtcp_channel = rtcp_channel;
+-    rtpfd_[channel_id] = conn->GetSocket();
+-    rtcpfd_[channel_id] = conn->GetSocket();
++    // Interleaved RTP uses conn->Send(). TcpConnection owns this socket;
++    // keeping it in the UDP arrays would close it again in our destructor.
+     media_channel_info_[channel_id].is_setup = true;
+     transport_mode_ = RTP_OVER_TCP;
+@@ -96,4 +96,5 @@
+         if(!SocketUtil::Bind(rtpfd_[channel_id], "0.0.0.0",  local_rtp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             continue;
+         }
+@@ -102,5 +103,7 @@
+         if(!SocketUtil::Bind(rtcpfd_[channel_id], "0.0.0.0", local_rtcp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             SocketUtil::Close(rtcpfd_[channel_id]);
++            rtcpfd_[channel_id] = 0;
+             continue;
+         }
+@@ -137,4 +140,5 @@
+         if (!SocketUtil::Bind(rtpfd_[channel_id], "0.0.0.0", local_rtp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             continue;
+         }

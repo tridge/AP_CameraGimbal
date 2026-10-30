@@ -692,6 +692,7 @@ try:
         "recording_resolution": "1920x1080",
         "main_resolution": "1920x1080",
         "main_codec": "h264",
+        "video_telemetry": "apcg",
         "sub_resolution": "1280x720",
         "sub_codec": "h264",
         "main_alias": "main.264",

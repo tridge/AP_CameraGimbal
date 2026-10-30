@@ -73,6 +73,7 @@ static const struct ca_camera_parameter parameters[] = {
 #endif
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
+    CONFIG("VIDEO_META_FMT", "Video telemetry format (restart required)"),
 #if APCAM_HAVE_VIDEO_BITRATE
     CONFIG("VIDEO_MAIN_KBPS", "Main RTSP bitrate (kbps)"),
 #endif

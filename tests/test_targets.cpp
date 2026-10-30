@@ -1,4 +1,5 @@
 #include "apcam/APC_Camera.h"
+#include "apcam/APC_Config.h"
 #include "apcam/gimbal_transform.h"
 #include "camera_app/video_fov.h"
 #include <assert.h>
@@ -8,6 +9,15 @@
 static void near(float actual, float expected) { assert(fabsf(actual - expected) < 0.001f); }
 int main(void)
 {
+    const auto *telemetry = APC_Config::find("video", "telemetry");
+    assert(telemetry && !strcmp(telemetry->param_name, "VIDEO_META_FMT"));
+    assert(telemetry->option_count == 2);
+    ca_config settings{};
+    assert(APC_Config::assign(settings, *telemetry, "apcg"));
+    assert(settings.video_telemetry_format == CA_VIDEO_TELEMETRY_APCG);
+    assert(APC_Config::assign(settings, *telemetry, "misb"));
+    assert(settings.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB);
+    assert(!APC_Config::assign(settings, *telemetry, "unknown"));
     const APC_Camera &camera = APC_Camera::get_singleton();
     assert(camera.num_lenses() == APCAM_NUM_LENSES);
     assert(camera.num_streams() == APCAM_NUM_STREAMS);

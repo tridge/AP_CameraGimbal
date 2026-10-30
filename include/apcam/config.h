@@ -54,6 +54,12 @@ enum ca_video_codec {
     CA_VIDEO_H265,
 };
 
+/* Persistent wire values; append new formats without renumbering these. */
+enum ca_video_telemetry_format {
+    CA_VIDEO_TELEMETRY_APCG = 0,
+    CA_VIDEO_TELEMETRY_MISB = 1,
+};
+
 enum ca_thermal_palette {
     CA_PALETTE_WHITE_HOT = 0,
     CA_PALETTE_SEPIA = 2,
@@ -200,6 +206,7 @@ struct ca_config {
     enum ca_video_resolution recording_resolution;
     enum ca_video_codec main_codec;
     enum ca_video_codec sub_codec;
+    enum ca_video_telemetry_format video_telemetry_format;
     /* additional RTSP path names for the same streams, empty for none */
     char main_alias[64];
     char sub_alias[64];

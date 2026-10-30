@@ -284,6 +284,9 @@ int APC_Media::_restore_controls(const LiveControls *state)
 
 int APC_Media::configure(const struct ca_config *settings)
 {
+    if (settings && settings->video_telemetry_format != _config.settings.video_telemetry_format) {
+        errno=ENOTSUP; return -1; // A container change requires an app restart.
+    }
 #ifdef CAMERA_APP_ZT30_RAM
     (void)settings;errno=ENOTSUP;return -1; // bounded qualification never reconfigures
 #elif defined(CAMERA_APP_ZT30_DEV)
