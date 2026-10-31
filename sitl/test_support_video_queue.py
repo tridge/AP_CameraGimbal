@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Keep RTSP connected when video queues overflow during a delayed handshake."""
 import ctypes
+import errno
 from pathlib import Path
 import socket
 import subprocess
@@ -11,8 +12,19 @@ REPO = Path(__file__).resolve().parents[1]
 
 # Compile a small C shim so this test does not duplicate ca_support_config's ABI.
 SHIM = r'''
-#include "camera_app/support_video.h"
+#include "camera_app/src/streaming/support_video.cpp"
 #include <string.h>
+extern "C" int test_connect_error(unsigned port) {
+    struct ca_support_video publisher{};
+    strcpy(publisher.config.host, "127.0.0.1");
+    publisher.port = port;
+    publisher.fd = -1;
+    atomic_init(&publisher.stop, false);
+    int result = connect_publisher(&publisher);
+    int error = result < 0 ? errno : 0;
+    if (publisher.fd >= 0) close(publisher.fd);
+    return error;
+}
 extern "C" struct ca_support_video *test_open(unsigned port) {
     struct ca_support_config config = {.enabled = true, .video1_port = port};
     strcpy(config.host, "127.0.0.1");
@@ -39,6 +51,15 @@ def read_exact(connection, length):
         assert chunk, 'publisher disconnected after queue overflow'
         data += chunk
     return data
+
+
+def check_refused(library):
+    # Keep a port reserved without listening to exercise asynchronous refusal.
+    with socket.socket() as reserved:
+        reserved.bind(('127.0.0.1', 0))
+        error = library.test_connect_error(reserved.getsockname()[1])
+        assert error == errno.ECONNREFUSED, (error, errno.errorcode.get(error))
+    print('PASS refused publisher connection reports ECONNREFUSED')
 
 
 def check(library, byte_limit):
@@ -160,9 +181,9 @@ def main():
         shim = root / 'shim.c'
         shim.write_text(SHIM)
         target = root / 'publisher.so'
-        sources = ['streaming/support_video.cpp', 'recording/video_metadata.cpp', 'recording/metadata.cpp', 'log.cpp']
+        sources = ['recording/video_metadata.cpp', 'recording/metadata.cpp', 'log.cpp']
         subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
-                        '-I' + str(REPO / 'include'), '-I' + str(REPO / 'camera_app/include'), str(shim),
+                        '-I' + str(REPO), '-I' + str(REPO / 'include'), '-I' + str(REPO / 'camera_app/include'), str(shim),
                         *(str(REPO / 'camera_app/src' / source) for source in sources),
                         '-lpthread', '-lm', '-o', str(target)], check=True)
         library = ctypes.CDLL(str(target))
@@ -172,6 +193,9 @@ def main():
         library.ca_support_video_close.argtypes = [ctypes.c_void_p]
         library.test_open_raw.argtypes = [ctypes.c_uint]
         library.test_open_raw.restype = ctypes.c_void_p
+        library.test_connect_error.argtypes = [ctypes.c_uint]
+        library.test_connect_error.restype = ctypes.c_int
+        check_refused(library)
         check_raw(library)
         check(library, False)
         check(library, True)

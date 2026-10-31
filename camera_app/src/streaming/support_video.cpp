@@ -196,10 +196,15 @@ static int connect_publisher(struct ca_support_video *p)
         if (result < 0 && errno == EINPROGRESS && ready(p, POLLOUT, milliseconds() + 2000U) == 0) {
             int error = 0;
             socklen_t size = sizeof(error);
-            if (getsockopt(p->fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 && !error) result = 0;
+            if (getsockopt(p->fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0) {
+                if (!error) result = 0;
+                else errno = error;
+            }
         }
         if (result == 0) break;
+        int error = errno;
         close(p->fd); p->fd = -1;
+        errno = error;
     }
     freeaddrinfo(addresses);
     if (p->fd < 0) return -1;
