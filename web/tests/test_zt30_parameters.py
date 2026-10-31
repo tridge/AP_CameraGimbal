@@ -47,6 +47,31 @@ int main()
     assert(ca_config_load(&loaded, REPLACEMENT_CONFIG_PATH, error, sizeof(error)) == 0);
     assert(loaded.main_resolution == CA_VIDEO_2160P && loaded.main_codec == CA_VIDEO_H265);
     assert(loaded.thermal_hfov_cd == 2420); // User-requested MT11 assumption.
+    bool raw_survey = false;
+    for (const auto &lens : survey_lenses) raw_survey |= !strcmp(lens.value, "thermal");
+    assert(raw_survey); // Native raw thermal is available without generic thermal controls.
+
+    // A web restart changes the camera's TMP without changing the web's TMP.
+    const std::string original_tmp = std::string(APP_DIR) + "/original-tmp";
+    assert(mkdir(original_tmp.c_str(), 0700) == 0);
+    assert(mkdir(RUNTIME_DIR, 0700) == 0);
+    assert(setenv("TMPDIR", original_tmp.c_str(), 1) == 0);
+    char original_status[4096], restarted_status[4096];
+    assert(apcam_survey_status_path(REPLACEMENT_CONFIG_PATH, original_status, sizeof(original_status)));
+    assert(apcam_survey_status_path(REPLACEMENT_CONFIG_PATH, restarted_status, sizeof(restarted_status), RUNTIME_DIR));
+    FILE *status = fopen(original_status, "w"); assert(status);
+    fputs("{\"state\":\"idle\"}", status); fclose(status);
+    const timespec stale[] = {{time(NULL)-10, 0}, {time(NULL)-10, 0}};
+    assert(utimensat(AT_FDCWD, original_status, stale, 0) == 0);
+    status = fopen(restarted_status, "w"); assert(status);
+    fputs("{\"state\":\"surveying\",\"captured\":17}", status); fclose(status);
+    size_t status_length = 0;
+    char *body = read_survey_status(&status_length);
+    assert(body && strstr(body, "\"captured\":17")); free(body);
+    assert(utimensat(AT_FDCWD, restarted_status, stale, 0) == 0);
+    assert(!read_survey_status(&status_length)); // Never revive a dead camera's snapshot.
+    assert(unlink(original_status) == 0 && unlink(restarted_status) == 0);
+    unsetenv("TMPDIR");
     loaded.orientation=CA_MOUNT_UPRIGHT;
     assert(APC_ZT30_Config::effective(loaded));
     assert(loaded.orientation==CA_MOUNT_AUTO && loaded.main_resolution == CA_VIDEO_2160P && loaded.main_codec == CA_VIDEO_H265);
@@ -159,6 +184,7 @@ with tempfile.TemporaryDirectory(prefix='zt30-parameters-') as directory:
                     f'-DAPP_REQUEST_PATH="{root / "request"}"',
                     f'-DAPP_REQUEST_LOCK_PATH="{root / "request.lock"}"',
                     f'-DAPP_STARTED_PATH="{root / "started"}"',
+                    f'-DRUNTIME_DIR="{root / "run"}"',
                     f'-DAPP_DIR="{root}"', f'-DREPLACEMENT_CONFIG_PATH="{root / "camera.ini"}"',
                     f'-DREPLACEMENT_CONFIG_BACKUP_PATH="{root / "camera.ini.web.bak"}"',
                     str(source), str(WEB.parent / 'camera_app/src/config.cpp'),
