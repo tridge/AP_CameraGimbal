@@ -6,13 +6,15 @@
 
 // The status heartbeat belongs in temporary storage, not on camera flash.
 // Hash the config path so separate SITL cameras have separate status files.
-inline bool apcam_survey_status_path(const char *config, char *path, size_t size)
+inline bool apcam_survey_status_path(const char *config, char *path, size_t size,
+                                     const char *directory = nullptr)
 {
     uint64_t hash = UINT64_C(14695981039346656037);
     for (const unsigned char *p = reinterpret_cast<const unsigned char *>(config); *p; ++p) {
         hash = (hash ^ *p) * UINT64_C(1099511628211);
     }
-    const char *root = getenv("TMPDIR");
+    const char *root = directory;
+    if (!root || !*root) root = getenv("TMPDIR");
 #ifdef _WIN32
     if (!root || !*root) root = getenv("TEMP");
     if (!root || !*root) root = ".";

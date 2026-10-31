@@ -654,7 +654,7 @@ static const struct option survey_patterns[] = {
     {"fore_only", S_SURV_FORE_ONLY},
 };
 static const struct option survey_lenses[] = {
-#if WEB_HAVE_THERMAL
+#if WEB_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
     {"thermal", S_SURV_THERMAL},
 #endif
     {"wide", S_SURV_WIDE},
@@ -7421,6 +7421,22 @@ static void apply_configured_timezone(void)
     free(config);
 }
 
+// A camera restarted by this web service uses TMP=RUNTIME_DIR. The web
+// process itself may still have its launcher's original temporary directory.
+static char *read_survey_status(size_t *length)
+{
+    const char *directories[] = {nullptr, RUNTIME_DIR};
+    for (const char *directory : directories) {
+        char path[4096];
+        if (!apcam_survey_status_path(REPLACEMENT_CONFIG_PATH, path, sizeof(path), directory)) continue;
+        struct stat st{};
+        if (stat(path, &st) != 0 || time(NULL) - st.st_mtime > 5) continue;
+        char *body = read_file(path, 4096, length);
+        if (body) return body;
+    }
+    return nullptr;
+}
+
 static void handle_request(int fd, const char *peer)
 {
     APC_HTTPRequest request = {};
@@ -7636,13 +7652,8 @@ static void handle_request(int fd, const char *peer)
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/rebooting") == 0) {
         send_rebooting_page(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/survey/status") == 0) {
-        char path[4096];
-        if (!apcam_survey_status_path(REPLACEMENT_CONFIG_PATH, path, sizeof(path))) {
-            send_text_errorf(fd, 500, "Error", S_E_PATH_LONG_OR_INVALID);
-            return;
-        }
-        struct stat st{};
-        size_t length=0; char *body=stat(path,&st)==0 && time(NULL)-st.st_mtime<=5 ? read_file(path,4096,&length) : NULL;
+        size_t length = 0;
+        char *body = read_survey_status(&length);
         const char *empty="{\"state\":\"camera unavailable\"}";
         send_response(fd,200,"OK","application/json",body?body:empty,body?length:strlen(empty),"Cache-Control: no-store\r\n");
         free(body);
