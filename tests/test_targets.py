@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
         subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-DAPCAM_TARGET=' + target['target_id'],
                         '-I' + str(ROOT/'include'), '-I' + str(ROOT/'camera_app/include'),
-                        str(ROOT/'tests/test_targets.cpp'), '-lm', '-o', binary], check=True)
+                        str(ROOT/'tests/test_targets.cpp'), str(ROOT/'camera_app/src/config.cpp'), '-lm', '-o', binary], check=True)
         subprocess.run([binary], check=True)
         for role in ('main', 'sub', 'recording'):
             assert target[role + '_resolutions'] & (1 << target['default_' + role + '_resolution'])
@@ -40,9 +40,15 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
         # ZR10 uses a separate template in the Linux and Windows simulators.
         if name == 'zr10':
             templates.append(ROOT / 'sitl/zr10.ini')
+        if name == 'zt30':
+            # Development defaults use a different, conservative resolution.
+            dev = configparser.ConfigParser()
+            assert dev.read(ROOT / 'packaging/zt30/camera.ini.dev')
+            assert dev['video']['telemetry'] == 'misb'
         for template in templates:
             config = configparser.ConfigParser()
             assert config.read(template), template
+            assert config['video']['telemetry'] == 'misb', template
             roles = [('main', 'stream.main'), ('sub', 'stream.sub'), ('recording', 'recording')]
             if int(target['num_streams']) < 2:
                 roles.remove(('sub', 'stream.sub'))

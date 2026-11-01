@@ -484,6 +484,8 @@ def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=F
     template = ROOT / ('camera_app/camera.ini' if target == 'mt11' else
                         'sitl/zr10.ini' if target == 'zr10' else 'packaging/' + target + '/camera.ini')
     config.write_text(re.sub(r'(?m)^system_id\s*=.*$', f'system_id = 42\ncamera_component_id = {CAMERA}', re.sub(r'(?m)^camera_component_id\s*=.*\n?', '', template.read_text())))
+    # Keep the MP4 recording compatibility checks explicit.
+    config.write_text(re.sub(r'(?m)^telemetry\s*=.*$', 'telemetry = apcg', config.read_text()))
     if optical_unavailable:
         config.write_text(re.sub(r'(?m)^disarmed\s*=.*$', 'disarmed = true', config.read_text()))
     tcp_port, gimbal_port = port(), port()

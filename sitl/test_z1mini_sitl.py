@@ -47,6 +47,8 @@ def main():
     build = args.build.resolve(); runtime = build/'runtime'
     config = configparser.ConfigParser()
     config.read(runtime/'app/camera.ini')
+    if not config.has_section('video'): config.add_section('video')
+    config['video']['telemetry'] = 'apcg'  # This test checks MP4 recording compatibility.
     config['recording']['resolution'] = '3840x2160'
     config['recording']['autorecord'] = 'false'
     config['mount']['orientation'] = args.orientation

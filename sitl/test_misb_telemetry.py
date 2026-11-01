@@ -303,7 +303,7 @@ def run(backend, directory, codec, mavproxy=None):
     def smallest(role):
         mask = target[role+'_resolutions']
         return min((s for i, s in enumerate(sizes) if mask & (1 << i)), key=lambda s: int(s.split('x')[0]))
-    config.write_text('[video]\ntelemetry=misb\n[mavlink]\nsystem_id=42\n[thermal]\nrecord_fps=0\n'
+    config.write_text('[mavlink]\nsystem_id=42\n[thermal]\nrecord_fps=0\n'
                       f'[stream.main]\ncodec={codec}\nresolution={smallest("main")}\n'
                       f'[stream.sub]\ncodec={codec}\nresolution={smallest("sub")}\n'
                       f'[recording]\nresolution={smallest("recording")}\n')
@@ -336,6 +336,9 @@ def run(backend, directory, codec, mavproxy=None):
             feeder = threading.Thread(target=send)
             feeder.start()
             assert link.recv_match(type='HEARTBEAT', blocking=True, timeout=5)
+            link.mav.param_request_read_send(42, 100, b'VIDEO_META_FMT', -1)
+            default_format = link.recv_match(type='PARAM_VALUE', blocking=True, timeout=5)
+            assert default_format and default_format.param_id == 'VIDEO_META_FMT' and default_format.param_value == 1
             time.sleep(.5)
             infos = discovered_streams(link)
             misb = [s for s in infos.values() if s.uri.endswith('.misb')]
@@ -422,6 +425,9 @@ def run(backend, directory, codec, mavproxy=None):
                 client.close()
             link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mport}', source_system=255, source_component=190)
             assert link.recv_match(type='HEARTBEAT', blocking=True, timeout=5)
+            link.mav.param_request_read_send(42, 100, b'VIDEO_META_FMT', -1)
+            default_format = link.recv_match(type='PARAM_VALUE', blocking=True, timeout=5)
+            assert default_format and default_format.param_id == 'VIDEO_META_FMT' and default_format.param_value == 0
             infos = discovered_streams(link)
             assert len(infos) == base_count and not any(s.uri.endswith('.misb') for s in infos.values())
             command(link, M.MAV_CMD_VIDEO_START_CAPTURE)

@@ -44,6 +44,11 @@ palette = white_hot
 autorecord = false
 resolution = 1280x720
 
+[video]
+# misb (default): .misb RTSP and .ts recordings; apcg: JSON SEI and MP4.
+# Applies after restarting camera-app. MAVLink parameter: VIDEO_META_FMT.
+telemetry = misb
+
 [stream.main]
 # rtsp://CAMERA:8554/video1
 resolution = 1280x720
