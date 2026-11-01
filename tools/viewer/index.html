@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://tile.googleapis.com https://maps.gstatic.com; connect-src 'self' https://plot.ardupilot.org/quantized/ https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://tile.googleapis.com; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
+    />
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#11232d" />
+    <title>Video flight review</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="%BASE_URL%viewer-config.js"></script>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

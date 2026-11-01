@@ -1,0 +1,19 @@
+# Include inside ONLY the plot.ardupilot.org HTTPS server block.
+# Keep this separate from stable-web so log-viewer updates cannot remove it.
+location = /video {
+    return 301 /video/$is_args$args;
+}
+location = /video/viewer-config.js {
+    alias /data/sites/logviewer/video/shared/viewer-config.js;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}
+location ^~ /video/ {
+    alias /data/sites/logviewer/video/current/;
+    index index.html;
+    autoindex off;
+    gzip_static on;
+    gzip_vary on;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}

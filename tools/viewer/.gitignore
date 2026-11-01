@@ -1,0 +1,10 @@
+node_modules/
+dist/
+public/vendor/
+test-results/
+playwright-report/
+
+public/licenses/Cesium-LICENSE.md
+public/licenses/THIRD_PARTY.md
+public/licenses/dependency-manifest.json
+public/licenses/GPL-3.0.txt
