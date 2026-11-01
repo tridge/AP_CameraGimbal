@@ -201,13 +201,13 @@ def main():
             link.mav.command_long_send(42,100,M.MAV_CMD_REQUEST_MESSAGE,0,269,0,0,0,0,0,0)
             streams = {}
             deadline = time.monotonic()+5
-            while len(streams)<3 and time.monotonic()<deadline:
+            while len(streams)<5 and time.monotonic()<deadline:
                 m = link.recv_match(type='VIDEO_STREAM_INFORMATION',blocking=True,timeout=.5)
                 if m: streams[m.stream_id]=m
-            assert set(streams)=={1,2,3}, streams
+            assert set(streams)=={1,2,3,4,5}, streams
             assert streams[1].type==M.VIDEO_STREAM_TYPE_RTSP and streams[2].type==M.VIDEO_STREAM_TYPE_RTSP
             stream=streams[3]
-            assert stream.type==200 and stream.count==3 and stream.encoding==0
+            assert stream.type==200 and stream.count==5 and stream.encoding==0
             assert (stream.resolution_h,stream.resolution_v)==(640,512)
             print('PASS third-stream discovery and unchanged display stream types',flush=True)
             if args.terrain:

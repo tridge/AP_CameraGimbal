@@ -225,10 +225,13 @@ def main():
             assert 'stopped' in (build / 'runtime/run/camera_app.log').read_text(), 'Camera did not finish graceful shutdown'
             (output / (backend + '-video-service.log')).write_bytes(
                 (build / 'runtime/run/camera_app.log').read_bytes())
-            recordings = list((build / 'runtime/mnt/DCIM/record').glob('*.mp4'))
+            # Factory settings record synchronous MISB KLV alongside H.264 in TS.
+            assert re.search(r'(?m)^telemetry\s*=\s*misb\s*$', config.read_text())
+            recordings = list((build / 'runtime/mnt/DCIM/record').glob('*.ts'))
             assert recordings, 'No recording created'
             for path in recordings:
                 with av.open(str(path)) as video:
+                    assert any(stream.type == 'data' for stream in video.streams), path
                     frame = next(video.decode(video=0))
                     check_video_size(TARGETS[backend], path.name.startswith('SITL_1_') and TARGETS[backend]['have_thermal'],
                                      frame.width, frame.height)
