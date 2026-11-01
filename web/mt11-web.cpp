@@ -5577,7 +5577,6 @@ static char *render_view_page(const char *requested_path, size_t *page_len,
                      "<button id=recording-fullscreen type=button>%s</button>"
                      "<p><input id=recording-seek type=range min=0 max=0 step=0.1 value=0 disabled aria-label=\"%s\"></p></div>"
                      "<p id=recording-status role=status>%s</p></div>"
-                     "<p><a href=/mpegts-license>mpegts.js licence</a></p>"
                      "<script src=/mpegts.js defer></script><script src=/recording.js defer></script>",
                      T(S_TS_PLAY), T(S_TS_PAUSE), T(S_TS_PLAY), T(S_TS_FULLSCREEN), T(S_TS_POSITION), T(S_TS_LOADING));
     } else if (mime_is_video(mime)) {

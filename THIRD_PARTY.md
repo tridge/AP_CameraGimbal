@@ -1,4 +1,4 @@
-# Third-party build dependencies
+# Third-party dependencies
 
 The `modules/mavlink` git submodule pins the MAVLink message definitions and
 the pymavlink generator (`git submodule update --init --recursive`):
@@ -98,3 +98,29 @@ These inputs remain subject to their component license terms. Vendor redistribut
 permission and the availability of corresponding source for the retained runtime
 inputs have not been established by this port; maintainers must confirm those terms
 before distributing the inputs. This entry records provenance, not a grant of rights.
+
+The camera Files player bundles an unmodified **mpegts.js 1.8.0** browser build
+(Apache-2.0), from
+<https://registry.npmjs.org/mpegts.js/-/mpegts.js-1.8.0.tgz> (`dist/mpegts.js`).
+Source: <https://github.com/xqq/mpegts.js/tree/v1.8.0>.
+Its SHA-256 is
+`e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0`.
+Copyright and attribution include Bilibili, magicxqq / zheng qian and もにょてっく.
+The upstream release contains no separate NOTICE file.
+
+The upstream source map identifies bundled `events` (Joyent and Node
+contributors), `es6-promise` (Yehuda Katz, Tom Dale, Stefan Penner and
+contributors), `process` (Roman Shtylman), `webworkify-webpack` (Boris Sirota
+and the xqq fork), and the webpack runtime (JS Foundation and contributors),
+under MIT. It also credits Dailymotion's hls.js helpers (Apache-2.0) and a
+UTF-8 helper derived from libWinTF8. This product includes software developed
+by StarBrilliant; the libWinTF8 copyright and redistribution terms are retained.
+
+The full Apache and MIT licence texts, original source copyright and
+attribution notices, and libWinTF8 terms are retained in
+`web/webroot/mpegts-license.html`, shipped with the web assets by the camera
+package builders. No player UI link is required to retain these notices.
+When updating the bundle, recheck its source map and upstream licences and
+update these notices and the pinned checksum together. The bundled JavaScript
+must retain its existing notices; any local source changes need an explicit
+modification notice as required by Apache-2.0 section 4(b).
