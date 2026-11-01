@@ -34,13 +34,14 @@ def wait_path(path, process, timeout=8.0):
     raise TimeoutError(path)
 
 
-def write_config(path, video1_uri):
+def write_config(path, video1_uri, telemetry="misb"):
     # Replace the file so the camera app's change detection always sees it.
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
         "[general]\ntimezone = UTC\n"
         "[mavlink]\nsystem_id = 1\n"
-        f"[network]\nvideo1_uri = {video1_uri}\n",
+        f"[network]\nvideo1_uri = {video1_uri}\n"
+        f"[video]\ntelemetry = {telemetry}\n",
         encoding="ascii",
     )
     os.replace(temporary, path)
@@ -113,7 +114,11 @@ def main():
 
             write_config(config, '""')
             automatic = wait_uri(connection, lambda uri: uri != second)
-            assert automatic.startswith("rtsp://") and automatic.endswith("/video1")
+            assert automatic.startswith("rtsp://") and automatic.endswith("/video1.misb")
+            write_config(config, first, telemetry="apcg")
+            wait_uri(connection, lambda uri: uri == first)
+            write_config(config, '""', telemetry="apcg")
+            wait_uri(connection, lambda uri: uri.endswith("/video1"))
             assert process.poll() is None, "camera app restarted"
             connection.close()
         finally:

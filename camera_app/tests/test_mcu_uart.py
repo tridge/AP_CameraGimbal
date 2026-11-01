@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix='mcu-uart-') as directory:
                 send(command(mod,512,269,1))
                 stream=take('VIDEO_STREAM_INFORMATION')
                 uri=urlsplit(stream.uri)
-                assert uri.scheme=='rtsp' and uri.path=='/video1', stream
+                assert uri.scheme=='rtsp' and uri.path=='/video1.misb', stream
                 address=ipaddress.IPv4Address(uri.hostname)
                 if have_camera_ipv4:
                     assert not address.is_unspecified and not address.is_loopback, stream

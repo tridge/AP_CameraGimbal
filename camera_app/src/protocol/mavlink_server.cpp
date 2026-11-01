@@ -936,7 +936,8 @@ static bool stream_running(const struct ca_mavlink_server *server, unsigned inde
 
 static unsigned base_stream_count()
 {
-    return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
+    // Reserve the raw stream ID even while its source is temporarily stale.
+    return APCAM_NUM_STREAMS + (APCAM_HAVE_RAW_THERMAL ? 1U : 0U);
 }
 
 /* Primary IDs use the selected format; compatibility previews follow raw
@@ -964,7 +965,7 @@ static bool stream_uses_misb(const ca_mavlink_server *server, unsigned id,
 
 static bool raw_thermal_stream(unsigned id)
 {
-    return ca_thermal_stream_available() && id==CA_RAW_THERMAL_STREAM_ID;
+    return APCAM_HAVE_RAW_THERMAL && id==CA_RAW_THERMAL_STREAM_ID;
 }
 
 static void stream_properties(const struct ca_mavlink_server *server,
@@ -1104,7 +1105,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
 #if !APCAM_HAVE_NETWORK_CONFIG
         // A configured URI (validated when loaded) replaces the one built here.
-        if (!misb && source == 1U && server->settings.video1_uri[0]) {
+        if (stream_id == 1U && server->settings.video1_uri[0]) {
             length = snprintf(uri, sizeof(uri), "%s", server->settings.video1_uri);
         } else
 #endif
@@ -1121,7 +1122,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
         info.framerate = ca_thermal_stream_fps();
         info.resolution_h = 640; info.resolution_v = 512;
         info.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
-            (ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
+            (ca_thermal_stream_available() && ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
         put_text(info.name, sizeof(info.name), "Raw Thermal (16-bit)");
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
         (void)route_local_ipv4(server, route, host);
@@ -1132,7 +1133,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
             put_text(info.name, sizeof(info.name), support.video3_name);
             if (support.enabled && support.video3_port) {
                 snprintf(uri, sizeof(uri), "http://%s:%u/v3.mkv", support.host, support.video3_port);
-                if (ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
+                if (ca_thermal_stream_available() && ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
             }
             else { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
         }
@@ -1173,7 +1174,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
         status.resolution_h = 640; status.resolution_v = 512;
         status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,true));
         status.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
-            (ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
+            (ca_thermal_stream_available() && ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
         const bool reachable = route->kind == ROUTE_PROXY ?
             server->settings.support.enabled && server->settings.support.video3_port : ca_thermal_stream_port() != 0;
         if (!reachable) status.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
@@ -1912,9 +1913,11 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
                 server->misb_stream_enabled[i] = enabled;
             }
         }
-        // stream_count() only admits the raw stream when it is available,
-        // whether through the local listener or SupportProxy alone.
-        else if (raw_thermal_stream(stream)) ca_thermal_stream_enable(enabled);
+        // The reserved raw ID remains discoverable while its source is stale.
+        else if (raw_thermal_stream(stream)) {
+            if (enabled && !ca_thermal_stream_available()) return MAV_RESULT_DENIED;
+            ca_thermal_stream_enable(enabled);
+        }
         else if (unsigned source=stream_source(server,stream)) {
             if(stream_uses_misb(server,stream,route)) server->misb_stream_enabled[source-1] = enabled;
             else server->stream_enabled[source-1] = enabled;

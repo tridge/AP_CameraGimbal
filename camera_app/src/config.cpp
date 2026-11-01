@@ -73,7 +73,7 @@ void ca_config_defaults(struct ca_config *config)
     config->recording_resolution = (enum ca_video_resolution)APCAM_DEFAULT_RECORDING_RESOLUTION;
     config->main_codec = CA_VIDEO_H264;
     config->sub_codec = CA_VIDEO_H264;
-    config->video_telemetry_format = CA_VIDEO_TELEMETRY_MISB;
+    config->video_telemetry_format = CA_DEFAULT_VIDEO_TELEMETRY;
     config->brightness = 50;
     config->saturation = 50;
     config->contrast = 50;

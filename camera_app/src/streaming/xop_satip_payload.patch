@@ -25,7 +25,7 @@
 +    /* VLC's SAT>IP module does not perform H.264 RTP depacketisation. For
 +     * aggregate-SETUP clients only, turn each RFC 6184 payload back into a
 +     * contiguous Annex-B byte stream after VLC strips the RTP headers. */
-+    if (ca_rtsp_is_satip_client(this) &&
++    if (ca_rtsp_is_satip_client(this) && media_channel_info_[channel_id].rtp_header.payload != 33 &&
 +        pkt.size > RTP_TCP_HEAD_SIZE + RTP_HEADER_SIZE) {
 +        const uint8_t *payload = pkt.data.get() + RTP_TCP_HEAD_SIZE +
 +                                 RTP_HEADER_SIZE;
