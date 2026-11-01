@@ -165,8 +165,9 @@ files, and the selected sort order is remembered within the browser tab.
 MISB `.ts` recordings also play on the File viewer page in browsers supporting
 H.264 Media Source Extensions (including Chrome and Firefox). The bundled,
 Apache-2.0-licensed mpegts.js 1.8.0 transmuxes the video in the browser; the camera
-only serves the original bytes, without transcoding. Its licence is linked from
-the player. Playback does not require an Internet connection or HTTPS.
+only serves the original bytes, without transcoding. Licence texts and component
+attributions are bundled in `webroot/mpegts-license.html` and documented in
+`THIRD_PARTY.md`. Playback does not require an Internet connection or HTTPS.
 
 The TS player reads small HTTP ranges at the start and end to establish the
 timeline, then buffers a short section around playback. Seeking into an unread

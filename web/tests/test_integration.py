@@ -389,6 +389,10 @@ def test_login_and_languages(csrf):
         assert "media-src 'self' blob:" in headers["Content-Security-Policy"]
         assert "script-src 'self'" in headers["Content-Security-Policy"]
     assert hashlib.sha256((root / "webroot/mpegts.js").read_bytes()).hexdigest() == "e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0"
+    notices = (root / "webroot/mpegts-license.html").read_text()
+    for attribution in ("Apache License", "Bilibili", "Copyright Joyent", "Yehuda Katz",
+                        "Roman Shtylman", "Boris Sirota", "JS Foundation", "Dailymotion", "StarBrilliant"):
+        assert attribution in notices, attribution
     for suffix, mime in (("ts", "video/mp2t"), ("mp4", "video/mp4")):
         recording = root / "mnt" / ("viewer-test." + suffix)
         payload = b"original telemetry and video bytes" * 20
@@ -396,6 +400,7 @@ def test_login_and_languages(csrf):
         query = urllib.parse.urlencode({"path": str(recording)})
         status, body, _ = request("GET", "/view?" + query, "initial-password")
         assert status == 200 and b"download=1" in body
+        assert b"href=/mpegts-license" not in body
         assert (b"id=recording-player" in body) == (suffix == "ts")
         assert (b"controls preload=metadata" in body) == (suffix == "mp4")
         status, body, headers = request("GET", "/file?" + query + "&download=1", "initial-password")
