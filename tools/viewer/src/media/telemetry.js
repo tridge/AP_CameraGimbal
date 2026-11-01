@@ -306,7 +306,9 @@ export function parseMetadataPES(data, options) {
     const flags = data[at + 2],
       size = data[at + 3] * 256 + data[at + 4];
     if (at + 5 + size > data.length || (flags & 0xc0) !== 0xc0) break;
-    // Fragmented AU cells need reassembly; never pass a partial cell as a local set.
+    // H.222.0 (10/2014), Tables 2-108/109: bits 7..6 identify a
+    // complete AU; bit 5 signals decoder configuration, not fragmentation.
+    // Configuration-bearing AUs need format-specific handling and are skipped.
     if (!(flags & 0x20)) result.push(...parseKLV(data.subarray(at + 5, at + 5 + size), options));
     at += 5 + size;
   }

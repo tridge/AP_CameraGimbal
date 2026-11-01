@@ -99,9 +99,14 @@ test('synchronous AU cell and asynchronous raw KLV produce the same valid set', 
   const nonRandomAccess = cell.slice();
   nonRandomAccess[2] = 0xcf;
   assert.deepEqual(parseMetadataPES(nonRandomAccess), parseMetadataPES(golden));
-  const fragmented = cell.slice();
-  fragmented[2] = 0xff;
-  assert.deepEqual(parseMetadataPES(fragmented), []);
+  const configuration = cell.slice();
+  configuration[2] = 0xff; // decoder_config_flag, NOT a fragment marker
+  assert.deepEqual(parseMetadataPES(configuration), []);
+  for (const indication of [0x1f, 0x5f, 0x9f]) {
+    const fragmented = cell.slice();
+    fragmented[2] = indication;
+    assert.deepEqual(parseMetadataPES(fragmented), []);
+  }
 });
 
 test('APCG AVC/HEVC SEI preserve unrestricted angles, named validity, and unknown future fields', () => {

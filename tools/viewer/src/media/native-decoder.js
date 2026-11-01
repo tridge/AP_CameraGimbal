@@ -121,7 +121,7 @@ export class FrameDecoder {
             try {
               return await this.native(frame, track, operation);
             } catch (error) {
-              this._dropState();
+              if (this._operation === operation) this._dropState();
               if (operation.controller.signal.aborted || error.name === 'AbortError')
                 throw abortError();
               this._status(`Software decode: ${error.message}`);
@@ -245,17 +245,21 @@ export class FrameDecoder {
     const index = frames.findIndex((frame) => frame.id === target.id);
     if (index < 0) throw new Error('Frame no longer available');
     const timestamp = Math.round(target.pts * 1e6);
+    let first = index;
+    while (first >= 0 && !frames[first].keyframe && index - first < this.maxGopFrames) first--;
     let state = this._state;
     if (
       state?.key !== configKey(track) ||
       state.failure ||
+      (frames[first]?.keyframe &&
+        first > state.next &&
+        !state.outputs.has(timestamp) &&
+        !state.pendingTimestamps.has(timestamp)) ||
       (state.flushed && !state.outputs.has(timestamp)) ||
       (!state.outputs.has(timestamp) &&
         index < state.next &&
         !state.pendingTimestamps.has(timestamp))
     ) {
-      let first = index;
-      while (first >= 0 && !frames[first].keyframe && index - first < this.maxGopFrames) first--;
       if (first < 0 || !frames[first]?.keyframe)
         throw new Error(
           `No preceding keyframe within ${this.maxGopFrames} packets; software fallback uses the same bounded-group limit`,

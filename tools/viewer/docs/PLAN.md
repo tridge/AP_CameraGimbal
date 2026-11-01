@@ -68,7 +68,7 @@ No deployment or git push is included. Preserve the existing camera application.
 - Real streamed RGB telemetry copy plays and seeks. Real FFV1 thermal MKV retains
   raw uint16 samples, supports at least four palettes and hover temperatures.
 - Small representative BIN/tlog fixtures and real flight logs produce correct
-  mission/fence/track; frame3/6/10 and exclusion fences retain meaning.
+  mission/fence/track; frame 3/6/10 and exclusion fences retain meaning.
 - Browser automation runs in an actual Xephyr window with visible Chrome (no
   tests on the user's main desktop). Confirm WebGL 2D/3D, hover, controls and
   exports with screenshots, and no file-data upload requests.
@@ -77,16 +77,16 @@ No deployment or git push is included. Preserve the existing camera application.
 
 ## Plan review decisions and stage-0 evidence
 
-Claude plan review completed (persistent skill session988c44c8-f336-415d-9a8e-baceff607652).
+Claude plan review completed (persistent skill session 988c44c8-f336-415d-9a8e-baceff607652).
 
-- Current KLV uses standard tags90/91, not arbitrary-angle private extensions.
+- Current KLV uses standard tags 90/91, not arbitrary-angle private extensions.
   Prefer co-carried APCG SEI; invalid full-range tags never fall back to legacy.
 - Domain implementation is independent of GPL UAVLogViewer source; it was read
   as a behavior reference. Explicit MAVLink/ArduPilot frame and fence semantics
   replace its lossy flattening. No source fragments copied.
 - Add monotone time tie-points (import/export), keeping original UTC separate
   from corrected pose-selection UTC. Offsets alone do not repair variable clocks.
-- Raw sensor orientation defaults0. Display rotation is separate; findings retain
+- Raw sensor orientation defaults 0. Display rotation is separate; findings retain
   raw(x,y), frame ID, calibration, clock correction and terrain provenance.
 - Use single-thread WASM to avoid COEP conflicts with external map tiles. Disable
   implicit Cesium ion access. Pin/package dependencies locally; all file reads
@@ -96,10 +96,10 @@ Claude plan review completed (persistent skill session988c44c8-f336-415d-9a8e-ba
 - Qualify the /viewer prefix during initial integration. Validate raw pixels and
   source clocks with Python-generated vectors and real files before UI claims.
 
-Stage0: visible Chrome in Xephyr:99 supportedH264 WebCodecs, not HEVC orFFV1.
-Pinned FFmpeg core0.12.10 WORKERFS proof read2,759,203,562-byte real MKV at0/3000/7000s;
-max read204KiB,32MiB WASM heap, byte-exactgray16. Whole-file-seek rescans were slow;
-indexed miniMatroska decoding instead read150KiB beyond2GiB and decoded in38ms.
+Stage 0: visible Chrome in Xephyr:99 supported H.264 WebCodecs, not HEVC or FFV1.
+Pinned FFmpeg core 0.12.10 WORKERFS proof read 2,759,203,562-byte real MKV at 0/3000/7000s;
+max read 204 KiB,32 MiB WASM heap, byte-exactgray16. Whole-file-seek rescans were slow;
+indexed miniMatroska decoding instead read 150 KiB beyond 2 GiB and decoded in 38 ms.
 The primary decoder uses bounded mini-containers; whole-file WORKERFS was only a feasibility spike.
 Evidence resides in /data/review/web-viewer/codec-proof/. It is not a browser
-performance promise for4KHEVC; unsupportedhardware uses bounded software decoding.
+performance promise for 4K HEVC; unsupported hardware uses bounded software decoding.

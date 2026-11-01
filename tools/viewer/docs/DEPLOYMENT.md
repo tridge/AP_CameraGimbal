@@ -23,6 +23,13 @@ sets terrainDatum to amsl. Those heights feed both the visual globe and pixel
 picking directly; no local elevation file is required. Other ellipsoidal terrain
 services require the corresponding datum choice and local geoid separation.
 
+`npm run build` prepares runtime assets and notices; it does not assemble a
+corresponding-source distribution. Before publishing, add the exact viewer
+source (including local changes), lockfile and build instructions, plus the
+corresponding FFmpeg sources/build definitions for the pinned core binary,
+to the release. Provide a download link in the release notices and verify it.
+A moving development-branch link alone does not identify a deployed build.
+
 For each update, create a new release as logviewer, upload all of dist (including
 workers, WASM, notices and source materials), and verify a SHA256 manifest before
 switching current. Use 755 directories and 644 files so nginx can read through
@@ -69,7 +76,7 @@ existing root, MIME and Content-Encoding gzip handling are retained.
 
 The public service uses Access-Control-Allow-Origin: \* without credentials,
 permits GET/HEAD/OPTIONS and accepts the Accept/Content-Type/Range headers.
-OPTIONS returns204; CORS headers are also present on errors. Private viewer
+OPTIONS returns 204; CORS headers are also present on errors. Private viewer
 assets and other virtual hosts are outside this change. Any hosting server
 that adds a separate CSP must also permit connect-src to
 https://plot.ardupilot.org/quantized/.

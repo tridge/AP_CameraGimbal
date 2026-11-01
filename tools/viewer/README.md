@@ -8,7 +8,7 @@ Optional flight logs add the mission, geofences, home and actual flight track.
 
 ## Run locally
 
-Requires Node24 or newer for development, and a current browser with WebGL.
+Requires Node 24 or newer for development, and a current browser with WebGL.
 Qualification uses Google Chrome; H.264 decoding uses WebCodecs where supported.
 Other codecs use the included local software decoder. No system FFmpeg is needed
 for normal browser use.
@@ -46,7 +46,7 @@ runtime does not require Node or Python. Do not commit generated assets,
 The two camera telemetry encodings are detected automatically. Co-carried APCG
 SEI takes precedence over KLV because it preserves additional fields and full
 precision. KLV checksums and invalid sentinels are checked; unavailable values
-stay unavailable. Standard full-range tags90/91 supersede legacy pitch/roll
+stay unavailable. Standard full-range tags 90/91 supersede legacy pitch/roll
 fields, including when explicitly invalid. Existing raw thermal archives from
 `tools/thermal_to_video.py` retain native uint16 pixels and calibration.
 
@@ -62,12 +62,12 @@ available decodable frame while retaining their original elapsed timeline.
 Saved review times are migrated with their original frame/UTC associations;
 observations outside an edited clip remain exportable and are labelled outside
 the clip. Calibration anchors may precede its first presented image.
-MPEG-TS indexing allows up to two decode-clock seconds or180 video descriptors
+MPEG-TS indexing allows up to two decode-clock seconds or 180 video descriptors
 for delayed KLV; metadata beyond that bound is explicitly diagnosed.
 
 Native HEVC support varies by browser/platform. The bounded software fallback
-works with the tested1080p/4K recordings, but4K HEVC may review at approximately
-one frame per second on the tested machine. It is not a real-time4K promise.
+works with the tested 1080p/4K recordings, but 4K HEVC may review at approximately
+one frame per second on the tested machine. It is not a real-time 4K promise.
 Unsupported dimensions or excessively long/large decode groups fail explicitly.
 Raw thermal review is substantially faster and retains exact sensor values.
 
@@ -84,9 +84,9 @@ Raw thermal review is substantially faster and retains exact sensor values.
 3. **Add a BIN or tlog** when mission/fence context is useful. Plan selection
    defaults to the video pose time; the latest-log overview is explicit. Unknown
    time, unknown home and unconfirmed/incomplete mission uploads are labelled.
-   Inclusion/exclusion polygons and circles retain their types in2D and3D.
+   Inclusion/exclusion polygons and circles retain their types in 2D and 3D.
 4. **Inspect ground positions.** The configured quantized terrain service supplies
-   pixel-to-ground intersections automatically, including in2D. There are no
+   pixel-to-ground intersections automatically, including in 2D. There are no
    manual elevation files or flat-altitude controls. Missing/stale camera pose,
    upward rays, missing terrain coverage and loading/network failures are
    explained next to the pixel reading. Picking requires the terrain endpoint
@@ -104,7 +104,7 @@ Raw thermal review is substantially faster and retains exact sensor values.
    calibration, raw-orientation hypothesis, pose, terrain and clock provenance.
    Add notes and export JSON/GeoJSON. Unmapped observations are retained.
 
-The projection uses raw sensor orientation0. Display rotation0/180° changes
+The projection uses raw sensor orientation 0. Display rotation 0/180° changes
 only presentation and pointer conversion. Existing metadata rotation is retained
 in findings; it does not silently change the projection hypothesis. Field FOV,
 boresight, timing and elevation calibration still determine ground accuracy.
@@ -117,12 +117,12 @@ unless telemetry identifies this, the viewer cannot distinguish the two. Check
 alignment while the camera is moving before interpreting projected locations.
 
 The **Follow** checkbox below the map is enabled by default. It centres on the
-current video's aligned aircraft position while preserving zoom and3D camera
+current video's aligned aircraft position while preserving zoom and 3D camera
 orientation. Uncheck it to pan and inspect a fixed area; **Center** recentres
 once without enabling Follow. Dragging temporarily suspends automatic movement.
 
 Use the map's **+ / −** buttons, or keyboard **+ / −** (also **=** and numpad
-keys), to zoom in2D and3D. Follow retains the selected zoom. Shortcuts also work
+keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also work
 from the timeline or focused map buttons; text/number inputs, dialogs and browser
 Ctrl/Command zoom shortcuts keep their normal behaviour.
 
@@ -171,7 +171,7 @@ includes the shared terrain path. If an installation already serves terrain,
 credential-free GET/HEAD access and OPTIONS preflights. It does not receive
 recording/log bytes; terrain tile requests reveal the area being viewed.
 
-The configured quantized-mesh endpoint supplies both3D visual terrain and camera
+The configured quantized-mesh endpoint supplies both 3D visual terrain and camera
 ray intersections, independently of the visible map mode/zoom. The plot server's
 SRTM tiles store orthometric/EGM96 (AMSL) heights: set `terrainDatum: 'amsl'`.
 For an ellipsoidal terrain service use `terrainDatum: 'ellipsoid'` and set
@@ -235,7 +235,7 @@ boundaries. In brief:
   WebCodecs and bounded software decoder. Source PTS and raw payloads stay here.
 - `src/domain`: independent clocks, calibrated thermal tools, projection/DEM and
   flight-log models. These modules have no DOM or map-library dependency.
-- `src/map`: one map/entity model shared by2D and3D; atomic provider changes.
+- `src/map`: one map/entity model shared by2D and 3D; atomic provider changes.
 - `src/ui`: layout and styling. `src/main.js` coordinates review state and events.
 - `tests`: format golden vectors, domain tests, real-file opt-ins, and headed
   browser qualification with reproducible small generated fixtures.

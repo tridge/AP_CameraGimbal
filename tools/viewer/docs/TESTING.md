@@ -6,6 +6,15 @@ Run from `tools/viewer`. The tests use the built application at
 `http://127.0.0.1:5173/viewer/` for development. Qualification should finish
 against the production build.
 
+Install Xephyr, ImageMagick (the `import` command), Python with NumPy/PyAV,
+and FFmpeg with libx264 before running browser tests. On Debian/Ubuntu the
+system packages are `xserver-xephyr imagemagick ffmpeg python3-venv`.
+Install the Python fixture dependencies in a virtual environment with
+`python -m pip install av==18.1.0 numpy`; older distribution PyAV packages may
+lack `add_data_stream`. Use `PYTHON=/path/to/venv/bin/python npx playwright test`
+when that interpreter is not first on PATH.
+The CI workflow uses a virtual parent display and a dedicated Xephyr child.
+
 Chrome runs visibly inside a dedicated Xephyr X server, default `:99`. Start
 that display separately with a suitable viewport; do not run these tests on
 the operator's desktop. The config rejects `:0` and never falls back to headless
@@ -75,7 +84,7 @@ Set `VIEWER_REAL_TERRAIN_URL=/quantized/` alongside the real thermal/BIN paths
 to enable `terrain-real.spec.js` in Chrome. For local production preview use
 `VIEWER_BASE_PATH=/video/ VIEWER_TERRAIN_PROXY=https://plot.ardupilot.org npm run preview`;
 copy the plot runtime config into dist/viewer-config.js first. The deployed
-site already supplies both. This test checks the hovered raw pixel,2D/3D
+site already supplies both. This test checks the hovered raw pixel, 2D/3D
 invariance, absence of manual elevation controls, and a mark resolving against
 its captured frame while playback advances.
 
@@ -92,24 +101,24 @@ python3 scripts/qualify-firefox.py \
   --output /tmp/viewer-firefox-results
 ```
 
-The defaults select frame8315, raw pixel337,373 from the current test flight;
+The defaults select frame 8315, raw pixel 337,373 from the current test flight;
 `--frame`, `--x` and `--y` support other recordings. Results include browser
 version, projected coordinates/terrain provenance, the marked observation and
-screenshots in both map modes. No recording bytes are uploaded. Default OSM
-imagery still makes normal map-tile requests revealing the viewport to OSM.
+screenshots in both map modes. No recording bytes are uploaded. Default Esri
+imagery still makes normal map-tile requests revealing the viewport to Esri.
 
 For a genuine cross-origin terrain test, serve dist below /video/ using a plain
 static server and set VIEWER_REAL_TERRAIN_URL=https://plot.ardupilot.org/quantized/.
 Do not enable the Vite terrain proxy. The real-terrain Chrome case and the stock
 Firefox qualifier also force a Content-Type JSON preflight when the terrain
-origin differs. A local /quantized/layer.json request should return404.
+origin differs. A local /quantized/layer.json request should return 404.
 
 ## Follow and map-track navigation
 
 map-navigation.spec.js tests the checked Follow control below the map, zoom
-preservation, frozen camera when disabled,3D camera transport, dragging and
-click-vs-drag behaviour. Track clicks are exercised in2D/3D at devicePixelRatio2
-and resolutionScale1.5, with exact and near-line positions, background misses
+preservation, frozen camera when disabled, 3D camera transport, dragging and
+click-vs-drag behaviour. Track clicks are exercised in 2D/3D at devicePixelRatio 2
+and resolutionScale 1.5, with exact and near-line positions, background misses
 and the original thermal/BIN recording. Unit cases cover gaps before decimation,
 low-rate long tracks, overlapping and stationary passes, display bounds, aligned
 pose mapping and cancelled asynchronous builds.
@@ -121,5 +130,5 @@ records selected frame numbers and stores navigation screenshots.
 The Firefox navigation qualification also checks on-map zoom buttons and actual
 keyboard +/− input. map-zoom-footprint.spec.js covers ordinary/numpad keys,
 editable-field and browser-shortcut handling, and zoom retention during Follow.
-Its moving partial-footprint test reads rendered yellow pixels in2D/3D to detect
+Its moving partial-footprint test reads rendered yellow pixels in 2D/3D to detect
 the asynchronous geometry flicker that entity visibility flags cannot reveal.

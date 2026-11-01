@@ -1,0 +1,64 @@
+name: Video viewer
+on:
+  push:
+    paths: ['tools/viewer/**', 'tools/thermal_to_video.py', '.github/workflows/viewer.yml']
+  pull_request:
+    paths: ['tools/viewer/**', 'tools/thermal_to_video.py', '.github/workflows/viewer.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: video-viewer-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  viewer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/viewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/viewer/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - name: Install visible-browser test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xserver-xephyr xvfb imagemagick ffmpeg
+          python -m pip install 'av==18.1.0' numpy
+          npx playwright install --with-deps chromium
+      - name: Test production build in Xephyr
+        run: |
+          set -euo pipefail
+          Xvfb :98 -screen 0 1600x1100x24 -nolisten tcp &
+          parent_pid=$!
+          trap 'kill "$parent_pid" 2>/dev/null || true' EXIT
+          for i in {1..50}; do [ -S /tmp/.X11-unix/X98 ] && break; sleep 0.1; done
+          test -S /tmp/.X11-unix/X98
+          DISPLAY=:98 Xephyr :99 -screen 1600x1100 -ac -noreset -nolisten tcp &
+          xephyr_pid=$!
+          for i in {1..50}; do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
+          test -S /tmp/.X11-unix/X99
+          npm run preview > /tmp/viewer-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" "$xephyr_pid" "$parent_pid" 2>/dev/null || true' EXIT
+          for i in {1..50}; do curl -fsS http://127.0.0.1:4173/viewer/ >/dev/null && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:4173/viewer/ >/dev/null
+          export VIEWER_CHROME
+          VIEWER_CHROME=$(node --input-type=module -e "import { chromium } from '@playwright/test'; console.log(chromium.executablePath())")
+          VIEWER_TEST_DISPLAY=:99 npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viewer-browser-results
+          path: tools/viewer/test-results/

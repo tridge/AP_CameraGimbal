@@ -77,7 +77,7 @@ test('Follow starts checked below map and preserves2D zoom through seeking and t
   ).toBeCloseTo(before.height, 5);
 });
 
-test('map clicks near the video track seek and pause in2D and3D, while off-track clicks do nothing', async ({
+test('map clicks near the video track seek and pause in 2D and 3D, while off-track clicks do nothing', async ({
   page,
 }, testInfo) => {
   await start(page);

@@ -197,3 +197,24 @@ test('pose freshness is explicit and missing terrain never acquires a flat fallb
   assert.equal(dem.project(nadir, 319.5, 255.5, 640, 512).reason, 'No terrain coverage.');
   assert.equal(dem.ground(nadir, 319.5, 255.5, 640, 512), null);
 });
+
+test('null or nonnumeric raw coordinates never become valid ground poses', () => {
+  for (const key of ['lat_e7', 'lon_e7'])
+    for (const value of [null, undefined, '', '0', NaN]) {
+      const bad = structuredClone(nadir);
+      bad.position[key] = value;
+      assert.equal(validPose(bad), null);
+    }
+});
+
+test('pose longitude interpolation crosses the antimeridian along the short arc', () => {
+  const a = structuredClone({ ...nadir, utc_us: 1e6 });
+  const b = structuredClone({ ...nadir, utc_us: 2e6 });
+  a.position.lon_e7 = 179.9e7;
+  b.position.lon_e7 = -179.9e7;
+  const timeline = new PoseTimeline();
+  timeline.rebuild([{ telemetry: a }, { telemetry: b }]);
+  assert.ok(Math.abs(Math.abs(timeline.at(1.5e6).position.lon_e7 / 1e7) - 180) < 1e-8);
+  assert.ok(timeline.at(1.25e6).position.lon_e7 > 179.9e7);
+  assert.ok(timeline.at(1.75e6).position.lon_e7 < -179.9e7);
+});
