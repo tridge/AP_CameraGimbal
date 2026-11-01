@@ -639,18 +639,27 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         assert bytes(camera_info.vendor_name).rstrip(b"\0") == b"ArduPilot"
         assert camera_info.flags & mavutil.mavlink.CAMERA_CAP_FLAGS_CAPTURE_IMAGE
         streams = request_video_stream_information(connection)
-        # MT11 adds the lossless raw thermal stream 3 (private type 200).
-        assert set(streams) == {1, 2, 3}, streams
+        # MISB is primary; raw thermal keeps ID 3, with APCG previews at 4/5.
+        assert set(streams) == {1, 2, 3, 4, 5}, streams
+        assert all(stream.count == 5 for stream in streams.values()), streams
         assert streams[1].uri.startswith("rtsp://127.0.0.1:")
-        assert streams[1].uri.endswith("/video1")
+        assert streams[1].uri.endswith("/video1.misb")
         assert streams[2].uri.startswith("rtsp://127.0.0.1:")
-        assert streams[2].uri.endswith("/video2")
+        assert streams[2].uri.endswith("/video2.misb")
         assert streams[2].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
-        assert streams[3].type == 200 and streams[3].count == 3, streams[3]
+        assert streams[3].type == 200, streams[3]
         assert streams[3].uri.startswith("http://127.0.0.1:")
         assert streams[3].uri.endswith("/thermal.mkv")
         assert streams[3].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
         assert (streams[3].resolution_h, streams[3].resolution_v) == (640, 512)
+        for source, compatibility in ((1, 4), (2, 5)):
+            preview = streams[compatibility]
+            assert preview.uri == streams[source].uri.removesuffix('.misb'), preview
+            assert preview.type == streams[source].type
+            assert (preview.resolution_h, preview.resolution_v, preview.hfov, preview.encoding) == (
+                streams[source].resolution_h, streams[source].resolution_v,
+                streams[source].hfov, streams[source].encoding)
+
         gimbal_info = request_device_message(
             connection, GIMBAL_COMPONENT,
             mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION,

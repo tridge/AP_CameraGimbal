@@ -95,8 +95,11 @@ while True:
             info=json.loads(subprocess.check_output(['ffprobe','-v','error','-select_streams','v:0',
                 '-show_entries','stream=width,height','-of','json',str(live)]))
             assert (info['streams'][0]['width'],info['streams'][0]['height'])==(1920,1080),info
-        files=list(records.glob('*.mp4'));assert len(files)==2
+        files=list(records.glob('*.ts'));assert len(files)==2
         for file in files:
+            streams=json.loads(subprocess.check_output(['ffprobe','-v','error',
+                '-show_entries','stream=codec_name','-of','json',str(file)]))['streams']
+            assert [stream['codec_name'] for stream in streams] == ['h264','klv'], streams
             info=json.loads(subprocess.check_output(['ffprobe','-v','error','-count_frames','-select_streams','v:0',
                 '-show_entries','stream=width,height,nb_read_frames','-of','json',str(file)]))['streams'][0]
             assert (info['width'],info['height'])==(3840,2160),info
@@ -109,7 +112,7 @@ while True:
             assert rows[0]['position']['lat_e7']==-353632610
             assert rows[0]['vehicle_attitude'] is not None
             assert abs(rows[0]['hfov_deg']-54.7)<.001
-        print('PASS native Z1', args.orientation, ': simultaneous 1080p live/4K MP4, repeated record start/stop, per-frame FC/gimbal telemetry')
+        print('PASS native Z1', args.orientation, ': simultaneous 1080p live/4K MISB TS, repeated record start/stop, per-frame FC/gimbal telemetry')
     finally:
         app.terminate()
         try: app.wait(timeout=10)
