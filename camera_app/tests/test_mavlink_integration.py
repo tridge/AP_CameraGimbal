@@ -680,8 +680,8 @@ def full_capability_test(connection, siyi_port, capture_root, recording_state,
         mavutil.mavlink.MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION,
         "VIDEO_STREAM_INFORMATION", 2,
     )
-    assert visible.stream_id == 1 and visible.uri.endswith("/video1")
-    assert thermal.stream_id == 2 and thermal.uri.endswith("/video2")
+    assert visible.stream_id == 1 and visible.uri.endswith("/video1.misb")
+    assert thermal.stream_id == 2 and thermal.uri.endswith("/video2.misb")
     assert visible.uri.startswith("rtsp://127.0.0.1:")
     assert thermal.uri.startswith("rtsp://127.0.0.1:")
     assert 0 < visible.hfov <= 88

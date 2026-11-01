@@ -60,6 +60,16 @@ enum ca_video_telemetry_format {
     CA_VIDEO_TELEMETRY_MISB = 1,
 };
 
+#define CA_DEFAULT_VIDEO_TELEMETRY CA_VIDEO_TELEMETRY_MISB
+static inline const char *ca_video_telemetry_name(enum ca_video_telemetry_format format)
+{
+    switch (format) {
+    case CA_VIDEO_TELEMETRY_APCG: return "apcg";
+    case CA_VIDEO_TELEMETRY_MISB: return "misb";
+    }
+    return NULL;
+}
+
 enum ca_thermal_palette {
     CA_PALETTE_WHITE_HOT = 0,
     CA_PALETTE_SEPIA = 2,

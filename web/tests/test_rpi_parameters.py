@@ -27,6 +27,7 @@ os.chmod(root / "app" / "web.pass", 0o600)
 camera_ini = root / "app" / "camera.ini"
 camera_ini.write_text(
     (repo / "packaging" / "rpi_libcam_caddx" / "camera.ini").read_text(encoding="utf-8")
+    .replace("telemetry = misb\n", "")
     + "interface = eth0\nprimary_address = 192.0.2.5/24\n",
     encoding="utf-8",
 )
@@ -105,6 +106,7 @@ try:
             time.sleep(0.05)
 
     page, values = parameters()
+    assert values["video_telemetry"] == "misb", values
     assert "network_video1_uri" in values, sorted(values)
     assert "network_capture" in values
     for hidden in ("network_interface", "network_primary_address",
@@ -117,6 +119,7 @@ try:
     status, body = save(values)
     assert status in (200, 303), (status, body[:500])
     saved = camera_ini.read_text(encoding="utf-8")
+    assert re.search(r'^telemetry = "?misb"?$', saved, re.M), saved
     assert re.search(r"^video1_uri = \"?rtsp://10\.0\.2\.100:9000/camera/main\"?$", saved, re.M), saved
     # Hidden fields are not rewritten: the ignored legacy values stay as they were.
     assert "primary_address = 192.0.2.5/24" in saved, saved

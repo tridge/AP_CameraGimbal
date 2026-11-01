@@ -303,7 +303,7 @@ def main():
             time.sleep(3)
             command(mav.MAV_CMD_VIDEO_STOP_CAPTURE)
             assert receive('COMMAND_ACK').result == mav.MAV_RESULT_ACCEPTED
-            files = list(records.glob('*.mp4')); assert len(files) == 1
+            files = list(records.glob('*.ts')); assert len(files) == 1
             probe = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames',
                 '-show_entries', 'stream=codec_name,width,height,nb_read_frames', '-of', 'json', str(files[0])])
             stream = json.loads(probe)['streams'][0]
@@ -433,7 +433,7 @@ def main():
                     for line in z.read('gcu/ap/SHA256SUMS').decode().splitlines():
                         digest, name = line.split('  ')
                         assert hashlib.sha256(z.read('gcu/ap/'+name)).hexdigest() == digest
-            print('Z1-Mini offline integration passed: MCU, MAVLink, H264/MP4/RTSP, web temperature and package scope')
+            print('Z1-Mini offline integration passed: MCU, MAVLink, H264/MISB TS/RTSP, web temperature and package scope')
         finally:
             if web:
                 web.terminate(); web.wait(timeout=5)

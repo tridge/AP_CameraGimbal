@@ -117,7 +117,10 @@ When the Pi has more than one network, for example Ethernet to the flight
 controller and WiFi to the GCS, set the URI the GCS can reach in the web
 interface under Parameters → Network → Video stream 1 URI (`[network]
 video1_uri` in `camera.ini`), a complete `rtsp://` or `rtsps://` URI such as
-`rtsp://10.0.0.5:8554/video1`. It is sent to the GCS as is, so it can also set a
+`rtsp://10.0.0.5:8554/video1.misb` for the default MISB format, or
+`rtsp://10.0.0.5:8554/video1` when `[video] telemetry = apcg`. It overrides
+primary stream ID 1 in either format. The APCG compatibility stream keeps its
+automatically generated address. It is sent to the GCS as is, so it can also set a
 different port, a host name or an extra path; a blank value goes back to the
 guess. The camera does not check that it serves the path you give: to serve an
 extra path, set `alias` under `[stream.main]` as well. Credentials are not

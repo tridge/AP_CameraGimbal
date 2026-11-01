@@ -43,20 +43,21 @@ static unsigned free_port()
     unsigned port=ntohs(addr.sin_port); close(fd); return port;
 }
 struct Client {
-    int fd; unsigned sequence=0; std::string uri,session;
-    Client(unsigned port,const char *path) {
+    int fd; unsigned sequence=0; std::string uri,session; bool aggregate;
+    Client(unsigned port,const char *path,bool describe=true) {
+        aggregate=!describe;
         fd=socket(AF_INET,SOCK_STREAM,0); assert(fd>=0);
         timeval timeout{2,0}; setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
         sockaddr_in addr{}; addr.sin_family=AF_INET; addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK); addr.sin_port=htons(port);
         assert(connect(fd,reinterpret_cast<sockaddr *>(&addr),sizeof(addr))==0);
         uri="rtsp://127.0.0.1:"+std::to_string(port)+"/"+path;
-        request("DESCRIBE");
+        if(describe) request("DESCRIBE");
     }
     ~Client() { disconnect(); }
     void disconnect() { if(fd>=0) { shutdown(fd,SHUT_RDWR); close(fd); fd=-1; } }
     void read(void *data,size_t size) { ssize_t n=recv(fd,data,size,MSG_WAITALL); if(n!=ssize_t(size)) fprintf(stderr,"read fd=%d requested=%zu returned=%zd errno=%d\n",fd,size,n,errno); assert(n==ssize_t(size)); }
     void request(const char *method) {
-        std::string text=std::string(method)+" "+uri+(std::string(method)=="SETUP" ? "/track0" : "")+" RTSP/1.0\r\nCSeq: "+std::to_string(++sequence)+"\r\n";
+        std::string text=std::string(method)+" "+uri+(std::string(method)=="SETUP" && !aggregate ? "/track0" : "")+" RTSP/1.0\r\nCSeq: "+std::to_string(++sequence)+"\r\n";
         if(std::string(method)=="DESCRIBE") text+="Accept: application/sdp\r\n";
         if(!session.empty()) text+="Session: "+session+"\r\n";
         if(std::string(method)=="SETUP") text+="Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n";
@@ -146,6 +147,22 @@ int main()
     wait_idle(server,server->streams[0].aliases[0]);
     for(unsigned i=0;i<20;i++) push();
     assert(sei_calls==4 && ts_calls==2);
+    // SETUP-before-DESCRIBE selects XOP's SAT>IP path. MP2T bytes must stay
+    // untouched while the legacy H.264 endpoint retains Annex-B conversion.
+    for(bool transport: {true,false}) {
+        Client aggregate(port,transport?"video1.misb":"video1",false);
+        aggregate.play(); push();
+        uint8_t header[4]; aggregate.read(header,4);
+        assert(header[0]=='$' && header[1]==0);
+        std::vector<uint8_t> packet(header[2]*256+header[3]);
+        aggregate.read(packet.data(),packet.size());
+        if(transport) {
+            assert((packet[1]&127)==33 && (packet.size()-12)%188==0);
+            for(size_t at=12;at<packet.size();at+=188) assert(packet[at]==0x47);
+        } else {
+            assert(packet.size()>=17 && packet[12]==0 && packet[13]==0 && packet[14]==0 && packet[15]==1);
+        }
+    }
     ca_rtsp_close(server);
     puts("PASS idle/DESCRIBE/SETUP/TEARDOWN perform no live packaging; PLAY, aliases, concurrent formats and reconnect work");
 }
