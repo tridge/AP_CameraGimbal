@@ -41,7 +41,7 @@ inline void APC_HTTPResponse::send(int status, const char *reason,
         "X-Content-Type-Options: nosniff\r\n"
         "X-Frame-Options: DENY\r\n"
         "Content-Security-Policy: default-src 'none'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' https://firmware.ardupilot.org; media-src 'self'; "
+        "img-src 'self' https://firmware.ardupilot.org; media-src 'self' blob:; "
         "script-src 'self'; connect-src 'self'; form-action 'self'; "
         "frame-ancestors 'none'\r\n"
         "%s\r\n",

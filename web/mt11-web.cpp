@@ -5566,6 +5566,20 @@ static char *render_view_page(const char *requested_path, size_t *page_len,
         page.appendf("<img class=preview alt=\"%s\" src=\"", T(S_VIEWER_IMAGE_ALT));
         append_path_query(&page, "/file?path=", resolved);
         page.append("\">");
+    } else if (strcmp(mime, "video/mp2t") == 0) {
+        page.append("<div id=recording-player data-url=\"");
+        append_path_query(&page, "/file?path=", resolved);
+        page.appendf("\" data-loading=\"%s\" data-unavailable=\"%s\" data-error=\"%s\" data-seek-error=\"%s\">",
+                     T(S_TS_LOADING), T(S_TS_UNAVAILABLE), T(S_TS_ERROR), T(S_TS_SEEK_ERROR));
+        page.appendf("<video id=recording-video class=preview playsinline preload=none></video>"
+                     "<div id=recording-controls><button id=recording-play type=button disabled data-play=\"%s\" data-pause=\"%s\">%s</button> "
+                     "<span id=recording-time>00:00 / --:--</span> "
+                     "<button id=recording-fullscreen type=button>%s</button>"
+                     "<p><input id=recording-seek type=range min=0 max=0 step=0.1 value=0 disabled aria-label=\"%s\"></p></div>"
+                     "<p id=recording-status role=status>%s</p></div>"
+                     "<p><a href=/mpegts-license>mpegts.js licence</a></p>"
+                     "<script src=/mpegts.js defer></script><script src=/recording.js defer></script>",
+                     T(S_TS_PLAY), T(S_TS_PAUSE), T(S_TS_PLAY), T(S_TS_FULLSCREEN), T(S_TS_POSITION), T(S_TS_LOADING));
     } else if (mime_is_video(mime)) {
         page.append("<video class=preview controls preload=metadata src=\"");
         append_path_query(&page, "/file?path=", resolved);
@@ -7496,6 +7510,12 @@ static void handle_request(int fd, const char *peer)
         send_network_capture_status(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
         send_parameter_page(fd, NULL, false, NULL);
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/mpegts.js") == 0) {
+        send_asset(fd, "mpegts.js", "application/javascript; charset=utf-8");
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/recording.js") == 0) {
+        send_asset(fd, "recording.js", "application/javascript; charset=utf-8");
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/mpegts-license") == 0) {
+        send_asset(fd, "mpegts-license.html", "text/html; charset=utf-8");
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/files.js") == 0) {
         send_asset(fd, files_script, "application/javascript; charset=utf-8");
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters.js") == 0) {

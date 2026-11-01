@@ -38,6 +38,10 @@ public:
         }
         return false;
     }
+    static uint64_t asset_limit(const char *name)
+    {
+        return strcmp(name, "mpegts.js") == 0 ? 512U * 1024U : 256U * 1024U;
+    }
     bool available() const
     {
         if (!_path) return false;
@@ -48,7 +52,7 @@ public:
             int fd = openat(directory, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
             struct stat st {};
             ok = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
-                 st.st_size > 0 && uint64_t(st.st_size) <= 256U * 1024U;
+                 st.st_size > 0 && uint64_t(st.st_size) <= asset_limit(name);
             if (fd >= 0) close(fd);
             if (!ok) break;
         }
@@ -66,7 +70,7 @@ public:
         if (fd < 0) { output.invalidate(); return false; }
         struct stat st {};
         bool ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
-                  uint64_t(st.st_size) <= 256U * 1024U;
+                  uint64_t(st.st_size) <= asset_limit(name);
         char buffer[4096];
         off_t remaining = ok ? st.st_size : 0;
         while (ok && remaining > 0) {
