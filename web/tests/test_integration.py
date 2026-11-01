@@ -2,6 +2,7 @@
 
 import base64
 import http.client
+import hashlib
 import json
 import html
 import os
@@ -377,6 +378,34 @@ def test_login_and_languages(csrf):
     for private_asset in ("/head.html", "/webroot/head.html", "/../head.html", "/%2e%2e/head.html"):
         status, _, _ = request("GET", private_asset, "initial-password")
         assert status == 404, private_asset
+
+    for route, name, mime in (("/mpegts.js", "mpegts.js", "application/javascript"),
+                              ("/recording.js", "recording.js", "application/javascript"),
+                              ("/mpegts-license", "mpegts-license.html", "text/html")):
+        assert raw_request("GET", route)[0] == 401, route
+        status, body, headers = request("GET", route, "initial-password")
+        assert status == 200 and headers["Content-Type"].startswith(mime), route
+        assert body == (root / "webroot" / name).read_bytes()
+        assert "media-src 'self' blob:" in headers["Content-Security-Policy"]
+        assert "script-src 'self'" in headers["Content-Security-Policy"]
+    assert hashlib.sha256((root / "webroot/mpegts.js").read_bytes()).hexdigest() == "e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0"
+    for suffix, mime in (("ts", "video/mp2t"), ("mp4", "video/mp4")):
+        recording = root / "mnt" / ("viewer-test." + suffix)
+        payload = b"original telemetry and video bytes" * 20
+        recording.write_bytes(payload)
+        query = urllib.parse.urlencode({"path": str(recording)})
+        status, body, _ = request("GET", "/view?" + query, "initial-password")
+        assert status == 200 and b"download=1" in body
+        assert (b"id=recording-player" in body) == (suffix == "ts")
+        assert (b"controls preload=metadata" in body) == (suffix == "mp4")
+        status, body, headers = request("GET", "/file?" + query + "&download=1", "initial-password")
+        assert status == 200 and body == payload and headers["Content-Type"] == mime
+        assert headers["Content-Disposition"].startswith("attachment;")
+        status, body, headers = request("GET", "/file?" + query, "initial-password", headers={"Range": "bytes=7-31"})
+        assert status == 206 and body == payload[7:32]
+        assert headers["Content-Range"] == f"bytes 7-31/{len(payload)}"
+        recording.unlink()
+    print("PASS authenticated TS player assets, CSP, MP4/TS viewing and original range downloads")
 
     # A partial/missing install must report an asset failure, never empty 200
     # or a misleading allocation error. Keep the source tree untouched.

@@ -583,6 +583,7 @@ enum string_id {
     S_VIEWER_IMAGE_ALT,
     S_VIEWER_NO_VIDEO,
     S_VIEWER_NO_PREVIEW,
+    S_TS_LOADING, S_TS_SEEK_ERROR, S_TS_UNAVAILABLE, S_TS_ERROR, S_TS_PLAY, S_TS_PAUSE, S_TS_FULLSCREEN, S_TS_POSITION,
     S_TITLE_DELETE,
     S_DELETE_TEXT,
     S_DELETE_RECURSIVE,
@@ -1247,6 +1248,14 @@ static constexpr Translations translations = [] {
     result[S_FILES_TRUNCATED] = {"Only the first 5000 entries are shown.", "仅显示前 5000 个条目。", "先頭の 5000 件のみ表示しています。"};
     result[S_FILES_LEGEND] = {"Type letters: d directory, f regular file, l symbolic link, c character device, b block device, p FIFO, s socket. Files outside %s can be viewed or downloaded but never deleted through this service.", "类型字母：d 目录，f 普通文件，l 符号链接，c 字符设备，b 块设备，p FIFO，s 套接字。%s 之外的文件可以查看或下载，但不能通过本服务删除。", "種類の記号: d ディレクトリ、f 通常ファイル、l シンボリックリンク、c キャラクターデバイス、b ブロックデバイス、p FIFO、s ソケット。%s の外にあるファイルは表示・ダウンロードはできますが、このサービスからは削除できません。"};
     result[S_TITLE_VIEWER] = {"%s file viewer", "%s 文件查看器", "%s ファイルビューアー"};
+    result[S_TS_SEEK_ERROR] = {"Unable to seek to that position. Try another position or download the recording.", "无法跳转至该位置。请尝试其他位置或下载录像。", "その位置に移動できません。別の位置を試すか録画をダウンロードしてください。"};
+    result[S_TS_LOADING] = {"Loading video…", "正在加载视频…", "動画を読み込み中…"};
+    result[S_TS_UNAVAILABLE] = {"Playback is unavailable in this browser. Download the recording to view it.", "此浏览器无法播放。请下载录像查看。", "このブラウザーでは再生できません。録画をダウンロードしてください。"};
+    result[S_TS_ERROR] = {"Unable to read or play this recording. Download it or reopen the page to retry.", "无法读取或播放此录像。请下载或重新打开页面重试。", "録画を読み込めないか再生できません。ダウンロードするかページを開き直してください。"};
+    result[S_TS_PLAY] = {"Play", "播放", "再生"};
+    result[S_TS_PAUSE] = {"Pause", "暂停", "一時停止"};
+    result[S_TS_FULLSCREEN] = {"Fullscreen", "全屏", "全画面"};
+    result[S_TS_POSITION] = {"Recording position", "录像位置", "録画位置"};
     result[S_VIEWER_HEADING] = {"File viewer", "文件查看器", "ファイルビューアー"};
     result[S_VIEWER_BACK] = {"Back to directory", "返回目录", "ディレクトリに戻る"};
     result[S_VIEWER_IMAGE_ALT] = {"Image preview", "图片预览", "画像プレビュー"};

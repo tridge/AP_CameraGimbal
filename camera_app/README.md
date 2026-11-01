@@ -380,8 +380,10 @@ cameras, `rtsp://CAMERA:8554/video2.misb` in a MISB-capable viewer. These
 endpoints carry MPEG-TS over RTP (MP2T, payload type 33), containing
 the configured H.264/H.265 video and a separate, frame-synchronous KLV stream.
 Recordings use H.264 plus KLV in `.ts` files, including both visible and thermal
-recordings where supported. Files can be downloaded for playback in an FMV
-viewer; the Files page does not offer HTML video playback for `.ts` files.
+recordings where supported. The Files page plays H.264 `.ts` recordings in
+Chrome and Firefox using browser-side transmuxing, bounded HTTP ranges and
+keyframe probes for seeking, without downloading the entire recording first.
+Files can also be downloaded, with their telemetry intact, for an FMV viewer.
 The regular `/video1`, `/video2`, configured aliases and browser previews retain
 the existing APCG JSON SEI format described below. MAVLink stream discovery
 advertises the selected format as the primary streams (IDs 1 and 2), with codec,

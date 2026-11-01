@@ -44,6 +44,19 @@ int main()
     body.reset();
     unlink(path.c_str());
     assert(!root.append(body, "head.html"));
+    // Only the pinned TS player vendor asset may exceed the normal limit.
+    const std::string vendor = std::string(directory) + "/mpegts.js";
+    fd = open(vendor.c_str(), O_CREAT | O_WRONLY, 0600);
+    assert(fd >= 0 && ftruncate(fd, 300U * 1024U) == 0);
+    close(fd);
+    body.reset();
+    assert(root.append(body, "mpegts.js") && body.size() == 300U * 1024U);
+    fd = open(vendor.c_str(), O_WRONLY);
+    assert(fd >= 0 && ftruncate(fd, 512U * 1024U + 1U) == 0);
+    close(fd);
+    body.reset();
+    assert(!root.append(body, "mpegts.js"));
+    unlink(vendor.c_str());
     rmdir(directory);
     return 0;
 }

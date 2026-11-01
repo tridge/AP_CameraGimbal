@@ -162,6 +162,44 @@ Modified or Mode column header to sort; click again to reverse direction. Size
 and date use their numeric values. Parent navigation and directories stay above
 files, and the selected sort order is remembered within the browser tab.
 
+MISB `.ts` recordings also play on the File viewer page in browsers supporting
+H.264 Media Source Extensions (including Chrome and Firefox). The bundled,
+Apache-2.0-licensed mpegts.js 1.8.0 transmuxes the video in the browser; the camera
+only serves the original bytes, without transcoding. Its licence is linked from
+the player. Playback does not require an Internet connection or HTTPS.
+
+The TS player reads small HTTP ranges at the start and end to establish the
+timeline, then buffers a short section around playback. Seeking into an unread
+part uses bounded timestamp/keyframe probes and restarts at a nearby keyframe;
+it does not download or index the whole recording. Each seek has an aggregate
+probe budget of at most 64 MiB (less for smaller files; recordings under
+8 MiB may be read completely during a difficult seek). Failed probes leave the
+previous playback window usable. An undecodable input
+also stops fetching after 32 MiB without buffered video progress. Its time display and seek bar
+refer to the complete recording, even after a range seek. Pausing stops further
+prefetch once the short buffer fills. Opening an active recording uses its length
+at that moment; reopen the page to include subsequently recorded frames. MP4
+recordings retain the native browser player. Download always retrieves the
+original file, including embedded telemetry; the simple Files player displays
+video only. Browsers without the required decoder show a download fallback.
+
+The dependency-free `make -C web test` checks TS program parsing, wrapping PTS,
+variable-bitrate seeks, HTTP/authentication, and pending-play/error lifecycles.
+The player targets the camera muxer's continuous PTS timeline, random access
+flags and repeated codec headers at keyframes; arbitrary third-party TS clock
+discontinuities are not supported.
+
+The opt-in Firefox regression test exercises decoded playback, bounded network
+reads, paused buffering, and unbuffered seeks using a temporary profile. Run it
+inside a dedicated Xephyr display against a completed recording of at least
+32 MiB and two minutes (use the actual server-side path in SITL):
+
+```sh
+DISPLAY=:100 python3 web/tests/test_ts_playback_firefox.py \
+  --url http://127.0.0.1:8081 --recording /mnt/DCIM/record/example.ts
+```
+
+
 Deletion has a deliberately narrower boundary than reading: `/mnt` itself and
 everything outside it are rejected. The server resolves the target again at
 deletion time, does not follow symlinks while recursively walking directories,
