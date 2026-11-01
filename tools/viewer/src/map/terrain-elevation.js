@@ -1,6 +1,6 @@
 import { meshSampler } from './mesh-sampler.js';
 import { offsetLocation } from '../domain/geometry.js';
-import { finite } from '../domain/time.js';
+import { finite, wrapLongitude } from '../domain/time.js';
 
 /** CPU-side terrain sampling, independent of the visible globe's mode and LOD.
  * Heights come from the best advertised mesh, never an ellipsoid/flat fallback.
@@ -12,6 +12,8 @@ export class TerrainElevation {
     this.requestFactory = requestFactory;
     this.generation = 0;
     this.cache = new Map();
+    this.pointCache = new WeakMap();
+    this.pins = null;
     this.active = 0;
     this.maxTiles = 64;
     this.maxActive = 4;
@@ -28,6 +30,8 @@ export class TerrainElevation {
       entry.request?.cancel?.();
     }
     this.cache.clear();
+    this.pointCache = new WeakMap();
+    this.pins = null;
     this.active = 0;
     this.provider = terrainUrl ? provider : null;
     this.url = terrainUrl;
@@ -63,7 +67,39 @@ export class TerrainElevation {
       },
     };
   }
+  samplePoints(points) {
+    const heights = new Map();
+    let progress = false,
+      missing = false;
+    this.pins = new Set();
+    try {
+      for (const point of points) {
+        let height = this.pointCache.get(point);
+        if (height === undefined) {
+          height = this.at(point.lat, point.lon);
+          if (finite(height)) {
+            this.pointCache.set(point, height);
+            progress = true;
+          }
+        }
+        if (finite(height)) heights.set(point, height);
+        else missing = true;
+      }
+    } finally {
+      this.pins = null;
+    }
+    // Saved point heights let subsequent passes finish missions larger than
+    // the bounded mesh cache, without refetching already resolved locations.
+    if (progress && missing && !this.active) {
+      const generation = this.generation;
+      queueMicrotask(() => {
+        if (generation === this.generation) this.onChange();
+      });
+    }
+    return heights;
+  }
   levelAt(lat, lon) {
+    lon = wrapLongitude(lon);
     if (!this.provider?.availability) return null;
     try {
       const level = this.provider.availability.computeMaximumLevelAtPosition({
@@ -78,8 +114,9 @@ export class TerrainElevation {
   }
   tileAt(lat, lon, context) {
     if (!this.provider) return this.unavailable('Terrain is not configured in Settings.');
-    if (![lat, lon].every(finite) || Math.abs(lat) > 90 || Math.abs(lon) > 180)
+    if (![lat, lon].every(finite) || Math.abs(lat) > 90)
       return this.unavailable('Pixel is outside terrain coverage.');
+    lon = wrapLongitude(lon);
     const position = {
       latitude: (lat * Math.PI) / 180,
       longitude: (lon * Math.PI) / 180,
@@ -99,6 +136,7 @@ export class TerrainElevation {
     const tile = this.tileAt(lat, lon, context);
     if (!tile) return null;
     const { level, x, y, key, position } = tile;
+    this.pins?.add(key);
     const entry = this.ensure(tile);
     if (!entry) return null;
     context?.tiles.add(key);
@@ -127,7 +165,9 @@ export class TerrainElevation {
     if (!entry) {
       // Evict old completed entries; never orphan a running request.
       while (this.cache.size >= this.maxTiles) {
-        const oldest = [...this.cache].find(([, e]) => e.state !== 'loading');
+        const oldest = [...this.cache].find(
+          ([key, e]) => ['ready', 'error'].includes(e.state) && !this.pins?.has(key),
+        );
         if (!oldest)
           return this.unavailable('Terrain request queue is full; try this pixel again.');
         this.cache.delete(oldest[0]);

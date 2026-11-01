@@ -1,6 +1,6 @@
 import { test, expect, fixture, start, openFile, screenshot } from './helpers.js';
 
-test('mobile review fits390px and deployed About notices load through local GETs', async ({
+test('mobile review fits 390 px and deployed About notices load through local GETs', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });

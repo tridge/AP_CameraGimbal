@@ -6,18 +6,18 @@ measurements are retained in `/data/review/web-viewer/`.
 
 ## Plan
 
-Incorporated: standard MISB tags90/91 and APCG precedence; independent mission/
+Incorporated: standard MISB tags 90/91 and APCG precedence; independent mission/
 fence implementation rather than copying GPL source; explicit display/raw pixel
 coordinates; multiple clock anchors; local elevation and datum distinction;
 single-thread WASM; prefix-hosted assets; explicit browser codec qualification.
-Real2.6GB thermal tests chose indexed bounded mini-Matroska decoding, avoiding
+Real 2.6GB thermal tests chose indexed bounded mini-Matroska decoding, avoiding
 repeated full-recording seek scans. Direct WORKERFS was a feasibility test only.
 
-## Stage1: media and telemetry
+## Stage 1: media and telemetry
 
 - Replaced per-188byte TS extent objects with constant-size per-frame packet
   spans, PID and PES header descriptors, reconstructing payloads on demand.
-- Accepted valid synchronous KLV cells with random-access0, preserved invalid
+- Accepted valid synchronous KLV cells with random-access 0, preserved invalid
   full-range tag precedence and checksum rejection.
 - Applied supported MP4 edit offsets to movie PTS/DTS while keeping original
   mediaPTS/mediaDTS. Fragmented MP4 and signed B-frame composition are tested.
@@ -32,15 +32,15 @@ repeated full-recording seek scans. Direct WORKERFS was a feasibility test only.
   worker contains no module imports/exports, so its importScripts works with
   the current build configuration. No assumed build-format change was needed.
 
-Tests include Python MISB golden vectors, sparse offsets beyond2GiB, real full
+Tests include Python MISB golden vectors, sparse offsets beyond 2 GiB, real full
 thermal/AVC/HEVC/TS scans and exact raw-pixel hashes. Decoded data, packets and
 WASM working sets are bounded; the timeline index still scales with frame count.
 
-## Stage2: log, terrain and map domain
+## Stage 2: log, terrain and map domain
 
 The first broad review timed out; a narrowed continuation completed. Fixed:
 
-- Pose freshness requires explicit finite age within2seconds.
+- Pose freshness requires explicit finite age within 2 seconds.
 - Terrain coverage never silently falls back to a flat height over a void or
   outside coverage. The hosted viewer now uses quantized mesh directly and has
   no manual elevation-file or flat-ground controls.
@@ -50,19 +50,19 @@ The first broad review timed out; a narrowed continuation completed. Fixed:
 - Corrupt/truncated MAVLink headers rescan bytewise instead of swallowing the
   next valid packet. Mission segments use the tested domain splitter.
 - Both map modes use the same typed inclusion/exclusion fence and altitude model.
-  Unresolved mission altitude is labelled and is not inserted into a3D route.
+  Unresolved mission altitude is labelled and is not inserted into a 3D route.
 
-Real BIN/tlog requalification preserves the81-item mission and26vertex fence.
+Real BIN/tlog requalification preserves the 81-item mission and 26 vertex fence.
 UAVLogViewer was inspected as a behavior reference; no source fragments copied.
 
-## Stage3 and final qualification
+## Stage 3 and final qualification
 
 UI/controller review and completed qualification results are recorded below as
 reviews finish. Browser tests run in a dedicated visible Xephyr window, not the
 operator's main desktop. File/network privacy, decoder accuracy and map semantics
 are acceptance checks rather than visual-only demonstrations.
 
-### Stage3 refinements
+### Stage 3 refinements
 
 Completed Claude UI/map review. Addressed all material findings:
 
@@ -74,7 +74,7 @@ Completed Claude UI/map review. Addressed all material findings:
 - Map provider/terrain/datum configuration prepares and validates before commit;
   a failed load preserves the previous configuration and exported datum.
 - Time-anchor status displays the additional persisted offset. Findings now
-  export projectionRawRotationDegrees0 and source clock-quality warnings.
+  export projectionRawRotationDegrees 0 and source clock-quality warnings.
 - Aircraft markers and video tracks reject missing/stale position ages.
 - File replacement resets decoder, pending work and busy state. Open failures
   surface in the error banner. Rapid stepping tracks requested frame IDs rather
@@ -82,22 +82,22 @@ Completed Claude UI/map review. Addressed all material findings:
 - Added keyboard-accessible raw pixel selection and explicit contrast eligibility.
 - Visual inspection found a CSS grid intrinsic-size issue cropping the bottom of
   thermal images. The canvas now fills a fixed stage with correctly contained
-  content. Tests hit-test and read all four sensor corners at0/180degrees; they
+  content. Tests hit-test and read all four sensor corners at 0/180 degrees; they
   explicitly prevent stale-hover false positives.
 
-Production qualification:13 tests pass in visible Chrome155 inside Xephyr99,
+Production qualification:13 tests pass in visible Chrome 155 inside Xephyr 99,
 including real files and damaged/missing-calibration fixtures.574 audited HTTP
 requests were local GETs with imagery disabled. Ten physical Xephyr screenshots
-and viewport captures were retained. The2.759GB archive's16,630 frames indexed
-incrementally; first visible frame about1.1seconds, complete UI index about14s.
+and viewport captures were retained. The 2.759GB archive's16,630 frames indexed
+incrementally; first visible frame about 1.1 seconds, complete UI index about 14s.
 First/middle/final whole raw SHA256 matched independent PyAV and source metadata.
-Measured main-page JS heap was about84MiB; this excludes workers/WASM/GPU and is
-not a cross-browser memory guarantee. Real BIN qualification is81 mission items
-and **one inclusion polygon with26vertices**, not26separate fences.
+Measured main-page JS heap was about 84 MiB; this excludes workers/WASM/GPU and is
+not a cross-browser memory guarantee. Real BIN qualification is 81 mission items
+and **one inclusion polygon with 26 vertices**, not 26 separate fences.
 
 Final review and any final rendering refinements are appended after completion.
 
-### Stage4 final review
+### Stage 4 final review
 
 Claude's final scoped review identified **no remaining correctness blockers for
 local field review**. It confirmed the time/mission, prefix-end, display-recovery,
@@ -110,18 +110,18 @@ build references; map viewport sharing by the default OSM provider is explicit
 in the README; image CSP hosts are restricted to the supported providers.
 No public server deployment or git push was performed.
 
-Additional visual qualification zoomed the typed fence fixture in both2D and3D:
+Additional visual qualification zoomed the typed fence fixture in both 2D and 3D:
 inclusion/exclusion polygons and circle fills have the expected locations,
 colours and radii. Cesium disables native ellipse outlines when ground-clamped;
 the coloured fills remain visible and polygon boundaries use clamped polylines.
 
 Final release build qualification: **14 browser tests passed** after the notices,
-restricted image CSP and versioned assets were packaged. The added mobile390×844
+restricted image CSP and versioned assets were packaged. The added mobile 390×844
 check has no horizontal overflow and follows the real About popup to locally
-served licence text/notices and pinned dependency integrity. Across14 contextual
+served licence text/notices and pinned dependency integrity. Across 14 contextual
 network audits,611 requests were local GETs with imagery disabled;12 physical
-Xephyr captures are retained. The final thermal first-frame time was0.766s and
-full UI index13.791s on this test machine; raw SHA256 parity remains exact.
+Xephyr captures are retained. The final thermal first-frame time was 0.766s and
+full UI index 13.791s on this test machine; raw SHA256 parity remains exact.
 
 Current source/format checks:51 unit/domain/codec tests pass, with one optional
 local-file index test skipped by default (real-file browser qualification runs
@@ -129,3 +129,21 @@ separately). Build, formatter and held-prefix browser qualification pass. See
 [QUALIFICATION.md](QUALIFICATION.md) for the actual command, build identity and
 artifact paths. Google imagery with the user's real key and live SupportProxy
 remain outside this qualification scope; the latter is a planned future adapter.
+
+## PR 58 automated review fixes
+
+Verified and fixed mission error ACK handling, BIN fence invalidation,
+home-centred fence circles, terrain cache convergence, overlapping and long
+forward seeks, malformed pose coordinates, zero-count MP4 timing runs and
+antimeridian interpolation/lookups. Configuration-bearing metadata AUs remain
+unsupported; H.222.0 Tables 2-108/109 identify bit 0x20 as decoder configuration,
+so its comment and regression names now state that explicitly.
+
+Corrected source/deployment notices and test prerequisites, marked historical
+qualification artifacts as external, and added a visible Xephyr browser CI job.
+Claude reviewed the fixes in a fresh session and two follow-ups; verified
+findings were fixed and its final review reported no unresolved regressions.
+Local qualification: 89 unit tests passed (one optional real-file skip), format
+and production build passed, and 22 visible Chrome tests passed in Xephyr
+(four optional real-file/terrain skips). These tests do not replace validation
+on original flight files or the CI runner.

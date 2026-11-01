@@ -210,3 +210,70 @@ test('hardware pipeline pending outputs do not cause per-frame decoder restarts'
   decoder.close();
   assert.equal(counts.framesCreated, counts.framesClosed);
 });
+
+test('a superseded seek cannot close its replacement decoder', async (t) => {
+  const counts = fakeBrowser(t);
+  const frames = makeFrames();
+  let releaseOld, releaseNew, startedOld, startedNew;
+  const oldStarted = new Promise((r) => {
+    startedOld = r;
+  });
+  const newStarted = new Promise((r) => {
+    startedNew = r;
+  });
+  let reads = 0;
+  const decoder = new FrameDecoder(new Blob(), {
+    tracks: [track],
+    frames,
+    readPacket: async () => {
+      if (++reads === 1) {
+        startedOld();
+        await new Promise((r) => {
+          releaseOld = r;
+        });
+      } else if (reads === 2) {
+        startedNew();
+        await new Promise((r) => {
+          releaseNew = r;
+        });
+      }
+      return Uint8Array.of(1);
+    },
+  });
+  t.after(() => decoder.close());
+  const old = decoder.decode(frames[0]);
+  const rejected = assert.rejects(old, { name: 'AbortError' });
+  await oldStarted;
+  const replacement = decoder.decode(frames[0]);
+  await newStarted;
+  releaseOld();
+  await rejected;
+  assert.equal(counts.decodersClosed, 1);
+  releaseNew();
+  assert.equal((await replacement).decoder, 'webcodecs');
+  assert.equal(counts.configured, 2);
+});
+
+test('a long forward seek starts at the nearest keyframe within its packet budget', async (t) => {
+  fakeBrowser(t);
+  const frames = Array.from({ length: 601 }, (_, id) => ({
+    id,
+    trackId: 1,
+    pts: id / 30,
+    keyframe: id % 30 === 0,
+    size: 1,
+  }));
+  const reads = [];
+  const decoder = new FrameDecoder(new Blob(), {
+    tracks: [track],
+    frames,
+    readPacket: async (f) => {
+      reads.push(f.id);
+      return Uint8Array.of(1);
+    },
+  });
+  t.after(() => decoder.close());
+  await decoder.decode(frames[0]);
+  assert.equal((await decoder.decode(frames[599])).decoder, 'webcodecs');
+  assert.deepEqual(reads, [0, ...Array.from({ length: 30 }, (_, i) => 570 + i)]);
+});

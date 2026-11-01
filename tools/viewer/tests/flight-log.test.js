@@ -265,7 +265,7 @@ const tlog = (packets) => new Blob([concat(packets)]);
 
 test('accepted ALL-type clear removes both plans only after ACK; rejected and ambiguous clears preserve plans', async () => {
   const utc = 1787886000000000;
-  for (const outcome of ['accepted', 'rejected', 'superseded']) {
+  for (const outcome of ['accepted', 'rejected', 'invalid-sequence', 'superseded']) {
     const packets = [
       position(),
       count(1),
@@ -277,7 +277,11 @@ test('accepted ALL-type clear removes both plans only after ACK; rejected and am
       mav(45, Uint8Array.of(1, 0, 255), { utc: utc + 1e6 }),
     ];
     if (outcome === 'superseded') packets.push(count(1, 0, { utc: utc + 1.5e6 }));
-    packets.push(ack(255, outcome === 'rejected' ? 1 : 0, { utc: utc + 2e6 }));
+    packets.push(
+      ack(255, outcome === 'rejected' ? 1 : outcome === 'invalid-sequence' ? 13 : 0, {
+        utc: utc + 2e6,
+      }),
+    );
     if (outcome === 'accepted') packets.push(ack(255, 0, { utc: utc + 3e6 })); // duplicate must not move completion time
     const log = await parseFlightLog(tlog(packets));
     const before = selectLogAt(log, utc + 1.5e6);
@@ -544,4 +548,139 @@ test('bad supported/unknown/truncated MAVLink headers rescan without swallowing 
     tlog([count(0), ack(), fake(199), valid, new Uint8Array(140 - 26 - valid.length)]),
   );
   assert.equal(unknownAtEof.track.length, 1);
+});
+
+test('confirmed missions survive guided/error ACKs and duplicate final items', async () => {
+  const log = await parseFlightLog(
+    tlog([count(2), item(0), item(1), ack(), item(1), ack(0, 1), ack(0, 13)]),
+  );
+  assert.equal(log.mission.confirmed, true);
+  assert.equal(log.mission.items.length, 2);
+  assert.equal(log.mission.rejected, false);
+  const one = await parseFlightLog(tlog([count(1), item(0), ack(), item(0), ack(0, 1)]));
+  assert.equal(one.missionVersions.length, 1);
+  assert.equal(one.mission.confirmed, true);
+});
+
+test('INVALID_SEQUENCE during an upload is retryable and the final ACK confirms it', async () => {
+  const log = await parseFlightLog(tlog([count(2), item(0), ack(0, 13), item(1), ack()]));
+  assert.equal(log.missionVersions.length, 1);
+  assert.equal(log.mission.complete, true);
+  assert.equal(log.mission.confirmed, true);
+  assert.equal(log.mission.rejected, false);
+});
+
+test('an empty or interrupted BIN fence dump invalidates the previous fence without inventing completion', async () => {
+  const rows = [
+    record(ORGN, { TimeUS: 1, Type: 1, Lat: -35, Lng: 149, Alt: 700 }),
+    record(MSG, { TimeUS: 2, Message: 'New fence' }),
+    record(FNCE, { TimeUS: 3, Tot: 1, Seq: 0, Type: 92, Lat: -35, Lng: 149, Radius: 50 }),
+    record(MSG, { TimeUS: 4, Message: 'New fence' }),
+    record(POS, { TimeUS: 5, Lat: -35, Lng: 149, Alt: 700 }),
+  ];
+  const log = await parseFlightLog(binBlob(rows));
+  assert.equal(log.fences.length, 0);
+  assert.equal(log.selectedFenceVersion.complete, false);
+  assert.equal(log.selectedFenceVersion.items.length, 0);
+  const delayed = await parseFlightLog(
+    binBlob([
+      ...rows,
+      record(FNCE, { TimeUS: 6, Tot: 2, Seq: 0, Type: 92, Lat: -35, Lng: 149, Radius: 30 }),
+      record(POS, { TimeUS: 7, Lat: -35, Lng: 149, Alt: 700 }),
+      record(FNCE, { TimeUS: 8, Tot: 2, Seq: 1, Type: 93, Lat: -35.01, Lng: 149, Radius: 20 }),
+    ]),
+  );
+  assert.equal(delayed.selectedFenceVersion.complete, true);
+  assert.equal(delayed.fences.length, 2);
+});
+
+test('home-centred fences use the observed home rather than item coordinates', async () => {
+  const log = await parseFlightLog(
+    binBlob([
+      record(ORGN, { TimeUS: 1, Type: 1, Lat: -35, Lng: 149, Alt: 700 }),
+      record(MSG, { TimeUS: 2, Message: 'New fence' }),
+      record(FNCE, { TimeUS: 3, Tot: 1, Seq: 0, Type: 91, Radius: 150 }),
+    ]),
+  );
+  assert.equal(log.fences.length, 1);
+  assert.deepEqual(log.fences[0].center, { lat: -35, lon: 149 });
+  assert.equal(log.fences[0].radius, 150);
+  assert.equal(log.fences[0].exclusion, false);
+  const noHome = await parseFlightLog(
+    tlog([count(1, 1), item(0, { type: 1, command: 5005, x: 0, y: 0, param1: 100 }), ack(1)]),
+  );
+  assert.equal(noHome.fences.length, 0);
+  assert.ok(noHome.diagnosticCounts.home_fence_position_unavailable);
+});
+
+test('home-circle MAVLink fences follow the home at the selected time', async () => {
+  const utc = 1787886000000000;
+  const homePacket = (lat, when) => {
+    const p = new Uint8Array(52),
+      d = new DataView(p.buffer);
+    d.setInt32(0, Math.round(lat * 1e7), true);
+    d.setInt32(4, 1490000000, true);
+    d.setInt32(8, 700000, true);
+    return mav(242, p, { src: [1, 1], utc: when });
+  };
+  const log = await parseFlightLog(
+    tlog([
+      homePacket(-35, utc),
+      count(1, 1, { utc: utc + 1e6 }),
+      item(0, { type: 1, command: 5005, param1: 125, utc: utc + 2e6 }),
+      ack(1, 0, { utc: utc + 3e6 }),
+      homePacket(-35.01, utc + 5e6),
+    ]),
+  );
+  assert.equal(selectLogAt(log, utc + 4e6).fences[0].center.lat, -35);
+  assert.equal(selectLogAt(log, utc + 6e6).fences[0].center.lat, -35.01);
+});
+
+test('a BIN fence replacement becomes uncertain at its marker, not after the dump completes', async () => {
+  const log = await parseFlightLog(
+    binBlob([
+      record(MSG, { TimeUS: 1, Message: 'New fence' }),
+      record(FNCE, { TimeUS: 2, Tot: 1, Seq: 0, Type: 92, Lat: -35, Lng: 149, Radius: 50 }),
+      record(MSG, { TimeUS: 3, Message: 'New fence' }),
+      record(FNCE, { TimeUS: 4, Tot: 2, Seq: 0, Type: 92, Lat: -35, Lng: 149, Radius: 30 }),
+      record(POS, { TimeUS: 5, Lat: -35, Lng: 149, Alt: 700 }),
+      record(FNCE, { TimeUS: 6, Tot: 2, Seq: 1, Type: 93, Lat: -35.01, Lng: 149, Radius: 20 }),
+    ]),
+  );
+  const utc = 1787886000000000;
+  for (const v of log.fenceVersions) {
+    for (const ref of [
+      v.startedAt,
+      v.endedAt,
+      v.completedAt,
+      v.confirmedAt,
+      ...v.items.map((p) => p.sourceRef),
+    ])
+      if (ref) ref.utcUs = utc + ref.bootUs;
+  }
+  assert.equal(selectLogAt(log, utc + 2).fences.length, 1);
+  const pending = selectLogAt(log, utc + 3);
+  assert.equal(pending.fences.length, 0);
+  assert.equal(pending.selectedFenceVersion.complete, false);
+  assert.ok(pending.selection.uncertain.some((s) => s.includes('snapshot changed')));
+  assert.equal(selectLogAt(log, utc + 6).fences.length, 2);
+});
+
+test('a fence marker cannot manufacture a completion UTC', () => {
+  const ref = { utcUs: 1000, vehicleId: 'dataflash' };
+  const v = {
+    id: 'f',
+    startedAt: ref,
+    completedAt: { ...ref, utcUs: null },
+    endedAt: { ...ref, utcUs: null },
+    complete: true,
+    confirmed: false,
+    invalidatesPrevious: true,
+    expectedCount: 0,
+    items: [],
+  };
+  const log = { source: { format: 'dataflash-bin' }, missionVersions: [], fenceVersions: [v] };
+  const selected = selectLogAt(log, 2000);
+  assert.equal(selected.selectedFenceVersion.complete, false);
+  assert.ok(selected.selection.uncertain.some((s) => s.includes('snapshot changed')));
 });

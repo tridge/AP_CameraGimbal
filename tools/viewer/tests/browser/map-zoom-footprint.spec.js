@@ -11,7 +11,7 @@ const scale = (page) =>
       : camera.positionCartographic.height;
   });
 
-test('map zoom buttons, ordinary and numpad keys work in2D/3D, preserve Follow, and respect editable fields', async ({
+test('map zoom buttons, ordinary and numpad keys work in 2D/3D, preserve Follow, and respect editable fields', async ({
   page,
 }) => {
   await start(page);
@@ -67,7 +67,7 @@ test('map zoom buttons, ordinary and numpad keys work in2D/3D, preserve Follow, 
   }
 });
 
-test('continuously moving partial footprints remain visible in rendered pixels in2D and3D', async ({
+test('continuously moving partial footprints remain visible in rendered pixels in 2D and 3D', async ({
   page,
 }) => {
   await start(page);

@@ -267,10 +267,10 @@ async function* classicSamples(reader, track) {
   const offsetAt = entryCache(reader, offsets.data + 8, stride, chunks),
     sizeAt = entryCache(reader, sizesBox.data + 12, 4, count);
   const stsc = await table(reader, find(sc, 'stsc'), 3),
-    stts = await table(reader, find(sc, 'stts'), 2);
+    stts = (await table(reader, find(sc, 'stts'), 2)).filter(([count]) => count > 0);
   const cb = find(sc, 'ctts'),
     cv = cb ? (await reader.read(cb.data, 1))[0] : 0;
-  const ctts = await table(reader, cb, 2, cv === 1 ? [1] : []);
+  const ctts = (await table(reader, cb, 2, cv === 1 ? [1] : [])).filter(([count]) => count > 0);
   const keysBox = find(sc, 'stss'),
     keys = keysBox ? new Set((await table(reader, keysBox, 1)).map((r) => r[0])) : null;
   if (!stsc.length || stsc[0][0] !== 1 || !stts.length)

@@ -26,7 +26,7 @@ Footprint pieces use dynamic Cesium position properties and reuse their line
 primitives during playback. Replacing constant geometry on every frame triggers
 asynchronous rebuilds and can leave a valid outline absent from most rendered
 frames. Qualification checks rendered yellow pixels during continuous movement,
-in2D and3D, rather than relying only on entity visibility flags.
+in 2D and 3D, rather than relying only on entity visibility flags.
 
 Tracks contain codec, codec initialization, dimensions and timescale. Frames
 contain stable ID, track ID, original PTS/DTS, duration/keyframe flag, packet
@@ -67,7 +67,7 @@ label problems. No global correction is inferred from the known lamp position.
 Domain geometry uses raw sensor coordinates and an explicit nominal pinhole FOV.
 Gimbal roll/pitch are level-referenced and yaw is vehicle-relative. Aircraft
 heading supplies the earth-relative yaw. Per-field age must be finite and within
-2seconds. WGS84 local curvature radii convert NED ray positions to latitude and
+2 seconds. WGS84 local curvature radii convert NED ray positions to latitude and
 longitude. The first ground crossing is refined by bisection. No DEM, unknown
 coverage, void terrain, an upward ray or stale pose yields no ground coordinate.
 
@@ -79,7 +79,7 @@ The adapter caps concurrent loads, cached tiles and bytes; rejects unknown
 coverage; cancels and ignores obsolete generations; and negative-caches failures.
 A32×32 triangle index accelerates the pinned Cesium quantized layout, verified
 against the public interpolation API. Unknown layouts keep that public path.
-One ray uses one advertised level (at most12), with tile keys/datum in findings.
+One ray uses one advertised level (at most 12), with tile keys/datum in findings.
 Tile completion coalesces a refresh of the current frame. Marking captures its
 frame/pose before awaiting terrain, discards results after file replacement,
 and rejects a terrain-configuration change. No flat fallback is invented.
@@ -87,10 +87,10 @@ Display rotation transforms drawing and pointer conversion only; findings store
 raw pixels and the projection rotation hypothesis.
 
 The map model owns aircraft, track, footprint, hovered ground point, mission,
-fences and findings. Both2D and3D share the same entities. Route segments come
+fences and findings. Both 2D and 3D share the same entities. Route segments come
 from the domain mission splitter, not ad-hoc links between every logged command.
 Altitude frames remain AMSL/home-relative/terrain-relative; unresolved altitude
-is labelled and excluded from3D route lines. Inclusion/exclusion polygons and
+is labelled and excluded from 3D route lines. Inclusion/exclusion polygons and
 circles retain their meaning. Provider/terrain changes prepare asynchronously
 and commit atomically, preserving the previous map on failure or supersession.
 
@@ -98,7 +98,7 @@ Video navigation uses a domain track separate from log/mission overlays. Gap
 checks run before decimation, and explicit segment IDs survive long intervals
 between displayed samples. Original frame PTS binds each point to the video;
 aligned poses supply its location. Nearest-segment picking uses CSS window
-pixels, an8px radius and current-time tie breaking.3D horizon/depth occlusion
+pixels, an 8 px radius and current-time tie breaking. 3D horizon/depth occlusion
 rejects hidden points. Clock/offset changes rebuild the association.
 Large builds yield in chunks and abort on newer builds or file replacement;
 old lines remain visible but cannot seek while their replacement is pending.
@@ -106,7 +106,7 @@ The hard display budget omits whole segments rather than connecting gaps.
 
 Follow is independent of Cesium trackedEntity. The checkbox starts on, pauses
 automatic movement while dragging, and always respects fresh position telemetry.
-2D pans retain frustum width and heading.3D transports camera position/direction/up
+2D pans retain frustum width and heading. 3D transports camera position/direction/up
 between old and new target ENU frames, preserving range/orientation/roll without
 a nadir singularity. With Follow off the camera is manual; Center is a one-shot
 recentring operation. SDK double-click tracking is disabled so it cannot diverge

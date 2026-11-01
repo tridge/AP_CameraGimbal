@@ -29,6 +29,7 @@ function mp4Track({
   count = 3,
   edits = [],
   composition = [80, -40, 0],
+  zeroRuns = false,
 } = {}) {
   const tkhd = full('tkhd', 0, n32(0), n32(0), n32(1), zeros(64));
   const mdhd = full('mdhd', 0, n32(0), n32(0), n32(1000), n32(10000));
@@ -42,8 +43,12 @@ function mp4Track({
   const stts = full(
     'stts',
     0,
-    n32(fragmented ? 0 : 1),
-    ...(fragmented ? [] : [n32(count), n32(40)]),
+    n32(fragmented ? 0 : zeroRuns ? 4 : 1),
+    ...(fragmented
+      ? []
+      : zeroRuns
+        ? [n32(0), n32(999), n32(1), n32(40), n32(0), n32(888), n32(count - 1), n32(40)]
+        : [n32(count), n32(40)]),
   );
   const tables = fragmented
     ? []
@@ -54,8 +59,13 @@ function mp4Track({
         full(
           'ctts',
           0x01000000,
-          n32(composition.length),
-          ...composition.flatMap((n) => [n32(1), n32(n)]),
+          n32(composition.length + (zeroRuns ? 2 : 0)),
+          ...(zeroRuns ? [n32(0), n32(999)] : []),
+          ...composition.flatMap((n, i) => [
+            ...(zeroRuns && i === 1 ? [n32(0), n32(888)] : []),
+            n32(1),
+            n32(n),
+          ]),
         ),
       ];
   const edts = edits.length
@@ -708,5 +718,23 @@ test('compact TS re-read matches index handling of duplicate transport packets',
   assert.deepEqual(
     await repeated.readPacket(repeated.frames[0]),
     await original.readPacket(original.frames[0]),
+  );
+});
+
+test('zero-count timing runs are skipped at the beginning and between samples', async () => {
+  const prefix = movie(mp4Track({ zeroRuns: true }));
+  const offset = prefix.length + 8;
+  const file = new Blob([
+    movie(mp4Track({ zeroRuns: true, offset })),
+    box('mdat', packet, packet, packet),
+  ]);
+  const { source } = await indexAll(file);
+  assert.deepEqual(
+    source.frames.map((f) => f.dts),
+    [0, 0.04, 0.08],
+  );
+  assert.deepEqual(
+    source.frames.map((f) => f.pts),
+    [0.08, 0, 0.08],
   );
 });

@@ -87,6 +87,7 @@ export function rebaseReviewTime(
     anchors: anchors.map((point) => ({ ...point, videoSeconds: point.videoSeconds + shift })),
   };
 }
+export const wrapLongitude = (x) => ((((x + 180) % 360) + 360) % 360) - 180;
 const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
 export class PoseTimeline {
   constructor() {
@@ -154,7 +155,9 @@ export class PoseTimeline {
         if (finite(value) && finite(other))
           out[name][key] = key.endsWith('_rad')
             ? value + wrap(other - value) * f
-            : value + (other - value) * f;
+            : key === 'lon_e7'
+              ? wrapLongitude(value / 1e7 + wrapLongitude((other - value) / 1e7) * f) * 1e7
+              : value + (other - value) * f;
         else if (
           typeof value === 'number' ||
           typeof other === 'number' ||

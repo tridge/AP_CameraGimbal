@@ -459,6 +459,12 @@ export class ReviewMap {
     this.drawTrack(log.track || [], this.logEntities, Color.WHITE.withAlpha(0.7));
     const mission = log.mission?.items || [],
       home = log.home;
+    const heights =
+      elevation.terrain?.samplePoints(
+        mission
+          .filter((item) => item.spatial && item.position?.altitude?.reference === 'terrain')
+          .map((item) => item.position),
+      ) || new Map();
     let line = [];
     const flush = () => {
       if (line.length > 1)
@@ -480,7 +486,7 @@ export class ReviewMap {
         if (!p || !item.spatial) continue;
         const resolvedAltitude = resolveMissionAltitude(item, {
           home,
-          terrainMsl: elevation.at(p.lat, p.lon),
+          terrainMsl: heights.get(p) ?? null,
         });
         const resolved = resolvedAltitude.resolved,
           altitude = resolvedAltitude.altMsl;

@@ -248,3 +248,46 @@ test('curvature moves a shallow ground intersection farther along the ray', () =
   assert.ok(point.range > alt / s);
   assert.ok(Math.abs(point.range - expected) < 0.001);
 });
+
+test('missions spanning more tiles than the mesh cache converge without refetch storms', async () => {
+  const requests = new Map();
+  const points = Array.from({ length: 65 }, (_, lon) => ({ lat: 0, lon }));
+  let heights = new Map(),
+    changes = 0;
+  const terrain = new TerrainElevation(() => {
+    if (terrain.provider) {
+      changes++;
+      heights = terrain.samplePoints(points);
+    }
+  });
+  terrain.configure(
+    provider(async (x, y, level) => {
+      const key = `${level}/${x}/${y}`;
+      requests.set(key, (requests.get(key) || 0) + 1);
+      return mesh();
+    }),
+    config,
+  );
+  for (let i = 0; i < 100 && heights.size !== points.length; i++) await tick();
+  assert.equal(heights.size, 65);
+  assert.equal(requests.size, 65);
+  assert.ok([...requests.values()].every((n) => n === 1));
+  assert.ok(terrain.cache.size <= 64);
+  const settled = changes;
+  await tick();
+  await tick();
+  assert.equal(changes, settled);
+  terrain.close();
+});
+
+test('terrain queries wrap both sides of the antimeridian', async () => {
+  const terrain = new TerrainElevation();
+  terrain.configure(provider(), config);
+  terrain.at(0, 180.1);
+  terrain.at(0, -180.1);
+  await tick();
+  assert.equal(terrain.at(0, -179.9), 900);
+  assert.equal(terrain.at(0, 179.9), 900);
+  assert.equal(terrain.cache.size, 2);
+  terrain.close();
+});

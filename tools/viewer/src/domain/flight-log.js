@@ -152,7 +152,15 @@ export function selectLogAt(log, utcUs, { vehicleId = logVehicle(log) } = {}) {
     for (const version of versions || []) {
       if (!belongsToVehicle(version, vehicleId)) continue;
       const completeAt = version.completedAt || version.endedAt;
-      const time = sourceUtc(completeAt);
+      let time = sourceUtc(completeAt);
+      const startTime = sourceUtc(version.startedAt);
+      if (
+        version.invalidatesPrevious &&
+        startTime !== null &&
+        startTime <= utcUs &&
+        (time === null || time > utcUs)
+      )
+        time = startTime;
       if (time === null) {
         note(`${kind} version missing UTC`);
         continue;
@@ -179,7 +187,11 @@ export function selectLogAt(log, utcUs, { vehicleId = logVehicle(log) } = {}) {
         version.expectedCount === items.length &&
         !version.conflicting &&
         !version.partial;
-      const complete = (version.complete || !!version.completedAt) && structurallyComplete;
+      const complete =
+        (version.complete || !!version.completedAt) &&
+        structurallyComplete &&
+        sourceUtc(completeAt) !== null &&
+        sourceUtc(completeAt) <= utcUs;
       const confirmationTime = sourceUtc(
         version.confirmedAt || (version.confirmed ? version.endedAt : null),
       );
@@ -193,9 +205,16 @@ export function selectLogAt(log, utcUs, { vehicleId = logVehicle(log) } = {}) {
         a.selectionTimeUtcUs - b.selectionTimeUtcUs ||
         (a.endedAt?.byteOffset ?? 0) - (b.endedAt?.byteOffset ?? 0),
     );
+    const barrier = available.filter((v) => v.invalidatesPrevious).at(-1);
+    const candidates = barrier
+      ? available.filter((v) => v.selectionTimeUtcUs >= barrier.selectionTimeUtcUs)
+      : available;
+    if (barrier && !barrier.complete)
+      note(`${kind} snapshot changed; replacement is incomplete or empty`);
     return (
-      available.filter((v) => v.complete).at(-1) ||
-      available.filter((v) => v.items.length).at(-1) ||
+      candidates.filter((v) => v.complete).at(-1) ||
+      candidates.filter((v) => v.items.length).at(-1) ||
+      barrier ||
       null
     );
   };
@@ -213,7 +232,11 @@ export function selectLogAt(log, utcUs, { vehicleId = logVehicle(log) } = {}) {
     mission,
     selectedFenceVersion,
     fences: selectedFenceVersion
-      ? fenceShapes(selectedFenceVersion, (code) => diagnostics.push({ code }))
+      ? fenceShapes(
+          selectedFenceVersion,
+          (code) => diagnostics.push({ code }),
+          homeAt(log, utcUs, { vehicleId }),
+        )
       : [],
     home: homeAt(log, utcUs, { vehicleId }),
     diagnostics,
@@ -312,7 +335,9 @@ class Versions {
     if (
       !v ||
       (expectedCount !== null && v.expectedCount !== null && expectedCount !== v.expectedCount) ||
-      (item.seq === 0 && v.complete)
+      (item.seq === 0 &&
+        v.complete &&
+        JSON.stringify(v.slots.get(0)?.raw) !== JSON.stringify(item.raw))
     )
       v = this.start(key, expectedCount, ref, evidence);
     if (
@@ -329,7 +354,7 @@ class Versions {
       v.diagnostics.push(`conflicting duplicate sequence ${item.seq}`);
       v.conflicting = true;
     } else if (!previous) v.slots.set(item.seq, item);
-    v.endedAt = ref;
+    if (!(previous && v.confirmed)) v.endedAt = ref;
     v.complete =
       v.expectedCount !== null &&
       v.expectedCount > 0 &&
@@ -354,7 +379,7 @@ class Versions {
   }
 }
 
-function fenceShapes(version, diagnostic) {
+function fenceShapes(version, diagnostic, home = null) {
   const shapes = [];
   const items = version.items;
   for (let i = 0; i < items.length; ) {
@@ -363,9 +388,15 @@ function fenceShapes(version, diagnostic) {
     const bin = r.fenceType !== undefined;
     const type = bin ? r.fenceType : item.command;
     const polygon = bin ? [98, 97].includes(type) : [5001, 5002].includes(type);
-    const circle = bin ? [92, 93, 94, 96].includes(type) : [5003, 5004].includes(type);
+    // ArduPilot AC_Fence/AC_PolyFence_loader.h: AC_PolyFenceType::HOME_CIRCLE_INCLUSION = 91.
+    // https://github.com/ArduPilot/ardupilot/blob/master/libraries/AC_Fence/AC_PolyFence_loader.h
+    const homeCircle = bin ? type === 91 : type === 5005;
+    const circle =
+      homeCircle || (bin ? [92, 93, 94, 96].includes(type) : [5003, 5004].includes(type));
     const exclusion = bin ? [97, 93, 96].includes(type) : [5002, 5004].includes(type);
-    const point = item.position && { lat: item.position.lat, lon: item.position.lon };
+    const point = homeCircle
+      ? home && coordinate(home.lat, home.lon) && { lat: home.lat, lon: home.lon }
+      : item.position && { lat: item.position.lat, lon: item.position.lon };
     if (polygon) {
       const count = bin ? r.vertexCount : r.param1;
       const group = items.slice(i, i + count);
@@ -409,7 +440,10 @@ function fenceShapes(version, diagnostic) {
           sourceItemSeqs: [item.seq],
           sourceVersionId: version.id,
         });
-      else diagnostic('invalid_fence_circle');
+      else
+        diagnostic(
+          homeCircle && !point ? 'home_fence_position_unavailable' : 'invalid_fence_circle',
+        );
       i++;
     } else {
       if (![95, 5000].includes(type)) diagnostic('unsupported_fence_type');
@@ -594,10 +628,13 @@ class LogState {
     const vehicle = primary?.vehicleId;
     const selectable = (list) => list.filter((v) => belongsToVehicle(v, vehicle));
     const latest = (list) => {
-      const available = selectable(list);
+      const all = selectable(list);
+      const barrierIndex = all.findLastIndex((v) => v.invalidatesPrevious);
+      const available = barrierIndex < 0 ? all : all.slice(barrierIndex);
       return (
         available.filter((v) => v.complete && !v.rejected).at(-1) ||
         available.filter((v) => !v.rejected && v.items.length).at(-1) ||
+        available.findLast((v) => v.invalidatesPrevious) ||
         null
       );
     };
@@ -617,7 +654,7 @@ class LogState {
       missionVersions,
       fenceVersions,
       mission,
-      fences: selectedFence ? fenceShapes(selectedFence, (code) => this.diag(code)) : [],
+      fences: selectedFence ? fenceShapes(selectedFence, (code) => this.diag(code), home) : [],
       selectedFenceVersion: selectedFence,
       track: primary?.points || [],
       tracks,
@@ -754,7 +791,9 @@ async function parseBin(reader, state) {
       if (r.Message === 'New mission')
         state.missions.start(missionKey, null, ref, 'dataflash-dump');
       if (r.Message === 'New fence')
-        state.fenceVersions.start(fenceKey, null, ref, 'dataflash-dump');
+        state.fenceVersions.start(fenceKey, null, ref, 'dataflash-dump', {
+          invalidatesPrevious: true,
+        });
     } else if (fmt.name === 'CMD') {
       const raw = {
         seq: r.CNum,
@@ -1032,6 +1071,7 @@ async function parseMavlink(reader, state, timestamped) {
         continue;
       }
       for (const [v] of matches) {
+        if (u8(2) !== 0 && v.confirmed) continue;
         v.endedAt = ref;
         if (u8(2) === 0) {
           v.confirmed = v.complete = true;
@@ -1104,6 +1144,12 @@ async function parseMavlink(reader, state, timestamped) {
         continue;
       }
       const v = matches[0];
+      // A guided command or duplicate item may elicit an unrelated error ACK.
+      // INVALID_SEQUENCE (13) explicitly permits retrying the requested item.
+      if (u8(2) !== 0 && (v.confirmed || (u8(2) === 13 && v.evidence !== 'clear-request'))) {
+        state.diag('nonterminal_mission_ack', u8(2));
+        continue;
+      }
       v.endedAt = ref;
       if (u8(2) === 0) {
         v.confirmed = true;

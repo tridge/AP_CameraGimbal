@@ -7,6 +7,7 @@ export function validPose(record) {
     a = record?.vehicle_attitude;
   if (!p || !g || !a || [p, g, a].some((x) => !finite(x.age_ms) || x.age_ms < 0 || x.age_ms > 2000))
     return null;
+  if (![p.lat_e7, p.lon_e7].every(finite)) return null;
   const lat = p.lat_e7 / 1e7,
     lon = p.lon_e7 / 1e7,
     altitude = p.alt_amsl_m;
