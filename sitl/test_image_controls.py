@@ -233,7 +233,7 @@ def integration(backend):
                         '-t', '0.2', '-r', '20', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
                         str(root / 'source.mp4')], check=True)
         config = root / 'camera.ini'
-        config.write_text('[logging]\ndisarmed=true\n[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
+        config.write_text('[video]\ntelemetry=apcg\n[logging]\ndisarmed=true\n[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
                           ('1920x1080\n' if backend == 'z1mini' else '1280x720\n'))
         gp, tcp, rtsp = port(), port(), port()
         env = dict(os.environ, CAMERA_APP_CONFIG=str(config), CAMERA_APP_BACKEND=backend,

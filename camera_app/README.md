@@ -370,9 +370,11 @@ when the persistent file is absent. Both paths preserve camera-local changes.
 
 `VIDEO_META_FMT` selects the interoperable video telemetry output on every
 hardware target and SITL port. Its persistent values are **0: APCG JSON**
-(the default) and **1: MISB KLV**. Set it through MAVLink or the web Parameters
-page, or use `[video] telemetry = apcg` / `misb` in `camera.ini`. Changes apply
-after restarting camera-app; saving a change preserves the active stream and
+and **1: MISB KLV** (the default for new configurations). Existing explicitly
+saved choices are preserved; configurations without the setting use MISB.
+Set it through MAVLink or the web Parameters page, or use
+`[video] telemetry = apcg` / `misb` in `camera.ini`. Changes apply after
+restarting camera-app; saving a change preserves the active stream and
 recording formats until then. Future formats will receive new enum values.
 
 With MISB selected, open `rtsp://CAMERA:8554/video1.misb` or, on two-stream

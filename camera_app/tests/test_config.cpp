@@ -78,7 +78,7 @@ int main(int argc, char **argv)
     assert(config.mavlink_camera_component_id == 100U);
     assert(config.mavlink_tcp_port == 14550U);
     assert(config.mavlink_udp_port == 14550U);
-    assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_APCG);
+    assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB);
 
     fd = mkstemp(path);
     assert(fd >= 0);
@@ -102,6 +102,7 @@ int main(int argc, char **argv)
                  "iso = 800\nshutter = 1/250\nmetering = spot\n"
                  "white_balance = cloudy\n");
     assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB); // Missing key uses the new default.
     const size_t telemetry = (size_t)ca_config_param_find("VIDEO_META_FMT");
     assert(ca_config_param_save(&config, path, telemetry, CA_VIDEO_TELEMETRY_MISB) == 0);
     ca_config_defaults(&config);
@@ -112,6 +113,11 @@ int main(int argc, char **argv)
     assert(ca_config_param_save(&config, path, telemetry, .5f) < 0);
     assert(ca_config_param_save(&config, path, telemetry, NAN) < 0);
     assert(ca_config_param_save(&config, path, telemetry, CA_VIDEO_TELEMETRY_APCG) == 0);
+    ca_config saved_apcg;
+    ca_config_defaults(&saved_apcg);
+    assert(ca_config_load(&saved_apcg, path, error, sizeof(error)) == 0);
+    assert(saved_apcg.video_telemetry_format == CA_VIDEO_TELEMETRY_APCG); // Explicit saved choice survives.
+    assert(CA_VIDEO_TELEMETRY_APCG == 0 && CA_VIDEO_TELEMETRY_MISB == 1);
     assert(strcmp(config.timezone, "Australia/Brisbane") == 0);
     assert(config.photo_scope == CA_PHOTO_SCOPE_ALL);
     assert(strcmp(ca_photo_scope_name(config.photo_scope), "all") == 0);

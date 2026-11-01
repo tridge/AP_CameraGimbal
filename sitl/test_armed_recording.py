@@ -61,7 +61,7 @@ def wait_for_frames(paths):
 def run_case(args, directory, fixture, mode, system_id):
     directory.mkdir()
     config = directory / 'camera.ini'
-    config.write_text(f'[recording]\nautorecord = {mode}\n'
+    config.write_text(f'[video]\ntelemetry=apcg\n[recording]\nautorecord = {mode}\n'
                       f'[mavlink]\nsystem_id = {system_id}\n')
     camera_ready, gimbal_ready = directory / 'camera.ready', directory / 'gimbal.ready'
     gimbal_port, tcp_port = port(socket.SOCK_DGRAM), port()
