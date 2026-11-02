@@ -233,7 +233,7 @@ def main():
         records = root/'records'; records.mkdir()
         captures = root/'capture'; captures.mkdir()
         config = root/'camera.ini'
-        config.write_text((ROOT/'packaging/z1mini/camera.ini').read_text().replace('udp_port = 14550', f'udp_port = {mavport}').replace('tcp_port = 14550', f'tcp_port = {tcpport}'))
+        config.write_text((ROOT/'packaging/z1mini/camera.ini').read_text().replace('udp_port = 16001', f'udp_port = {mavport}').replace('tcp_port = 16001', f'tcp_port = {tcpport}'))
         binary = ROOT/'camera_app/build/z1mini-host/camera-app'
         env = dict(os.environ, CA_Z1_SOURCE_PORT=str(rtsp.port), CAMERA_APP_READY_PATH=str(ready),
                    CAMERA_APP_RECORD_ROOT=str(records), CAMERA_APP_CAPTURE_ROOT=str(captures),

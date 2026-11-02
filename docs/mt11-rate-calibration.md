@@ -213,3 +213,18 @@ Remaining calibration: physically inverted mounting, repeatability across
 headings/temperature, continuous ascending/descending commands without recentering
 to measure hysteresis, and separation of transport delay from actuator dynamics.
 The recentered ascending/descending sweeps do not establish absence of hysteresis.
+
+## Tracking-only low-speed conversion
+
+Geographic ROI tracking now uses pulse-density conversion below the measured
+6 deg/s minimum speed: zero and minimum-speed commands deliver the requested
+average motion. Pulse credit clears on zero demand, direction reversal and
+tracking stop. Existing rate limits, joint limits and stale-data stop paths
+remain in force. Explicit MAVLink and SDK rate commands retain their original
+conversion. PIDP/PIDY Output records the filtered continuous rate request;
+GCMD records the actual zero/minimum-speed wire commands.
+
+The calibrated MCU-model regression (`make sitl-rate-default-test`) starts with
+a 3-degree pointing error and tests 0.5 deg/s motion, direction reversal and
+stale feedback. This is simulation qualification against the measured steady
+rate curve and response lag, not a new physical short-pulse or flight test.

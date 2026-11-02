@@ -684,7 +684,7 @@ try:
 
     status, body, _ = request("GET", "/parameters", "initial-password")
     assert status == 200 and b"<h1>Parameters</h1>" in body
-    assert b'name="mavlink_tcp_port"' in body and b'value="14550"' in body
+    assert b'name="mavlink_tcp_port"' in body and b'value="16001"' in body
     assert b'name="mavlink_system_id" id="mavlink_system_id" type=number min="0" max="255" step="1" value="0"' in body
     assert b'<option value="100" selected>Camera 1 (100)</option>' in body
     assert b'<option value="105">Camera 6 (105)</option>' in body

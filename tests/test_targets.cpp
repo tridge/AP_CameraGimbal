@@ -14,6 +14,8 @@ int main(void)
     assert(telemetry->option_count == 2);
     ca_config settings{};
     ca_config_defaults(&settings);
+    assert(settings.tracking_method == CA_TRACK_RATE);
+    assert(settings.mavlink_tcp_port == 16001 && settings.mavlink_udp_port == 16001);
     assert(settings.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB);
     assert(CA_VIDEO_TELEMETRY_APCG == 0 && CA_VIDEO_TELEMETRY_MISB == 1);
     assert(APC_Config::assign(settings, *telemetry, "apcg"));

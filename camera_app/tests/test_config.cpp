@@ -76,8 +76,10 @@ int main(int argc, char **argv)
     assert(config.raw_stream_fps == 5 && config.raw_record_fps == 5);
     assert(config.mavlink_system_id == 0U);
     assert(config.mavlink_camera_component_id == 100U);
-    assert(config.mavlink_tcp_port == 14550U);
-    assert(config.mavlink_udp_port == 14550U);
+    assert(config.mavlink_tcp_port == 16001U);
+    assert(config.mavlink_udp_port == 16001U);
+    assert(config.tracking_method == CA_TRACK_RATE);
+    assert(CA_TRACK_ANGLE == 0 && CA_TRACK_RATE == 1);
     assert(config.video_telemetry_format == CA_VIDEO_TELEMETRY_MISB);
 
     fd = mkstemp(path);
@@ -91,7 +93,7 @@ int main(int argc, char **argv)
                  "photo_scope = all\n"
                  "[mount]\norientation = inverted\n"
                  "[uart]\nprotocol = mavlink\n"
-                 "[mavlink]\nposition_targeting = false\n"
+                 "[mavlink]\nposition_targeting = false\ntracking_method = angle\n"
                  "system_id = 42\ntcp_port = 14600\nudp_port = 14601\n"
                  "[thermal]\npalette = ironbow\n"
                  "[recording]\nautorecord = true\nresolution = 3840x2160\n"
@@ -124,6 +126,12 @@ int main(int argc, char **argv)
     assert(config.orientation == CA_MOUNT_INVERTED);
     assert(config.uart_protocol == CA_UART_MAVLINK);
     assert(!config.position_targeting);
+    assert(config.tracking_method == CA_TRACK_ANGLE);
+    ca_config retained;
+    ca_config_defaults(&retained);
+    assert(ca_config_load(&retained, path, error, sizeof(error)) == 0);
+    assert(retained.tracking_method == CA_TRACK_ANGLE);
+    assert(retained.mavlink_tcp_port == 14600 && retained.mavlink_udp_port == 14601);
     assert(config.mavlink_system_id == 42U);
     assert(config.mavlink_tcp_port == 14600U);
     assert(config.mavlink_udp_port == 14601U);

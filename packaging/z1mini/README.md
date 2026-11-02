@@ -74,7 +74,7 @@ mounted microSD card and are stored under `/mnt/mmc/DCIM/record`.
 ## Operation
 
 - Native web UI: `http://CAMERA/`, initial login **admin / ardupilot**.
-- MAVLink: TCP/UDP 14550. System ID 0 selects a flight controller automatically.
+- MAVLink: TCP/UDP 16001. System ID 0 selects a flight controller automatically.
 - XFRobot: TCP 2332 and UDP 2337, with replies on UDP 2338.
 - RTSP: `rtsp://CAMERA:8554/video1` and `/video2`.
 

@@ -33,6 +33,7 @@ def main():
         gimbal_port, tcp_port = port(), port()
         env = dict(os.environ, CAMERA_APP_CONFIG=str(config), CAMERA_APP_BACKEND='mt11',
                    CAMERA_APP_UART=f'udp://127.0.0.1:{gimbal_port}', CAMERA_APP_PORT=str(port()),
+                   CAMERA_APP_RTSP_PORT=str(port()),
                    CAMERA_APP_MAVLINK_TCP_PORT=str(tcp_port), CAMERA_APP_MAVLINK_UDP_PORT='0',
                    CAMERA_APP_READY_PATH=str(root / 'camera.ready'))
         for key in ('CAMERA_APP_SITL_TERRAIN', 'CAMERA_APP_SITL_VIDEO1', 'CAMERA_APP_SITL_VIDEO2'):

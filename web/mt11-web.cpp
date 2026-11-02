@@ -114,7 +114,7 @@
 #endif
 #if APCAM_WEB_CONTROL_MAVLINK
 #define DEFAULT_PORT APCAM_WEB_PORT
-#define CAMERA_API_PORT 14550U
+#define CAMERA_API_PORT APCAM_DEFAULT_MAVLINK_PORT
 #include "z1mini_mavlink.h"
 #else
 #define DEFAULT_PORT APCAM_WEB_PORT
@@ -856,8 +856,9 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
 static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
-    "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
-    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle",
+    "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100",
+    APCAM_STRING_VALUE(APCAM_DEFAULT_MAVLINK_PORT), APCAM_STRING_VALUE(APCAM_DEFAULT_MAVLINK_PORT),
+    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "rate",
 #ifdef CAMERA_APP_ZT30_DEV
     "2420",
 #endif
