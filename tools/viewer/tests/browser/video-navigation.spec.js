@@ -168,3 +168,75 @@ test('map pointer shows sampled AMSL terrain height in both map modes and never 
   await expect(page.locator('#map-terrain-height')).toContainText('move pointer');
   await screenshot(page, testInfo, 'map-terrain-pointer.png');
 });
+
+test('a pointer sweep on a slow terrain link preserves cached video-pixel heights', async ({
+  page,
+}) => {
+  await start(page);
+  await page.evaluate(async () => {
+    const map = window.fireViewer.map;
+    map.setFollow(false);
+    map.focus(-35.322, 148.838, 20_000_000);
+    const tilingScheme = map.viewer.terrainProvider.tilingScheme,
+      videoPosition = { latitude: (-35.322 * Math.PI) / 180, longitude: (148.838 * Math.PI) / 180 },
+      videoTile = tilingScheme.positionToTileXY(videoPosition, 12);
+    window.pointerTerrainRequests = 0;
+    map.terrain.configure(
+      {
+        tilingScheme,
+        availability: { computeMaximumLevelAtPosition: () => 12, isTileAvailable: () => true },
+        requestTileGeometry: (x, y) => {
+          if (x === videoTile.x && y === videoTile.y)
+            return Promise.resolve({ interpolateHeight: () => 812 });
+          window.pointerTerrainRequests++;
+          return new Promise(() => {}); // Slow/stalled terrain downloads.
+        },
+      },
+      { terrainUrl: '/test-terrain/', terrainDatum: 'amsl' },
+    );
+    map.terrain.at(-35.322, 148.838);
+  });
+  await page.waitForFunction(() => window.fireViewer.map.terrain.at(-35.322, 148.838) === 812);
+  const sweep = await page.evaluate(() => {
+    const map = window.fireViewer.map,
+      canvas = map.viewer.scene.canvas,
+      rect = canvas.getBoundingClientRect();
+    for (let i = 0; i < 120; i++) {
+      canvas.dispatchEvent(
+        new PointerEvent('pointermove', {
+          clientX: rect.left + 10 + ((rect.width - 20) * i) / 119,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      // Terrain completion and render callbacks must respect the same gate.
+      map.terrain.onChange();
+      map.refreshPointerHeight();
+    }
+    return {
+      cacheSize: map.terrain.cache.size,
+      videoHeight: map.terrain.at(-35.322, 148.838),
+    };
+  });
+  expect(sweep).toEqual({ cacheSize: 1, videoHeight: 812 });
+  await page.waitForFunction(() => window.pointerTerrainRequests === 1);
+  expect(
+    await page.evaluate(() => ({
+      cacheSize: window.fireViewer.map.terrain.cache.size,
+      videoHeight: window.fireViewer.map.terrain.at(-35.322, 148.838),
+    })),
+  ).toEqual({ cacheSize: 2, videoHeight: 812 });
+  await page.evaluate(() => {
+    const canvas = window.fireViewer.map.viewer.scene.canvas,
+      rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: rect.left + rect.width / 3,
+        clientY: rect.top + rect.height / 2,
+      }),
+    );
+    canvas.dispatchEvent(new PointerEvent('pointerleave'));
+  });
+  await page.waitForTimeout(220);
+  expect(await page.evaluate(() => window.pointerTerrainRequests)).toBe(1);
+  await expect(page.locator('#map-terrain-height')).toContainText('move pointer');
+});

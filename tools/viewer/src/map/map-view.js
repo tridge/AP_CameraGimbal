@@ -54,6 +54,8 @@ export class ReviewMap {
     this.onPointerHeight = onPointerHeight;
     this.pointerPosition = null;
     this.pointerFrame = null;
+    this.pointerTimer = null;
+    this.pointerSettled = false;
     this.closed = false;
     this.generation = 0;
     this.offset = 0;
@@ -145,6 +147,15 @@ export class ReviewMap {
     this.pointerMove = (event) => {
       const rect = this.viewer.scene.canvas.getBoundingClientRect();
       this.pointerPosition = new Cartesian2(event.clientX - rect.left, event.clientY - rect.top);
+      this.pointerSettled = false;
+      clearTimeout(this.pointerTimer);
+      // Pointer sampling shares the video terrain cache. A moving pointer must
+      // not queue a tile for every crossed location on a slow connection.
+      this.pointerTimer = setTimeout(() => {
+        this.pointerTimer = null;
+        this.pointerSettled = true;
+        this.refreshPointerHeight();
+      }, 180);
       if (this.pointerFrame === null)
         this.pointerFrame = requestAnimationFrame(() => {
           this.pointerFrame = null;
@@ -152,6 +163,9 @@ export class ReviewMap {
         });
     };
     this.pointerLeave = () => {
+      clearTimeout(this.pointerTimer);
+      this.pointerTimer = null;
+      this.pointerSettled = false;
       this.pointerPosition = null;
       this.onPointerHeight(null);
     };
@@ -163,6 +177,10 @@ export class ReviewMap {
   }
   refreshPointerHeight() {
     if (this.closed || !this.viewer || !this.pointerPosition) return;
+    if (!this.pointerSettled) {
+      this.onPointerHeight({ heightAmslM: null, reason: 'waiting for pointer to stop' });
+      return;
+    }
     const scene = this.viewer.scene;
     if (scene.mode === SceneMode.MORPHING) {
       this.onPointerHeight({ heightAmslM: null, reason: 'map changing mode' });
@@ -653,6 +671,7 @@ export class ReviewMap {
   }
   destroy() {
     this.closed = true;
+    clearTimeout(this.pointerTimer);
     cancelAnimationFrame(this.pointerFrame);
     this.viewer.scene.canvas.removeEventListener('pointermove', this.pointerMove);
     this.viewer.scene.canvas.removeEventListener('pointerleave', this.pointerLeave);
