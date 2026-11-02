@@ -265,6 +265,20 @@ a C++ toolchain. No real flight recording is committed. See
 [REVIEWS.md](docs/REVIEWS.md) for the staged Claude reviews, and
 [PLAN.md](docs/PLAN.md) for the accepted plan and feasibility evidence.
 
+## Video navigation and map height
+
+Use **Video zoom** to magnify the fitted image by 2×, 4× or 8×, and scroll the
+video viewport to inspect a region. **Fit** shows the whole frame again. Zoom is
+a display operation; raw pixel coordinates, temperatures and exported findings
+are unchanged, including with 180° display rotation.
+
+Type a displayed frame number (starting at 1) beside the frame counter and
+press **Go** or Enter to pause and jump. While indexing, only currently indexed
+frames can be selected. Move the pointer over the map to read terrain height
+in metres AMSL below the map. Missing terrain is shown as unavailable rather
+than as zero; height sampling follows the same configured terrain datum in both
+2D and 3D.
+
 ## Thermal analysis workbench
 
 Raw thermal recordings support histograms, region statistics, background and

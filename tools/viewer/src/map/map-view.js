@@ -43,12 +43,28 @@ const color = {
   finding: Color.MAGENTA,
 };
 export class ReviewMap {
-  constructor(container, onStatus = () => {}, onTerrainChange = () => {}, onTrackSeek = () => {}) {
+  constructor(
+    container,
+    onStatus = () => {},
+    onTerrainChange = () => {},
+    onTrackSeek = () => {},
+    onPointerHeight = () => {},
+  ) {
     this.onStatus = onStatus;
+    this.onPointerHeight = onPointerHeight;
+    this.pointerPosition = null;
+    this.pointerFrame = null;
+    this.closed = false;
     this.generation = 0;
     this.offset = 0;
     this.configuration = { imagery: 'none', terrainUrl: '', amslToEllipsoidMetres: 0 };
-    this.terrain = new TerrainElevation(onTerrainChange, () => new Request({ throttle: false }));
+    this.terrain = new TerrainElevation(
+      () => {
+        onTerrainChange();
+        this.refreshPointerHeight();
+      },
+      () => new Request({ throttle: false }),
+    );
     this.focused = false;
     this.follow = true;
     this.currentPosition = null;
@@ -126,6 +142,53 @@ export class ReviewMap {
     }, ScreenSpaceEventType.LEFT_CLICK);
     // Tracking is owned by the Follow checkbox, not the SDK's double-click.
     handler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    this.pointerMove = (event) => {
+      const rect = this.viewer.scene.canvas.getBoundingClientRect();
+      this.pointerPosition = new Cartesian2(event.clientX - rect.left, event.clientY - rect.top);
+      if (this.pointerFrame === null)
+        this.pointerFrame = requestAnimationFrame(() => {
+          this.pointerFrame = null;
+          this.refreshPointerHeight();
+        });
+    };
+    this.pointerLeave = () => {
+      this.pointerPosition = null;
+      this.onPointerHeight(null);
+    };
+    this.viewer.scene.canvas.addEventListener('pointermove', this.pointerMove);
+    this.viewer.scene.canvas.addEventListener('pointerleave', this.pointerLeave);
+    // Re-pick stationary pointers when Follow, pan, zoom or terrain changes the view.
+    this.pointerRender = () => this.refreshPointerHeight();
+    this.viewer.scene.postRender.addEventListener(this.pointerRender);
+  }
+  refreshPointerHeight() {
+    if (this.closed || !this.viewer || !this.pointerPosition) return;
+    const scene = this.viewer.scene;
+    if (scene.mode === SceneMode.MORPHING) {
+      this.onPointerHeight({ heightAmslM: null, reason: 'map changing mode' });
+      return;
+    }
+    const ray = this.viewer.camera.getPickRay(this.pointerPosition);
+    const hit =
+      ray &&
+      (scene.globe.pick(ray, scene) ||
+        this.viewer.camera.pickEllipsoid(this.pointerPosition, scene.globe.ellipsoid));
+    if (!hit) {
+      this.onPointerHeight({ heightAmslM: null, reason: 'pointer outside terrain' });
+      return;
+    }
+    const position = Cartographic.fromCartesian(hit),
+      lat = CesiumMath.toDegrees(position.latitude),
+      lon = CesiumMath.toDegrees(position.longitude),
+      heightAmslM = this.terrain.at(lat, lon);
+    // at() queues missing meshes; their callback samples the current pointer,
+    // never a stale latitude/longitude captured before an asynchronous load.
+    this.onPointerHeight({
+      lat,
+      lon,
+      heightAmslM,
+      reason: finite(heightAmslM) ? null : this.terrain.lastIssue?.reason || 'terrain unavailable',
+    });
   }
   render() {
     this.viewer.scene.requestRender();
@@ -589,6 +652,11 @@ export class ReviewMap {
     this.render();
   }
   destroy() {
+    this.closed = true;
+    cancelAnimationFrame(this.pointerFrame);
+    this.viewer.scene.canvas.removeEventListener('pointermove', this.pointerMove);
+    this.viewer.scene.canvas.removeEventListener('pointerleave', this.pointerLeave);
+    this.viewer.scene.postRender.removeEventListener(this.pointerRender);
     this.trackController?.abort();
     this.generation++;
     this.terrain.close();

@@ -1,6 +1,7 @@
 import './ui/style.css';
 import { layout } from './ui/layout.js';
 import { ThermalWorkbench } from './ui/thermal-workbench.js';
+import { VideoViewport } from './ui/video-viewport.js';
 import { LocalSource } from './media/local-source.js';
 import { FrameDecoder } from './media/native-decoder.js';
 import { selectLogAt } from './domain/flight-log.js';
@@ -94,7 +95,14 @@ function decoderStatus(text) {
   $('decoder-status').textContent = text;
 }
 try {
-  map = new ReviewMap($('map'), error, terrainChanged, seekFromTrack);
+  map = new ReviewMap($('map'), error, terrainChanged, seekFromTrack, (point) => {
+    const text = point
+      ? finite(point.heightAmslM)
+        ? `Terrain height: ${point.heightAmslM.toFixed(1)} m AMSL`
+        : `Terrain height: — · ${point.reason}`
+      : 'Terrain height: — · move pointer over map';
+    if ($('map-terrain-height').textContent !== text) $('map-terrain-height').textContent = text;
+  });
   elevation.terrain = map.terrain;
   map
     .configure(state.config)
@@ -151,6 +159,17 @@ const thermalWorkbench = new ThermalWorkbench($('thermal-analysis'), {
   preferences: storage.get('apcg.thermalAnalysis.settings', {}),
   onPreferences: (preferences) => storage.set('apcg.thermalAnalysis.settings', preferences),
 });
+const videoViewport = new VideoViewport($('video-stage'), $('video-canvas'));
+function syncFrameNavigation() {
+  const available = !!state.decoder && !!state.frames.length;
+  $('frame-input').disabled = $('frame-go').disabled = !available;
+  $('frame-input').max = state.frames.length || 1;
+  if (document.activeElement !== $('frame-input'))
+    $('frame-input').value = state.frame ? state.number + 1 : '';
+  $('frame-number').textContent = state.frame
+    ? `Frame ${(state.number + 1).toLocaleString()} / ${state.frames.length.toLocaleString()}${state.indexFailed ? ' · incomplete recording' : state.indexed ? '' : '+'}`
+    : 'Frame —';
+}
 function fileKey() {
   return state.file
     ? `fire-review:${state.file.name}:${state.file.size}:${state.file.lastModified}`
@@ -331,6 +350,9 @@ async function openVideo(file) {
   state.cursor = null;
   state.peaks = [];
   state.image = null;
+  videoViewport.reset();
+  $('frame-input').value = '';
+  syncFrameNavigation();
   state.indexed = false;
   state.indexPercent = 0;
   state.indexFailed = false;
@@ -444,12 +466,11 @@ async function openVideo(file) {
       progress(batch);
       $('seek').max = extent();
       $('duration').textContent = clock(extent());
-      if (state.frame)
-        $('frame-number').textContent =
-          `Frame ${(state.number + 1).toLocaleString()} / ${state.frames.length.toLocaleString()}${state.indexed ? '' : '+'}`;
+      syncFrameNavigation();
       videoIndexSummary();
       if (!state.decoder && state.frames.length) {
         state.decoder = new FrameDecoder(file, state.source, decoderStatus);
+        syncFrameNavigation();
       }
       for (const id of ['seek', 'previous', 'next']) $(id).disabled = !state.frames.length;
       if (state.decoder && state.initialFrameId === null && !state.frame && !state.decoding) {
@@ -490,9 +511,7 @@ async function openVideo(file) {
       updateVideoTrack();
       $('seek').max = extent();
       $('duration').textContent = clock(extent());
-      if (state.frame)
-        $('frame-number').textContent =
-          `Frame ${(state.number + 1).toLocaleString()} / ${state.frames.length.toLocaleString()}${state.indexed ? '' : '+'}`;
+      syncFrameNavigation();
       status(
         `100% · ${state.frames.length.toLocaleString()} frames indexed · ${state.warnings.length ? state.warnings.join('; ') : 'ready for review'}`,
       );
@@ -503,9 +522,7 @@ async function openVideo(file) {
         state.indexed = true;
         state.indexFailed = true;
         videoIndexSummary();
-        if (state.frame)
-          $('frame-number').textContent =
-            `Frame ${state.number + 1} / ${state.frames.length} · incomplete recording`;
+        syncFrameNavigation();
         error(e);
         if (state.frames.length) status('Playable prefix retained; file indexing stopped.');
       }
@@ -554,8 +571,7 @@ async function showFrame(number) {
     const seconds = frame.pts - state.origin;
     $('seek').value = seconds;
     $('elapsed').textContent = clock(seconds);
-    $('frame-number').textContent =
-      `Frame ${(state.number + 1).toLocaleString()} / ${state.frames.length.toLocaleString()}${state.indexed ? '' : '+'}`;
+    syncFrameNavigation();
     $('empty-video').hidden = true;
     $('video-canvas').hidden = false;
     for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding']) $(id).disabled = false;
@@ -656,6 +672,7 @@ function paint() {
   if (!state.image) return;
   const canvas = $('video-canvas'),
     d = state.decoded;
+  videoViewport.setFrame(d.width, d.height);
   if (canvas.width !== d.width || canvas.height !== d.height) {
     canvas.width = d.width;
     canvas.height = d.height;
@@ -1138,6 +1155,21 @@ $('next').onclick = () => {
   pause();
   showFrame((state.requestedNumber ?? state.number) + 1);
 };
+$('frame-jump').onsubmit = (event) => {
+  event.preventDefault();
+  const input = $('frame-input'),
+    number = Number(input.value);
+  if (
+    !input.reportValidity() ||
+    !Number.isInteger(number) ||
+    number < 1 ||
+    number > state.frames.length
+  )
+    return;
+  pause();
+  showFrame(number - 1).catch(error);
+};
+$('video-zoom').onchange = (event) => videoViewport.setZoom(Number(event.target.value));
 $('seek').oninput = (e) => {
   pause();
   showFrame(frameAt(state.frames, Number(e.target.value), state.origin));
@@ -1384,12 +1416,14 @@ window.addEventListener('beforeunload', () => {
   state.source?.close();
   state.logWorker?.terminate();
   thermalWorkbench.close();
+  videoViewport.close();
   map?.destroy();
 });
 // A small diagnostics surface for qualification and future source adapters.
 window.fireViewer = {
   state,
   thermalAnalysis: thermalWorkbench,
+  videoViewport,
   openVideo,
   showFrame,
   loadLog,
