@@ -54,12 +54,17 @@ def main():
                                         0, 0, M.MAV_STATE_ACTIVE)
                 link.mav.srcSystem, link.mav.srcComponent = 42, 190
                 time.sleep(.2)
-                send_vehicle_position(link, -35.36, 149.16, 600)
-                send_vehicle_attitude(link, 0)
+                vehicle_yaw = 0
+
+                def refresh_roi_vehicle():
+                    send_vehicle_position(link, -35.36, 149.16, 600)
+                    send_vehicle_attitude(link, vehicle_yaw)
+
+                refresh_roi_vehicle()
                 ack = location_command(link, M.MAV_CMD_DO_SET_ROI_LOCATION, M.MAV_FRAME_GLOBAL,
                                        -35.36 + 100 / 111319.5, 149.16, 550)
                 assert ack.result == M.MAV_RESULT_ACCEPTED
-                wait_siyi_attitude(vendor_port, -26.565, 0)
+                wait_siyi_attitude(vendor_port, -26.565, 0, refresh=refresh_roi_vehicle)
                 ipc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 ipc.settimeout(2)
                 token = bytes(16)
@@ -76,7 +81,8 @@ def main():
                 control(1)
                 time.sleep(.5)  # Allow the physical rate response to settle after stop.
                 held = query_siyi_attitude(vendor_port)
-                send_vehicle_attitude(link, 45)
+                vehicle_yaw = 45
+                refresh_roi_vehicle()
                 target = Quaternion([0, 0, 0])
                 link.mav.gimbal_device_set_attitude_send(1, GIMBAL_COMPONENT, 0, target.q,
                                                         float('nan'), float('nan'), float('nan'))
@@ -87,7 +93,7 @@ def main():
                 blocked = query_siyi_attitude(vendor_port)
                 assert abs(blocked[1]-held[1]) < .3 and abs(blocked[2]-held[2]) < .3, (held, blocked)
                 control(3)
-                wait_siyi_attitude(vendor_port, -26.565, -45)
+                wait_siyi_attitude(vendor_port, -26.565, -45, refresh=refresh_roi_vehicle)
                 control(1)
                 terminate(camera)
                 link.close()
