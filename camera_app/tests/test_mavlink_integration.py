@@ -239,10 +239,14 @@ def query_siyi_attitude(port):
             return roll / 10.0, pitch / 10.0, -yaw / 10.0
 
 
-def wait_siyi_attitude(port, target_pitch, target_yaw, timeout=8):
+def wait_siyi_attitude(port, target_pitch, target_yaw, timeout=8, *, refresh=None):
     deadline = time.monotonic() + timeout
     latest = None
     while time.monotonic() < deadline:
+        # Rate acquisition can outlast the vehicle telemetry freshness window.
+        # Keep the fixture's stationary vehicle alive while the gimbal moves.
+        if refresh is not None:
+            refresh()
         try:
             latest = query_siyi_attitude(port)
         except (ConnectionError, OSError, TimeoutError):
@@ -452,7 +456,12 @@ def full_capability_test(connection, siyi_port, capture_root, recording_state,
                           else mavutil.mavlink.MAV_RESULT_UNSUPPORTED)
     roi_pitch = math.degrees(math.atan2(-50.0, 100.0))
     if position_targeting:
-        wait_siyi_attitude(siyi_port, roi_pitch, -40.0)
+        def refresh_roi_vehicle():
+            send_vehicle_position(connection, vehicle_latitude, vehicle_longitude,
+                                  vehicle_altitude)
+            send_vehicle_attitude(connection, 40.0)
+
+        wait_siyi_attitude(siyi_port, roi_pitch, -40.0, refresh=refresh_roi_vehicle)
         send_vehicle_attitude(connection, 40.0)
         wait_attitude(
             connection,
