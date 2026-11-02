@@ -41,7 +41,7 @@ and web credentials in `/opt/ap_cameragimbal` survive both update methods.
 Copying this `.gcu` to a microSD card does not install it; the SD update
 instructions for SIYI cameras do not apply to this target.
 
-MAVLink uses TCP/UDP **14550**; XFRobot control uses TCP **2332**, UDP **2337**
+MAVLink uses TCP/UDP **16001**; XFRobot control uses TCP **2332**, UDP **2337**
 with replies on **2338**. RTSP streams use port **8554**, paths `/video1` and
 `/video2`. AP startup failure leaves its web UI available for logs and recovery.
 Reinstall the original vendor `.gcu` to restore the vendor application.

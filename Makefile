@@ -208,6 +208,10 @@ a8_sitl-rate-test: a8_sitl
 	$(SITL_VIDEO_PYTHON) sitl/test_rate_tracking.py --output $(A8_SITL_BUILD)/rate-test
 
 .PHONY: sitl-angle-hold-test
+.PHONY: sitl-rate-default-test
+sitl-rate-default-test: sitl
+	$(SITL_VIDEO_PYTHON) sitl/test_rate_default.py --build $(SITL_BUILD)
+
 .PHONY: sitl-live-tracking-test
 sitl-live-tracking-test: sitl
 	$(MAKE) -C web portable-sitl SITL_BIN_ROOT=$(abspath $(SITL_BUILD))
@@ -551,6 +555,7 @@ sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl: targets
 .PHONY: targets-test
 targets-test: targets
 	python3 tests/test_targets.py
+	python3 tests/test_launcher_config.py
 
 .PHONY: z1mini_sitl-test
 z1mini_sitl-test: z1mini_sitl

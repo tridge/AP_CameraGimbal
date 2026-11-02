@@ -96,7 +96,7 @@ the bootloader's filename directly.
    inserted. U-Boot rewrites the customer partition and boots; the launcher
    removes the file from the card afterwards.
 3. The camera keeps 192.168.144.25 and the vendor telnet login.
-   `camera-app` listens on SIYI 37260, MAVLink 14550, RTSP 8554
+   `camera-app` listens on SIYI 37260, MAVLink 16001, RTSP 8554
    (`/video1`, `/video2`) and writes captures and recordings to the card
    under `/mnt/mmc/DCIM/capture` and `/mnt/mmc/DCIM/record`, the DCIM folder
    the vendor firmware also uses. The web interface is at

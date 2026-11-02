@@ -121,11 +121,17 @@ jobs:
         run: |
           make -C camera_app survey-test survey-lifecycle-test metadata-history-test terrain-test
           python3 sitl/test_survey_controls.py
+      - name: Test Rate defaults and minimum-speed tracking
+        run: |
+          make -C camera_app tests/test_gimbal_rate
+          camera_app/tests/test_gimbal_rate
+          make sitl-rate-default-test
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
       - name: Test Raspberry Pi image controls, CADDX gimbal and JPEG stills, and build against libcamera 0.2
         run: |
-          make -C camera_app rpi_libcam_caddx-test
+          make -C camera_app rpi_libcam_caddx-test tests/camera-app-rpi-host
+          python3 camera_app/tests/test_rpi_rate_tracking.py camera_app/tests/camera-app-rpi-host
           sudo apt-get install -y libcamera-dev libjpeg-dev pkg-config
           make -C camera_app rpi_jpeg-test
           make -j8 rpi_libcam_caddx

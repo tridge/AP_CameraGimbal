@@ -19,6 +19,7 @@ make a8_sitl-test
 make zr10_sitl
 make zr10_sitl-test
 make sitl-live-tracking-test
+make sitl-rate-default-test
 ```
 
 `make sitl-mavlink-test` also exercises circling ROI tracking with sparse
@@ -34,9 +35,15 @@ until recording stops.
 
 The **Tracking control method** setting (`TRACK_METHOD` in MAVLink, or
 `[mavlink] tracking_method=angle|rate` in `camera.ini`) selects how the camera
-tracks a geographic ROI. Angle is the default. Rate combines predicted target
+tracks a geographic ROI. Rate is the default and combines predicted target
 motion with filtered pointing-error correction, and stops on stale vehicle or
 gimbal telemetry. It does not change explicit mount-angle/rate commands.
+Existing explicit `tracking_method=angle` settings remain Angle. MT11 tracking
+uses short minimum-speed pulses for requested rates below its measured motor
+dead zone; other gimbals retain their calibrated conversion. A command-only
+CADDX gimbal first acquires an explicitly requested ROI with an angle target,
+then integrates the tracking rates; its reported pose remains commanded, not
+measured. No initial camera startup movement is introduced.
 
 The camera app checks for configuration-file changes every 500 ms. Image
 controls, capture scope, thermal palette, automatic recording, timezone and
@@ -79,10 +86,10 @@ Fresh simulator slots use these defaults:
 
 | Simulator | Web | MAVLink TCP/UDP | RTSP | Live video | Camera/gimbal components |
 |---|---:|---:|---:|---:|---|
-| 1 | 8081 | 14550 | 8554 | 8555 | 100 / 154 |
-| 2 | 8082 | 14560 | 8564 | 8565 | 101 / 171 |
-| 3 | 8083 | 14570 | 8574 | 8575 | 102 / 172 |
-| 4 | 8084 | 14580 | 8584 | 8585 | 103 / 173 |
+| 1 | 8081 | 16001 | 8554 | 8555 | 100 / 154 |
+| 2 | 8082 | 16011 | 8564 | 8565 | 101 / 171 |
+| 3 | 8083 | 16021 | 8574 | 8575 | 102 / 172 |
+| 4 | 8084 | 16031 | 8584 | 8585 | 103 / 173 |
 
 SIYI vendor ports are 37260–37263. Z1-Mini UDP command ports are
 2337/2347/2357/2367; TCP uses 2332 for slot 1 and the command port for later
@@ -90,7 +97,10 @@ slots. UDP 2338 is reserved for the XFRobot client's fixed reply endpoint.
 Multiple local Z1-Mini instances share that reply destination, so use TCP to
 keep their vendor telemetry separate. Internal gimbal sockets use automatically
 allocated ports. Existing MAVLink port and component settings are preserved;
-conflicting saved settings are reported before starting the group.
+conflicting saved settings are reported before starting the group. Fresh camera
+listeners use 16001 (then 16011/16021/16031 for additional launcher slots),
+separate from sim_vehicle.py's usual GCS output ports. Existing explicitly saved
+TCP/UDP ports are retained until changed or parameters are reset.
 
 When connecting a real camera and a simulator to the same vehicle, give each
 camera a distinct component ID. For example, keep the real MT11 at camera 100 /
@@ -180,7 +190,7 @@ The default endpoints are:
   Native private pan/tilt rates and centre/look-down presets share the public
   SDK/MAVLink gimbal simulation; native modes and subscriptions remain pending;
 - H.264 RTSP test streams: `rtsp://127.0.0.1:8554/video1` and `/video2`;
-- MAVLink 2 camera/gimbal service: UDP and TCP port 14550; and
+- MAVLink 2 camera/gimbal service: UDP and TCP port 16001; and
 - simulated private gimbal link: an automatically selected free UDP port,
   printed by the launcher.
 
@@ -349,8 +359,8 @@ MT11_SITL_WEB_PORT       default 8081
 MT11_SITL_CAMERA_PORT    default 37260
 MT11_SITL_GIMBAL_PORT    optional fixed port; default is OS-selected
 MT11_SITL_RTSP_PORT      default 8554 (native web video uses the next port)
-MT11_SITL_MAVLINK_TCP_PORT default 14550; 0 disables TCP
-MT11_SITL_MAVLINK_UDP_PORT default 14550; 0 disables UDP
+MT11_SITL_MAVLINK_TCP_PORT default 16001; 0 disables TCP
+MT11_SITL_MAVLINK_UDP_PORT default 16001; 0 disables UDP
 MT11_SITL_ORIENTATION    upright or inverted; default upright
 ```
 
@@ -360,10 +370,10 @@ The A8 launcher has the equivalent `A8_SITL_WEB_PORT`,
 `A8_SITL_ORIENTATION` variables. Its MAVLink ports default to zero so a
 standalone A8 simulation cannot accidentally accept gimbal targets broadcast
 by another ArduPilot instance on port 14550. Set one or both port variables to
-14550 when deliberately testing MAVLink integration.
+16001 when deliberately testing MAVLink integration.
 
 The MT11 MAVLink ports normally come from the persistent simulated
-`app/camera.ini`, whose initial values are 14550. Setting either model's
+`app/camera.ini`, whose initial values are 16001. Setting either model's
 MAVLink launcher variable explicitly overrides that INI value for the process
 and for web-triggered restarts; leave MT11 variables unset when changing its
 ports in the web UI. A8 always uses its isolated launcher defaults unless the

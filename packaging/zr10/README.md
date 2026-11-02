@@ -73,7 +73,7 @@ installation requires the original SIYI SD image to restore vendor operation.
 ## Operation and validation
 
 - Web: `http://192.168.144.25/`.
-- MAVLink: TCP/UDP 14550. SIYI: TCP/UDP 37260.
+- MAVLink: TCP/UDP 16001. SIYI: TCP/UDP 37260.
 - RTSP: `rtsp://192.168.144.25:8554/video1` and `/video2`.
 - Media: `/mnt/DCIM/capture` and `/mnt/DCIM/record`.
 - Logs: `/tmp/camera-app.log` and `/tmp/zr10-web.log`.

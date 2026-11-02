@@ -100,12 +100,12 @@ service's journal, and the file browser covers recordings under
 `/var/lib/ap_cameragimbal`. Restarting the camera app stops it and lets
 systemd start it again; Reboot reboots the Pi. Firmware upload is not offered.
 The web page sends its camera controls to camera-app's MAVLink TCP port
-(`[mavlink] tcp_port`, 14570).
+(`[mavlink] tcp_port`, 16001).
 
 ## MAVLink
 
-The camera listens for MAVLink on UDP port 14570. In Rpanion-server's
-Flight Controller page, add a UDP output to `127.0.0.1:14570` so mavlink-router
+The camera listens for MAVLink on UDP port 16001. In Rpanion-server's
+Flight Controller page, add a UDP output to `127.0.0.1:16001` so mavlink-router
 forwards traffic between the flight controller, the GCS and the camera.
 
 Behind mavlink-router the camera cannot tell which network the GCS is on, so

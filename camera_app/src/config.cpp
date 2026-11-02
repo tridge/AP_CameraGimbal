@@ -84,11 +84,11 @@ void ca_config_defaults(struct ca_config *config)
     config->white_balance = CA_WB_AUTO;
     config->position_targeting = APCAM_DEFAULT_POSITION_TARGETING;
     config->osd_recording = !APCAM_HAVE_OVERLAY_RECORDING_SELECT;
-    config->tracking_method = CA_TRACK_ANGLE;
+    config->tracking_method = CA_TRACK_RATE;
     config->mavlink_system_id = APCAM_DEFAULT_SYSTEM_ID;
     config->mavlink_camera_component_id = 100U; /* MAV_COMP_ID_CAMERA */
-    config->mavlink_tcp_port = 14550U;
-    config->mavlink_udp_port = 14550U;
+    config->mavlink_tcp_port = APCAM_DEFAULT_MAVLINK_PORT;
+    config->mavlink_udp_port = APCAM_DEFAULT_MAVLINK_PORT;
     config->support.mavlink_port = 10001U;
     config->support.signing_link_id = 1U;
     config->support.video1_port = 0U;

@@ -47,7 +47,7 @@ while True:
     assert 'orientation = upright' in text
     text=text.replace('orientation = upright', 'orientation = ' + args.orientation)
     mavport=port()
-    text=text.replace('tcp_port = 14550','tcp_port = 0').replace('udp_port = 14550',f'udp_port = {mavport}')
+    text=text.replace('tcp_port = 16001','tcp_port = 0').replace('udp_port = 16001',f'udp_port = {mavport}')
     config.write_text(text)
     rtsp_port=port(adjacent=True)
     mcu=MCU();ready=root/'ready'

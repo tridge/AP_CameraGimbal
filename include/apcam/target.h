@@ -84,6 +84,12 @@
 #ifndef APCAM_LOG_ROOT
 #define APCAM_LOG_ROOT "/mnt/logs"
 #endif
+/* Keep the camera listener separate from sim_vehicle/MAVProxy GCS outputs. */
+#define APCAM_DEFAULT_MAVLINK_PORT 16001
+/* CADDX reports a commanded pose, unavailable until its first command. */
+#ifndef APCAM_GIMBAL_FEEDBACK_IS_TARGET
+#define APCAM_GIMBAL_FEEDBACK_IS_TARGET 0
+#endif
 #ifndef APCAM_TRACKING_RATE_I
 #define APCAM_TRACKING_RATE_I 0.0f
 #endif

@@ -788,6 +788,7 @@ test: tests/test_misb survey-test rpi_libcam_caddx-test timezone-test system-sta
 	python3 tests/test_integration.py ./$(HOST_TARGET)
 	python3 tests/test_a8_attitude.py ./$(A8_HOST_TARGET)
 	python3 tests/test_rpi_video_uri.py ./$(RPI_HOST_TARGET)
+	python3 tests/test_rpi_rate_tracking.py ./$(RPI_HOST_TARGET)
 	python3 tests/test_a8_delegated.py ./$(A8_HOST_TARGET)
 	ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10 \
 		-t 2.3 -c:v libx264 -x264-params aud=1:bframes=0:slices=4 \

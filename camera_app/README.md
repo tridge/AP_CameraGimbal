@@ -141,8 +141,8 @@ protocol = none
 [mavlink]
 system_id = 0
 position_targeting = true
-tcp_port = 14550
-udp_port = 14550
+tcp_port = 16001
+udp_port = 16001
 
 [thermal]
 palette = white_hot
@@ -654,7 +654,7 @@ through the web UI/INI. The additional proxy parameters are listed in
 | `MAV_TCP_PORT` | `mavlink.tcp_port` | 0 disabled; 1–65535 port |
 | `MAV_UDP_PORT` | `mavlink.udp_port` | 0 disabled; 1–65535 port |
 | `MAV_POS_TARGET` | `mavlink.position_targeting` | 0 disabled, 1 enabled |
-| `TRACK_METHOD` | `mavlink.tracking_method` | 0 angle, 1 rate |
+| `TRACK_METHOD` | `mavlink.tracking_method` | 0 angle, 1 rate (default) |
 | `LOG_DISARMED` | `logging.disarmed` | 0 log while armed, 1 also log while disarmed |
 | `PHOTO_SCOPE` | `capture.photo_scope` | 0 thermal, 1 all lenses |
 | `MOUNT_ORIENT` | `mount.orientation` | 0 auto, 1 upright, 2 inverted |
@@ -690,7 +690,7 @@ for TCP/UDP ports take precedence on restart.
 For a camera using system ID 42 and the default camera component, connect MAVProxy to component 100:
 
 ```sh
-mavproxy.py --master=tcp:127.0.0.1:14550 --target-system=42 --target-component=100 --mav20 --nowait
+mavproxy.py --master=tcp:127.0.0.1:16001 --target-system=42 --target-component=100 --mav20 --nowait
 ```
 
 ```text

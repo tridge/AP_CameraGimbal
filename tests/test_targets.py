@@ -49,6 +49,8 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
             config = configparser.ConfigParser()
             assert config.read(template), template
             assert config['video']['telemetry'] == 'misb', template
+            assert config['mavlink']['tracking_method'] == 'rate', template
+            assert config['mavlink']['tcp_port'] == config['mavlink']['udp_port'] == '16001', template
             roles = [('main', 'stream.main'), ('sub', 'stream.sub'), ('recording', 'recording')]
             if int(target['num_streams']) < 2:
                 roles.remove(('sub', 'stream.sub'))

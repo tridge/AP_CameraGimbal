@@ -23,6 +23,7 @@
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
+#include "camera_app/gimbal_rate.h"
 #include "camera_app/survey.h"
 #include "camera_app/telemetry_time.h"
 #include "camera_app/thermal_stream.h"
@@ -187,6 +188,7 @@ struct ca_mavlink_server {
     float tracking_error[2];
     float tracking_integral[2];
     float tracking_rate[2];
+    ca_tracking_rate_pulse tracking_pulse[2];
     uint64_t config_check_ms;
     struct stat config_stat;
     bool config_seen, config_pending;
@@ -1434,6 +1436,7 @@ static void stop_tracking_rate(struct ca_mavlink_server *server)
     memset(server->tracking_error, 0, sizeof(server->tracking_error));
     memset(server->tracking_integral, 0, sizeof(server->tracking_integral));
     memset(server->tracking_rate, 0, sizeof(server->tracking_rate));
+    memset(server->tracking_pulse, 0, sizeof(server->tracking_pulse));
 }
 
 static float bounded(float value, float limit)
@@ -1476,8 +1479,15 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
         return;
     }
     struct ca_gimbal_attitude attitude;
-    if (!ca_backend_gimbal_attitude(server->backend, &attitude) ||
-        now < attitude.timestamp_ms || now - attitude.timestamp_ms > 500U) {
+    if (!ca_backend_gimbal_attitude(server->backend, &attitude)) {
+        stop_tracking_rate(server);
+        // Command-only gimbals have no pose until the first requested move.
+        // Seed it from the explicit ROI, never by moving at camera startup.
+        if (APCAM_GIMBAL_FEEDBACK_IS_TARGET)
+            (void)ca_backend_set_gimbal_angles(server->backend, pitch, yaw);
+        return;
+    }
+    if (now < attitude.timestamp_ms || now - attitude.timestamp_ms > 500U) {
         stop_tracking_rate(server);
         return;
     }
@@ -1501,7 +1511,9 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     float feed_forward[2] = {pitch_rate, yaw_rate - vehicle_yaw_rate};
     const float minimum[2] = {APCAM_GIMBAL_PITCH_MIN * radians, APCAM_GIMBAL_YAW_MIN * radians};
     const float maximum[2] = {APCAM_GIMBAL_PITCH_MAX * radians, APCAM_GIMBAL_YAW_MAX * radians};
-    float output[2];
+    float output[2], command[2];
+    const float minimum_rate[2] = {APCAM_TRACKING_MIN_PITCH_RATE * radians,
+                                  APCAM_TRACKING_MIN_YAW_RATE * radians};
     for (unsigned i = 0; i < 2; i++) {
         if (desired[i] < minimum[i] || desired[i] > maximum[i]) feed_forward[i] = 0;
         desired[i] = fminf(maximum[i], fmaxf(minimum[i], desired[i]));
@@ -1532,6 +1544,8 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
                                                        APCAM_GIMBAL_RATE_MAX * radians * dt);
         if (!circular && ((feedback[i] <= minimum[i] && output[i] < 0) ||
             (feedback[i] >= maximum[i] && output[i] > 0))) output[i] = 0;
+        command[i] = ca_tracking_rate_command(output[i], minimum_rate[i], dt,
+                                               &server->tracking_pulse[i]);
         CA_BINLOG(i ? CA_LOG_PIDY : CA_LOG_PIDP, ca_log_pid,
             .target=desired[i]/radians, .actual=feedback[i]/radians,
             .rate=(i ? attitude.yaw_rate_rad_s : attitude.pitch_rate_rad_s)/radians,
@@ -1540,7 +1554,7 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
             .d=0, .output=output[i]/radians,
             .dt=dt, .age=(now-attitude.timestamp_ms)*.001f);
     }
-    if (ca_backend_set_gimbal_rates(server->backend, output[0], output[1]) == 0) {
+    if (ca_backend_set_gimbal_rates(server->backend, command[0], command[1]) == 0) {
         server->tracking_rate_active = true;
         memcpy(server->tracking_rate, output, sizeof(output));
     } else {
