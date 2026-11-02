@@ -247,3 +247,74 @@ test('analysis adds no duplicate image renders during ordinary playback and wait
   await expect(page.locator('#analysis-apply')).toBeEnabled();
   expect(await page.evaluate(() => window.fireViewer.state.number)).toBe(7);
 });
+
+test('playing at an indexing boundary clears processed display and cancels pending analysis', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await seekNumber(page, 11);
+  await apply(page, 'matched');
+  await page.evaluate(() => {
+    const { state } = window.fireViewer;
+    window.originalBoundaryPixels = state.decoded.data.slice();
+    // Model the end of a playable prefix while the indexer awaits more frames.
+    state.indexed = false;
+  });
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return state.playing && !a.result && !a.busy && !a.plane;
+  });
+  await expect(page.locator('#analysis-display-badge')).toBeHidden();
+  expect(await page.evaluate(() => window.fireViewer.state.number)).toBe(11);
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const a = window.fireViewer.thermalAnalysis;
+    return a.result?.settings.method === 'raw' && !a.busy;
+  });
+  await page.evaluate(() => {
+    const client = window.fireViewer.thermalAnalysis.client;
+    window.restoreAnalysisWorker = () => {
+      client.workerFactory = originalFactory;
+    };
+    const originalFactory = client.workerFactory;
+    window.boundaryWorkerTerminated = false;
+    client.workerFactory = () => {
+      const worker = originalFactory(),
+        terminate = worker.terminate.bind(worker);
+      // Keep a real worker pending deterministically, without racing filter speed.
+      worker.postMessage = () => {};
+      worker.terminate = () => {
+        window.boundaryWorkerTerminated = true;
+        terminate();
+      };
+      return worker;
+    };
+  });
+  await page.locator('#analysis-apply').click();
+  await page.waitForFunction(() => {
+    const a = window.fireViewer.thermalAnalysis;
+    return a.busy && a.client.worker && a.client.pending;
+  });
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return (
+      state.playing &&
+      !a.result &&
+      !a.busy &&
+      !a.client.worker &&
+      !a.client.pending &&
+      window.boundaryWorkerTerminated
+    );
+  });
+  expect(
+    await page.evaluate(() =>
+      window.fireViewer.state.decoded.data.every(
+        (value, i) => value === window.originalBoundaryPixels[i],
+      ),
+    ),
+  ).toBe(true);
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  await page.locator('#play').click();
+});

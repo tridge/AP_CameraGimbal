@@ -1025,6 +1025,7 @@ async function play() {
     return;
   }
   state.playing = true;
+  thermalWorkbench.invalidate('Playback started. Original pixels shown.');
   thermalWorkbench.activity();
   const playEpoch = ++state.playEpoch;
   $('play').textContent = 'Pause';
