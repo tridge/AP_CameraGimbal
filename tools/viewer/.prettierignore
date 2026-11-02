@@ -4,3 +4,5 @@ public/vendor/
 test-results/
 playwright-report/
 tests/browser/fixtures/
+# Generated independent numerical reference
+tests/fixtures/thermal-analysis-reference.json

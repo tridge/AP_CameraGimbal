@@ -264,3 +264,12 @@ a C++ toolchain. No real flight recording is committed. See
 [TESTING.md](docs/TESTING.md) for real-data opt-ins and screenshot/network audits,
 [REVIEWS.md](docs/REVIEWS.md) for the staged Claude reviews, and
 [PLAN.md](docs/PLAN.md) for the accepted plan and feasibility evidence.
+
+## Thermal analysis workbench
+
+Raw thermal recordings support histograms, region statistics, background and
+local-contrast filters, matched/scale-space detection aids, CLAHE and exploratory
+Richardson–Lucy/Wiener deconvolution. Processing is local and cancellable;
+original detector values remain the source of temperatures and map positions.
+See [Thermal image analysis](docs/THERMAL_ANALYSIS.md) for operation, scientific
+assumptions, reproducible exports and qualification limits.

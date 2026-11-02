@@ -132,3 +132,18 @@ keyboard +/− input. map-zoom-footprint.spec.js covers ordinary/numpad keys,
 editable-field and browser-shortcut handling, and zoom retention during Follow.
 Its moving partial-footprint test reads rendered yellow pixels in 2D/3D to detect
 the asynchronous geometry flicker that entity visibility flags cannot reveal.
+
+Thermal analysis qualification adds `thermal-analysis.spec.js`: all processing
+methods, raw/processed histograms, ROI and180° rotation, CSV and finding
+provenance, immutable original temperatures, cancellation/seek/source switching,
+uncalibrated/RGB handling, mobile controls and duplicate-render/decode guards.
+Set `VIEWER_REAL_THERMAL` to exercise the same tools on a local flight recording,
+including a mid-flight SHA-256 comparison with an independently decoded frame.
+
+`thermal-analysis.test.js` includes checked-in synthetic SciPy/NumPy references
+for the Gaussian, white top-hat and both deconvolution implementations, noise
+normalization/ROI independence, saturation/zero/constant images and worker
+failure/cancellation handling. Regeneration is optional and requires SciPy;
+ordinary tests only read the fixture. Use
+`node scripts/qualify-thermal-analysis.mjs` for controlled weak-source injection
+measurements; its output is not a real-flight detection-accuracy claim.

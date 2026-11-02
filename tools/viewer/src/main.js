@@ -1,5 +1,6 @@
 import './ui/style.css';
 import { layout } from './ui/layout.js';
+import { ThermalWorkbench } from './ui/thermal-workbench.js';
 import { LocalSource } from './media/local-source.js';
 import { FrameDecoder } from './media/native-decoder.js';
 import { selectLogAt } from './domain/flight-log.js';
@@ -126,6 +127,30 @@ const storage = {
     }
   },
 };
+const thermalWorkbench = new ThermalWorkbench($('thermal-analysis'), {
+  onOverlayChange: paint,
+  onChange: () => {
+    if (state.decoded) {
+      if (!thermalWorkbench.result && state.peaks.some((p) => p.analysis)) {
+        state.peaks = [];
+        renderPeaks();
+      }
+      syncContrastControls();
+      renderImageSafely();
+    }
+  },
+  onCandidates: (candidates) => {
+    state.peaks = candidates;
+    paint();
+    renderPeaks();
+  },
+  pause,
+  cursor: () => state.cursor,
+  playing: () => state.playing,
+  loading: () => state.decoding,
+  preferences: storage.get('apcg.thermalAnalysis.settings', {}),
+  onPreferences: (preferences) => storage.set('apcg.thermalAnalysis.settings', preferences),
+});
 function fileKey() {
   return state.file
     ? `fire-review:${state.file.name}:${state.file.size}:${state.file.lastModified}`
@@ -279,6 +304,10 @@ function pause() {
   state.playing = false;
   $('play').textContent = 'Play';
   $('play').setAttribute('aria-label', 'Play video');
+  thermalWorkbench.activity();
+  queueMicrotask(() => {
+    if (!state.playing && !state.decoding && !state.closed) thermalWorkbench.paused();
+  });
 }
 async function openVideo(file) {
   if (!file) return;
@@ -297,6 +326,7 @@ async function openVideo(file) {
   state.frames = [];
   state.frame = null;
   state.decoded = null;
+  thermalWorkbench.setFrame(null, null, null, state.generation);
   state.number = 0;
   state.cursor = null;
   state.peaks = [];
@@ -495,6 +525,7 @@ async function showFrame(number) {
   }
   state.requestedNumber = number;
   state.requestedFrameId = state.frames[number].id;
+  thermalWorkbench.invalidate('Seeking frame. Original pixels shown.');
   const own = state.generation,
     seek = ++state.seekGeneration,
     frame = state.frames[number];
@@ -502,6 +533,7 @@ async function showFrame(number) {
   const controller = new AbortController();
   state.controller = controller;
   state.decoding = true;
+  thermalWorkbench.activity();
   const started = performance.now();
   try {
     const decoded = await state.decoder.decode(frame, { signal: controller.signal });
@@ -514,6 +546,7 @@ async function showFrame(number) {
     state.requestedFrameId = null;
     state.frame = frame;
     state.decoded = decoded;
+    thermalWorkbench.setFrame(state.file, frame, decoded, state.generation);
     state.renderMs = performance.now() - started;
     state.peaks = [];
     if (decoded.kind === 'gray16' && $('palette').value === 'Original')
@@ -541,6 +574,7 @@ async function showFrame(number) {
     $('pixel-x').value = state.cursor?.x ?? Math.floor(decoded.width / 2);
     $('pixel-y').value = state.cursor?.y ?? Math.floor(decoded.height / 2);
     state.decoding = false;
+    thermalWorkbench.activity();
     decoderStatus(`${state.decoder.mode} · ${Math.round(state.renderMs)} ms/frame`);
     renderImageSafely();
     updateTelemetry();
@@ -551,6 +585,7 @@ async function showFrame(number) {
       state.requestedNumber = null;
       state.requestedFrameId = null;
       state.decoding = false;
+      thermalWorkbench.activity();
       error(e);
     }
   }
@@ -558,11 +593,18 @@ async function showFrame(number) {
 function syncContrastControls() {
   const enabled =
     state.decoded?.kind === 'gray16' &&
+    !thermalWorkbench.plane &&
     !!calibration(state.frame?.thermalMetadata) &&
     $('stretch').value === 'fixed';
   $('stretch-low').disabled = $('stretch-high').disabled = !enabled;
+  if (state.decoded?.kind === 'gray16')
+    $('stretch').disabled = !!thermalWorkbench.plane || !calibration(state.frame?.thermalMetadata);
 }
 function renderImageSafely() {
+  $('analysis-display-badge').hidden = !thermalWorkbench.plane;
+  $('analysis-display-badge').textContent = thermalWorkbench.plane
+    ? `Processed · ${thermalWorkbench.result.settings.method}`
+    : '';
   try {
     makeImage();
   } catch (e) {
@@ -589,9 +631,11 @@ function makeImage() {
         ? [Number($('stretch-low').value), Number($('stretch-high').value)]
         : null;
     rgba = colorize(
-      d.data,
+      thermalWorkbench.plane || d.data,
       $('palette').value === 'Original' ? 'White hot' : $('palette').value,
-      stretch(d.data, fixed, state.frame.thermalMetadata),
+      thermalWorkbench.plane
+        ? thermalWorkbench.limits
+        : stretch(d.data, fixed, state.frame.thermalMetadata),
     );
   } else if ($('palette').value !== 'Original') {
     const intensity = new Uint16Array(d.width * d.height);
@@ -623,6 +667,19 @@ function paint() {
     ctx.rotate(Math.PI);
   }
   ctx.drawImage(state.image, 0, 0);
+  const roi = thermalWorkbench.roi;
+  if (
+    thermalWorkbench.root.open &&
+    d.kind === 'gray16' &&
+    roi &&
+    (roi.x || roi.y || roi.width !== d.width || roi.height !== d.height)
+  ) {
+    ctx.strokeStyle = '#ffb85b';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(roi.x + 0.5, roi.y + 0.5, roi.width - 1, roi.height - 1);
+    ctx.setLineDash([]);
+  }
   for (const [i, p] of state.peaks.entries()) {
     ctx.strokeStyle = '#ffe66d';
     ctx.lineWidth = 1;
@@ -766,7 +823,7 @@ function renderPeaks() {
     const li = document.createElement('li'),
       button = document.createElement('button'),
       temp = celsius(p.value, state.frame?.thermalMetadata);
-    button.textContent = `${i + 1}. ${p.x}, ${p.y} · ${temp === null ? p.value + ' raw' : temp.toFixed(2) + ' °C'} · contrast +${p.contrast.toFixed(1)} raw`;
+    button.textContent = `${i + 1}. ${p.x}, ${p.y} · ${temp === null ? p.value + ' raw' : temp.toFixed(2) + ' °C'} · ${p.scoreUnit ? `${p.contrast.toFixed(2)} ${p.scoreUnit}${p.singlePixel ? ' · pixel-scale excess' : ''}` : `contrast +${p.contrast.toFixed(1)} raw`}`;
     button.onclick = () => {
       state.cursor = { x: p.x, y: p.y };
       paint();
@@ -800,6 +857,7 @@ async function markFinding() {
         : correctedUtc(state.frame.pts - state.origin, record?.utc_us, state.offset, state.anchors),
     rawPixel: { ...point },
     rawValue: raw,
+    analysis: thermalWorkbench.provenance(point),
     temperatureC: raw === null ? null : celsius(raw, state.frame.thermalMetadata),
     displayRotationDegrees: state.rotation,
     projectionRawRotationDegrees: 0,
@@ -950,6 +1008,7 @@ async function play() {
     return;
   }
   state.playing = true;
+  thermalWorkbench.activity();
   const playEpoch = ++state.playEpoch;
   $('play').textContent = 'Pause';
   $('play').setAttribute('aria-label', 'Pause video');
@@ -1324,11 +1383,13 @@ window.addEventListener('beforeunload', () => {
   state.decoder?.close();
   state.source?.close();
   state.logWorker?.terminate();
+  thermalWorkbench.close();
   map?.destroy();
 });
 // A small diagnostics surface for qualification and future source adapters.
 window.fireViewer = {
   state,
+  thermalAnalysis: thermalWorkbench,
   openVideo,
   showFrame,
   loadLog,
