@@ -34,8 +34,12 @@ test('entire thermal image fits stage and all four calibrated raw corners remain
   await openFile(page, fixture('thermal.mkv'), { kind: 'gray16' });
   const canvas = await page.locator('#video-canvas').boundingBox();
   const stage = await page.locator('#video-stage').boundingBox();
-  expect(Math.abs(canvas.width - stage.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(canvas.height - stage.height)).toBeLessThanOrEqual(1);
+  // Fit preserves the detector aspect ratio and may leave unused stage space.
+  expect(canvas.width / canvas.height).toBeCloseTo(640 / 512, 3);
+  expect(canvas.x).toBeGreaterThanOrEqual(stage.x - 1);
+  expect(canvas.y).toBeGreaterThanOrEqual(stage.y - 1);
+  expect(canvas.x + canvas.width).toBeLessThanOrEqual(stage.x + stage.width + 1);
+  expect(canvas.y + canvas.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
   // Corners probe the contained bitmap, including the previously clipped bottom.
   for (const rotation of [0, 180]) {
     await page.locator('#rotation').selectOption(String(rotation));
