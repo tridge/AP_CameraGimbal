@@ -66,7 +66,8 @@ The submodule provides the MAVLink message definitions and pymavlink; builds
 generate the camera application's MAVLink C bindings from them as needed.
 
 The simulation exposes the web interface on `http://127.0.0.1:8081/`, SIYI on
-TCP/UDP 37260, MAVLink on TCP/UDP 14550, and RTSP on port 8554. See
+TCP/UDP 37260, MAVLink on TCP/UDP 16001, and RTSP on port 8554. Existing
+runtime configurations retain their saved ports. See
 [`sitl/README.md`](sitl/README.md) for prerequisites, endpoints and overrides.
 
 Run the camera application's host tests with:

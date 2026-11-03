@@ -176,3 +176,12 @@ protocol v2).
 - `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
 - `CAMERA_APP_UART`: gimbal link, a serial device, `udp://IPv4:PORT` or `tcp://IPv4:PORT`; used
   when `--uart` and the Gimbal link setting are not given.
+
+## Defaults when upgrading
+
+Fresh configurations use MAVLink TCP/UDP **16001** and **Rate** position
+tracking. Upgrades retain explicit settings in `camera.ini`, so an existing
+RPi installation can still listen on **14570**. A configuration without
+`mavlink.tracking_method` inherits the new **Rate** default; an explicit
+**Angle** setting is retained. Check Parameters for **MAV_TCP_PORT**,
+**MAV_UDP_PORT** and **TRACK_METHOD** before changing the controller connection.

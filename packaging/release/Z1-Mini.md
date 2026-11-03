@@ -41,7 +41,20 @@ and web credentials in `/opt/ap_cameragimbal` survive both update methods.
 Copying this `.gcu` to a microSD card does not install it; the SD update
 instructions for SIYI cameras do not apply to this target.
 
-MAVLink uses TCP/UDP **16001**; XFRobot control uses TCP **2332**, UDP **2337**
+Fresh configurations use MAVLink TCP/UDP **16001**; XFRobot control uses TCP **2332**, UDP **2337**
 with replies on **2338**. RTSP streams use port **8554**, paths `/video1` and
 `/video2`. AP startup failure leaves its web UI available for logs and recovery.
 Reinstall the original vendor `.gcu` to restore the vendor application.
+
+## Default changes and upgrades
+
+Fresh configurations use MAVLink TCP/UDP **16001** and **Rate** position
+tracking. Upgrades preserve saved `camera.ini` settings, including explicit
+ports and `tracking_method`. Cameras configured on earlier releases can
+therefore still use **14550**; check Parameters before changing the flight
+controller connection.
+
+If a saved configuration omits `mavlink.tracking_method`, it now inherits
+**Rate**. Older A8, ZR10 and ZT30 templates omitted it; older MT11 templates
+explicitly selected **Angle** and keep that setting. Choose **TRACK_METHOD**
+on Parameters to set either method explicitly.
