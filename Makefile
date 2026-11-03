@@ -556,6 +556,7 @@ sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl: targets
 targets-test: targets
 	python3 tests/test_targets.py
 	python3 tests/test_launcher_config.py
+	python3 tests/test_windows_package_ports.py
 
 .PHONY: z1mini_sitl-test
 z1mini_sitl-test: z1mini_sitl
