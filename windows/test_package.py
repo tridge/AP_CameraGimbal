@@ -1,9 +1,11 @@
 """Exercise the bundled PyQt launcher and real services with a tools-free PATH."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 import re
+import random
 import socket
 import struct
 import tempfile
@@ -18,6 +20,31 @@ def check_video_size(target, thermal, width, height):
         assert (width, height) == expected, ((width, height), expected)
     else:
         assert width >= 1280 and height >= 720, (width, height)
+
+
+class TestPorts:
+    """Reserve all listeners in an endpoint group across packaged simulators."""
+    def __init__(self):
+        self.allocated = set()
+
+    def __call__(self, socktype, offsets=(0,)):
+        # Cygwin pipes also use loopback sockets: avoid adjacent single ports
+        # and probe every listener, including MT11 raw thermal at RTSP + 2.
+        for _ in range(100):
+            port = random.randrange(20000, 40000)
+            ports = {port + offset for offset in offsets}
+            if any(p + gap in self.allocated for p in ports for gap in (-1, 0, 1)):
+                continue
+            try:
+                with ExitStack() as probes:
+                    for candidate in sorted(ports):
+                        probe = probes.enter_context(socket.socket(socket.AF_INET, socktype))
+                        probe.bind(('127.0.0.1', candidate))
+            except OSError:
+                continue
+            self.allocated.update(ports)
+            return port
+        raise RuntimeError('No free test port group')
 
 
 def main():
@@ -61,23 +88,7 @@ def main():
     import av
     from pymavlink import mavutil
     app = QtWidgets.QApplication([])
-    # Cygwin implements some pipes with loopback sockets. Do not select the
-    # next Windows ephemeral port and then let service startup consume it.
-    import random
-    allocated = set()
-    def reserve_port(socktype):
-        for _ in range(100):
-            port = random.randrange(20000, 40000)
-            if port in allocated or port - 1 in allocated or port + 1 in allocated:
-                continue
-            try:
-                with socket.socket(socket.AF_INET, socktype) as probe:
-                    probe.bind(('127.0.0.1', port))
-            except OSError:
-                continue
-            allocated.add(port)
-            return port
-        raise RuntimeError('No free test port')
+    reserve_port = TestPorts()
     output = args.output or Path(tempfile.mkdtemp(prefix='Camera SITL package test '))
     output.mkdir(parents=True, exist_ok=True)
     print(f'Test output: {output}', flush=True)
@@ -94,14 +105,7 @@ def main():
         browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
         prefix = backend.upper() + '_SITL_'
         camera_port, web_port, mav_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
-        while True:
-            rtsp_port = reserve_port(socket.SOCK_STREAM)
-            try:
-                with socket.socket() as probe:
-                    probe.bind(('127.0.0.1', rtsp_port + 1))
-                break
-            except OSError:
-                pass
+        rtsp_port = reserve_port(socket.SOCK_STREAM, offsets=(0, 1, 2))
         build = output / backend
         os.environ.update(CAMERA_GIMBAL_SITL_BUILD=str(build))
         for key, value in [('CAMERA_PORT', camera_port), ('WEB_PORT', web_port),
@@ -348,14 +352,7 @@ def main():
                 panel.video.setCurrentIndex(panel.video.findData(args.video))
                 prefix = backend.upper() + '_SITL_'
                 web_port, camera_port, mav_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
-                while True:
-                    rtsp_port = reserve_port(socket.SOCK_STREAM)
-                    try:
-                        with socket.socket() as probe:
-                            probe.bind(('127.0.0.1', rtsp_port + 1))
-                        break
-                    except OSError:
-                        pass
+                rtsp_port = reserve_port(socket.SOCK_STREAM, offsets=(0, 1, 2))
                 for name, value, stride in (('WEB_PORT', web_port, 1), ('CAMERA_PORT', camera_port, vendor_stride(TARGETS[backend])),
                                             ('RTSP_PORT', rtsp_port, 10), ('MAVLINK_TCP_PORT', mav_port, 10)):
                     os.environ[prefix + name] = str(value - index * stride)
