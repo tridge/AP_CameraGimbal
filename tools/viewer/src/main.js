@@ -22,6 +22,8 @@ import {
   celsius,
   stretch,
   colorize,
+  adjustRgba,
+  sampleRange,
   thermalPeaks,
   rawPixel,
 } from './domain/thermal.js';
@@ -52,6 +54,9 @@ const state = {
   peaks: [],
   cursor: null,
   image: null,
+  contrastUnits: null,
+  contrastMode: 'auto',
+  validDisplay: null,
   offset: 0,
   anchors: [],
   rotation: 0,
@@ -371,6 +376,9 @@ async function openVideo(file) {
   videoViewport.reset();
   $('frame-input').value = '';
   syncFrameNavigation();
+  state.contrastUnits = null;
+  state.contrastMode = 'auto';
+  state.validDisplay = null;
   state.indexed = false;
   state.indexPercent = 0;
   state.indexFailed = false;
@@ -383,6 +391,7 @@ async function openVideo(file) {
   state.dirtyPose = true;
   $('palette').value = 'Original';
   $('stretch').value = 'auto';
+  $('display-gamma').value = '2';
   $('hover-reading').textContent = 'Hover over a frame to inspect a pixel.';
   $('peak-list').replaceChildren();
   $('telemetry-fields').replaceChildren(...field('Recorded UTC', '—'), ...field('Position', '—'));
@@ -595,7 +604,6 @@ async function showFrame(number) {
     $('video-canvas').hidden = false;
     for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding']) $(id).disabled = false;
     $('scan-peaks').disabled = decoded.kind !== 'gray16';
-    $('stretch').disabled = decoded.kind !== 'gray16' || !calibration(frame.thermalMetadata);
     syncContrastControls();
     if (state.cursor && (state.cursor.x >= decoded.width || state.cursor.y >= decoded.height))
       state.cursor = null;
@@ -626,14 +634,98 @@ async function showFrame(number) {
   }
 }
 function syncContrastControls() {
-  const enabled =
-    state.decoded?.kind === 'gray16' &&
-    !thermalWorkbench.plane &&
-    !!calibration(state.frame?.thermalMetadata) &&
-    $('stretch').value === 'fixed';
-  $('stretch-low').disabled = $('stretch-high').disabled = !enabled;
-  if (state.decoded?.kind === 'gray16')
-    $('stretch').disabled = !!thermalWorkbench.plane || !calibration(state.frame?.thermalMetadata);
+  const enabled = !!state.decoded && !thermalWorkbench.plane;
+  const units =
+    state.decoded?.kind === 'gray16'
+      ? calibration(state.frame?.thermalMetadata)
+        ? 'celsius'
+        : 'counts'
+      : 'intensity';
+  if (state.contrastUnits && state.contrastUnits !== units) {
+    // Celsius limits must never become raw counts (or RGB intensities) when
+    // calibration disappears or changes between frames.
+    $('stretch').value = 'auto';
+    state.validDisplay = null;
+  }
+  state.contrastUnits = units;
+  $('stretch').disabled = $('stretch-low').disabled = $('stretch-high').disabled = !enabled;
+  $('display-gamma').disabled = !enabled || $('stretch').value !== 'gamma';
+  $('stretch-units').textContent =
+    units === 'celsius' ? '°C' : units === 'counts' ? 'raw counts' : 'intensity (0–255)';
+  $('stretch').querySelector('[value="auto"]').textContent =
+    units === 'intensity' && $('palette').value === 'Original' ? 'Original levels' : 'Auto 1–99%';
+}
+function displaySamples() {
+  const d = state.decoded;
+  if (d.kind === 'gray16') return d.data;
+  const intensity = new Uint16Array(d.width * d.height);
+  for (let i = 0; i < intensity.length; i++)
+    intensity[i] = Math.round(
+      0.2126 * d.data[i * 4] + 0.7152 * d.data[i * 4 + 1] + 0.0722 * d.data[i * 4 + 2],
+    );
+  return intensity;
+}
+function setDisplayLimits(limits) {
+  const values =
+    state.contrastUnits === 'celsius'
+      ? limits.map((value) => celsius(value, state.frame.thermalMetadata))
+      : limits;
+  // Keep the round-trip precision of the numeric values. Rounding these
+  // fields can move an exact threshold when Auto changes to a manual window.
+  $('stretch-low').value = values[0];
+  $('stretch-high').value = values[1];
+  return values;
+}
+function displaySettings(samples) {
+  const mode = $('stretch').value;
+  state.contrastMode = mode;
+  let window,
+    gamma = mode === 'gamma' ? $('display-gamma').valueAsNumber : 1;
+  if (mode === 'auto') {
+    const limits =
+      state.decoded.kind !== 'gray16' && $('palette').value === 'Original'
+        ? [0, 255]
+        : stretch(samples);
+    window = setDisplayLimits(limits);
+  } else window = [$('stretch-low').valueAsNumber, $('stretch-high').valueAsNumber];
+  const badWindow = !window.every(finite) || window[1] <= window[0];
+  const badGamma = !finite(gamma) || gamma < 0.1 || gamma > 5;
+  for (const id of ['stretch-low', 'stretch-high']) {
+    $(id).setCustomValidity(badWindow ? 'High must exceed Low.' : '');
+    $(id).setAttribute('aria-invalid', String(badWindow));
+  }
+  $('display-gamma').setCustomValidity(badGamma ? 'Gamma must be between 0.1 and 5.' : '');
+  $('display-gamma').setAttribute('aria-invalid', String(badGamma));
+  $('display-note').textContent =
+    badWindow || badGamma
+      ? (badWindow ? 'High must exceed Low. ' : 'Gamma must be between 0.1 and 5. ') +
+        'Showing the last valid display settings.'
+      : 'Editing Low/High locks the window. Gamma > 1 darkens the background; < 1 brightens it. GloryHot colours values above Low; cooler values stay grayscale.';
+  if (thermalWorkbench.plane)
+    $('display-note').textContent =
+      'Processed results use an automatic window in score units. Switch Compare to Original to adjust these display controls.';
+  if (badWindow || badGamma) {
+    // Keep the current frame moving with valid display settings during edits;
+    // do not freeze an old image underneath new telemetry or discard the edit.
+    const previous = state.validDisplay;
+    if (previous) {
+      window = previous.window;
+      gamma = previous.gamma;
+    } else {
+      const raw = sampleRange(samples);
+      window =
+        state.contrastUnits === 'celsius'
+          ? raw.map((value) => celsius(value, state.frame.thermalMetadata))
+          : raw;
+      gamma = 1;
+    }
+  } else state.validDisplay = { window, gamma };
+  return {
+    limits: stretch(samples, window, state.frame.thermalMetadata, {
+      raw: state.contrastUnits !== 'celsius',
+    }),
+    gamma,
+  };
 }
 function renderImageSafely() {
   $('analysis-display-badge').hidden = !thermalWorkbench.plane;
@@ -659,27 +751,20 @@ function renderImageSafely() {
 function makeImage() {
   const d = state.decoded;
   if (!d) return;
+  const samples = displaySamples();
+  const settings = displaySettings(samples);
   let rgba;
   if (d.kind === 'gray16') {
-    const fixed =
-      $('stretch').value === 'fixed'
-        ? [Number($('stretch-low').value), Number($('stretch-high').value)]
-        : null;
     rgba = colorize(
       thermalWorkbench.plane || d.data,
       $('palette').value === 'Original' ? 'White hot' : $('palette').value,
-      thermalWorkbench.plane
-        ? thermalWorkbench.limits
-        : stretch(d.data, fixed, state.frame.thermalMetadata),
+      thermalWorkbench.plane ? thermalWorkbench.limits : settings.limits,
+      thermalWorkbench.plane ? { gamma: 1 } : settings,
     );
   } else if ($('palette').value !== 'Original') {
-    const intensity = new Uint16Array(d.width * d.height);
-    for (let i = 0; i < intensity.length; i++)
-      intensity[i] = Math.round(
-        0.2126 * d.data[i * 4] + 0.7152 * d.data[i * 4 + 1] + 0.0722 * d.data[i * 4 + 2],
-      );
-    rgba = colorize(intensity, $('palette').value, [0, 255]);
-  } else rgba = d.data;
+    rgba = colorize(samples, $('palette').value, settings.limits, settings);
+  } else
+    rgba = $('stretch').value === 'auto' ? d.data : adjustRgba(d.data, settings.limits, settings);
   const image = new OffscreenCanvas(d.width, d.height);
   image
     .getContext('2d')
@@ -1194,15 +1279,26 @@ $('seek').oninput = (e) => {
   pause();
   showFrame(frameAt(state.frames, Number(e.target.value), state.origin));
 };
-for (const id of ['palette', 'stretch', 'stretch-low', 'stretch-high'])
-  $(id).onchange = () => {
+for (const id of ['palette', 'stretch', 'stretch-low', 'stretch-high', 'display-gamma']) {
+  const update = () => {
     try {
+      syncContrastControls();
+      if (!state.decoded) return;
+      if (id === 'stretch' && $('stretch').value === 'gamma' && state.contrastMode === 'auto')
+        setDisplayLimits(
+          state.decoded.kind === 'gray16' ? sampleRange(state.decoded.data) : [0, 255],
+        );
+      if ((id === 'stretch-low' || id === 'stretch-high') && $('stretch').value === 'auto')
+        $('stretch').value = 'fixed';
       syncContrastControls();
       renderImageSafely();
     } catch (e) {
       error(e);
     }
   };
+  if (['stretch-low', 'stretch-high', 'display-gamma'].includes(id)) $(id).oninput = update;
+  else $(id).onchange = update;
+}
 $('rotation').onchange = (e) => {
   state.rotation = Number(e.target.value);
   saveReview();

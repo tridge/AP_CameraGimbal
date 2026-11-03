@@ -244,7 +244,14 @@ small {
   max-width: 115px;
 }
 .thermal-controls input {
-  width: 65px;
+  width: 85px;
+}
+.thermal-controls .display-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+.thermal-controls input[aria-invalid='true'] {
+  border-color: #e87772;
 }
 .inspection-grid {
   display: grid;

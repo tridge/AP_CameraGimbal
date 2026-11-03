@@ -31,6 +31,14 @@ export const PALETTES = {
     [94, 201, 98],
     [253, 231, 37],
   ],
+  GloryHot: [
+    [20, 0, 200],
+    [0, 150, 255],
+    [0, 220, 120],
+    [255, 235, 0],
+    [255, 110, 0],
+    [255, 0, 0],
+  ],
 };
 export function calibration(metadata) {
   const scale = metadata?.temperature_scale_k,
@@ -54,14 +62,42 @@ export function paletteTable(name) {
   }
   return table;
 }
-export function stretch(pixels, fixedRange, metadata) {
+export function sampleRange(pixels) {
+  let low = Infinity,
+    high = -Infinity;
+  for (const value of pixels) {
+    low = Math.min(low, value);
+    high = Math.max(high, value);
+  }
+  if (!finite(low) || !finite(high)) throw new Error('No finite display samples.');
+  return [low, Math.max(low + 1, high)];
+}
+function validateLimits(low, high) {
+  if (!finite(low) || !finite(high) || high <= low) throw new Error('High must exceed Low.');
+}
+function validateGamma(gamma) {
+  if (!finite(gamma) || gamma < 0.1 || gamma > 5)
+    throw new Error('Gamma must be between 0.1 and 5.');
+}
+export function stretch(pixels, fixedRange, metadata, { raw = false } = {}) {
   if (fixedRange) {
+    const [low, high] = fixedRange;
+    validateLimits(low, high);
+    if (raw) return [low, high];
     const cal = calibration(metadata);
     if (!cal) throw new Error('Fixed Celsius limits require calibrated raw thermal pixels.');
-    const [low, high] = fixedRange;
-    if (!finite(low) || !finite(high) || high <= low)
-      throw new Error('Temperature maximum must exceed minimum.');
-    return [(low + 273.15 - cal.offset) / cal.scale, (high + 273.15 - cal.offset) / cal.scale];
+    const converted = [low, high].map((value) => (value + 273.15 - cal.offset) / cal.scale);
+    // Celsius arithmetic can put an exact detector count a few ULPs below
+    // its integer value. Restore only those boundaries, keeping genuinely
+    // fractional limits and windows narrower than one detector count intact.
+    const snapped = converted.map((value, i) => {
+      const integer = Math.round(value);
+      const tolerance =
+        (8 * Number.EPSILON * Math.max(1, Math.abs(fixedRange[i]), 273.15, Math.abs(cal.offset))) /
+        cal.scale;
+      return Math.abs(value - integer) <= tolerance ? integer : value;
+    });
+    return snapped[1] > snapped[0] ? snapped : converted;
   }
   const hist = new Uint32Array(65536);
   for (const value of pixels) hist[value]++;
@@ -85,16 +121,50 @@ export function stretch(pixels, fixedRange, metadata) {
   }
   return [low, Math.max(low + 1, high)];
 }
-export function colorize(pixels, name, limits) {
+function mapped(value, low, high, gamma) {
+  const t = Math.max(0, Math.min(1, (value - low) / (high - low)));
+  return Math.round(255 * (gamma === 1 ? t : Math.pow(t, gamma)));
+}
+export function colorize(pixels, name, limits, { gamma = 1 } = {}) {
+  validateLimits(...limits);
+  validateGamma(gamma);
   const colors = paletteTable(name),
     rgba = new Uint8ClampedArray(pixels.length * 4),
     [low, high] = limits;
+  const background = name === 'GloryHot' ? sampleRange(pixels)[0] : low;
   for (let i = 0; i < pixels.length; i++) {
-    const p = Math.round(Math.max(0, Math.min(255, ((pixels[i] - low) * 255) / (high - low))));
-    rgba[i * 4] = colors[p * 3];
-    rgba[i * 4 + 1] = colors[p * 3 + 1];
-    rgba[i * 4 + 2] = colors[p * 3 + 2];
+    if (name === 'GloryHot' && pixels[i] <= low) {
+      // Keep cool scene structure visible. Low is a real threshold in the
+      // source units, independent of gamma and of the upper colour limit.
+      const gray = Math.round(
+        (mapped(pixels[i], background, Math.max(background + 1, low), gamma) * 200) / 255,
+      );
+      rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = gray;
+    } else {
+      const p = mapped(pixels[i], low, high, gamma);
+      rgba[i * 4] = colors[p * 3];
+      rgba[i * 4 + 1] = colors[p * 3 + 1];
+      rgba[i * 4 + 2] = colors[p * 3 + 2];
+    }
     rgba[i * 4 + 3] = 255;
+  }
+  return rgba;
+}
+export function adjustRgba(pixels, limits, { gamma = 1 } = {}) {
+  validateLimits(...limits);
+  validateGamma(gamma);
+  const rgba = new Uint8ClampedArray(pixels.length);
+  // Encoded RGB has only 256 possible channel values. Preserve exactly the
+  // same curve while avoiding millions of pow/spread calls per video frame.
+  const bytes = pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray;
+  const table = new Uint8ClampedArray(256);
+  if (bytes) for (let i = 0; i < table.length; i++) table[i] = mapped(i, ...limits, gamma);
+  for (let i = 0; i < pixels.length; i += 4) {
+    for (let channel = 0; channel < 3; channel++)
+      rgba[i + channel] = bytes
+        ? table[pixels[i + channel]]
+        : mapped(pixels[i + channel], ...limits, gamma);
+    rgba[i + 3] = pixels[i + 3];
   }
   return rgba;
 }

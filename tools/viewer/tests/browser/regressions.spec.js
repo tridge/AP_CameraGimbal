@@ -58,7 +58,7 @@ test('entire thermal image fits stage and all four calibrated raw corners remain
   await screenshot(page, testInfo, 'complete-thermal-corners-rotated.png');
 });
 
-test('rapid next requests advance while decoding and invalid Celsius limits recover without stale image or pose', async ({
+test('rapid next requests advance while invalid Celsius edits retain the last valid display without stale image or pose', async ({
   page,
 }) => {
   await start(page);
@@ -67,8 +67,9 @@ test('rapid next requests advance while decoding and invalid Celsius limits reco
   await page.locator('#stretch').selectOption('fixed');
   await page.locator('#stretch-high').fill('-10');
   await page.locator('#stretch-high').press('Tab');
-  await expect(page.locator('#error-banner')).toBeVisible();
-  await expect(page.locator('#stretch')).toHaveValue('auto');
+  await expect(page.locator('#display-note')).toContainText('last valid display settings');
+  await expect(page.locator('#stretch-high')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('#stretch')).toHaveValue('fixed');
   // Synchronous real control events guarantee these requests overlap a decode.
   await page.locator('#next').evaluate((button) => {
     button.click();
@@ -90,6 +91,9 @@ test('rapid next requests advance while decoding and invalid Celsius limits reco
   expect(await page.evaluate(() => window.fireViewer.state.decoded.data[30 * 640 + 20])).toBe(
     17606 + 3 * 64,
   );
+  await expect(page.locator('#stretch-high')).toHaveValue('-10');
+  await page.locator('#stretch-high').fill('50');
+  await expect(page.locator('#stretch-high')).toHaveAttribute('aria-invalid', 'false');
 });
 
 test('unknown video UTC cannot silently select latest mission; latest remains an explicit choice', async ({
@@ -134,9 +138,10 @@ test('missing calibration never invents Celsius from raw pixels', async ({ page 
   await pointAt(page, 20, 30);
   await expect(page.locator('#hover-reading')).toContainText('17606');
   await expect(page.locator('#hover-reading')).not.toContainText('°C');
-  await expect(page.locator('#stretch')).toBeDisabled();
-  await expect(page.locator('#stretch-low')).toBeDisabled();
-  await expect(page.locator('#stretch-high')).toBeDisabled();
+  await expect(page.locator('#stretch')).toBeEnabled();
+  await expect(page.locator('#stretch-low')).toBeEnabled();
+  await expect(page.locator('#stretch-high')).toBeEnabled();
+  await expect(page.locator('#stretch-units')).toHaveText('raw counts');
   await expect(page.locator('#stretch')).toHaveValue('auto');
   await page.locator('#next').click();
   await expect(page.locator('#frame-number')).toContainText('Frame 2 / 12');
@@ -155,7 +160,8 @@ test('fixed Celsius rendering recovers when the next frame loses calibration and
   await page.locator('#next').click();
   await expect(page.locator('#frame-number')).toHaveText('Frame 2 / 12');
   await expect(page.locator('#stretch')).toHaveValue('auto');
-  await expect(page.locator('#stretch')).toBeDisabled();
+  await expect(page.locator('#stretch')).toBeEnabled();
+  await expect(page.locator('#stretch-units')).toHaveText('raw counts');
   await pointAt(page, 20, 30);
   await expect(page.locator('#hover-reading')).toContainText('17670 raw');
   await expect(page.locator('#hover-reading')).not.toContainText('°C');

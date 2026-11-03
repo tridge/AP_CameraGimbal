@@ -77,10 +77,21 @@ Raw thermal review is substantially faster and retains exact sensor values.
    are separate. Space plays/pauses, arrows step frames, and `M` marks the selected
    pixel. Telemetry is outside the image. Raw X/Y fields allow keyboard pixel
    selection; mouse hover also selects a sensor pixel.
-2. **Choose a palette and stretch.** White hot, black hot, Inferno, iron and
-   Viridis change only display pixels. Raw Celsius readings require explicit
-   calibration; an encoded display image never acquires invented temperatures.
-   Fixed Celsius limits are available only on calibrated raw frames.
+2. **Choose a palette and stretch.** White hot, black hot, Inferno, iron,
+   Viridis and GloryHot change only display pixels. Auto uses the 1st/99th
+   percentiles; Low/High show its current window and remain editable. Editing
+   either limit locks a linear window. Gamma window starts with the full sensor
+   range when selected from Auto, preserving the hot tail that percentile
+   clipping can saturate. Adjust Gamma from 0.1–5: 1 is linear, above 1 darkens
+   the background, and below 1 brightens lower values. Both window limits apply
+   to every palette and curve. GloryHot uses grayscale below Low and a
+   blue/cyan/green/yellow/red ramp above Low, reaching red at High. Raw Celsius
+   readings require explicit calibration; other raw images use detector counts
+   and encoded images use 0–255 intensity. Original RGB keeps its encoded colours
+   in Auto and supports manual levels/gamma. A change in display units resets
+   the window to Auto. Invalid edits retain the last valid display settings
+   while frames continue advancing. These controls never change raw temperature
+   readout, pixel coordinates or peak-finding data.
 3. **Add a BIN or tlog** when mission/fence context is useful. Plan selection
    defaults to the video pose time; the latest-log overview is explicit. Unknown
    time, unknown home and unconfirmed/incomplete mission uploads are labelled.
