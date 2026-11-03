@@ -1,5 +1,6 @@
 #include "apcam/target.h"
 #include "camera_app/gimbal_rate.h"
+#include "camera_app/tracking_rate.h"
 #include <assert.h>
 #include <stdio.h>
 #include <initializer_list>
@@ -10,23 +11,27 @@ static void tracking_pulses()
     // variable update periods, signed low rates and the continuous region.
     for (float demand : {-20.0f, -6.0f, -5.9f, -1.0f, -0.05f, 0.05f, 1.0f, 5.9f, 6.0f, 20.0f}) {
         ca_tracking_rate_pulse pulse{};
-        float desired = 0, actual = 0;
-        for (unsigned i = 0; i < 2000; i++) {
-            float dt = .03f + (i % 5) * .01f;
+        double desired = 0, actual = 0;
+        float held = ca_tracking_rate_command(demand, 6, .05f, &pulse);
+        for (unsigned i = 0; i < 20000; i++) {
+            float dt = .05f + (i % 3) * .01f;
+            // The previous command, not the new one, acted over this dt.
+            desired += demand * dt; actual += held * dt;
             float out = ca_tracking_rate_command(demand, 6, dt, &pulse);
             assert(out == 0 || fabsf(out) >= 6);
             assert(out == 0 || out * demand > 0);
-            desired += demand * dt; actual += out * dt;
-            assert(fabsf(actual - desired) <= 6 * .071f);
+            assert(fabs(actual - desired) <= 6 * .12);
+            held = out;
         }
     }
     ca_tracking_rate_pulse pulse{};
     assert(ca_tracking_rate_command(1, 6, .05f, &pulse) == 0);
     assert(ca_tracking_rate_command(-1, 6, .05f, &pulse) == 0);
-    assert(pulse.angle < 0); // Opposite-direction credit was discarded.
+    assert(pulse.angle == 0 && pulse.rate == -1); // Opposite-direction credit was discarded.
     assert(ca_tracking_rate_command(0, 6, .05f, &pulse) == 0 && pulse.angle == 0);
     assert(ca_tracking_rate_command(NAN, 6, .05f, &pulse) == 0 && pulse.angle == 0);
     assert(ca_tracking_rate_command(1, 6, 0, &pulse) == 0 && pulse.angle == 0);
+    assert(ca_tracking_rate_command(1, 6, .2f, &pulse) == 0 && pulse.command == 0);
     assert(ca_tracking_rate_command(1.25f, 0, .05f, &pulse) == 1.25f);
     // A small stationary pointing error must close despite the measured MT11
     // dead zone and actuator lag. This was previously a non-moving equilibrium.

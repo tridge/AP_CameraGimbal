@@ -51,14 +51,16 @@ int main()
     for(float requested : {-.25f,-1.f,-2.f,-5.9f,.25f,1.f,2.f,5.9f,6.f,10.f}) {
         ca_tracking_rate_pulses pulses;
         float wanted=0, moved=0;
+        float held=pulses.apply(requested,6,.05f);
         for(unsigned i=0;i<400;i++) {
             const float dt=i%3 ? .05f : .08f;
+            wanted+=requested*dt;
+            moved+=held*dt;
             const float output=pulses.apply(requested,6,dt);
             assert(output==0 || std::fabs(output)>=6);
             assert(output*requested>=0);
-            wanted+=requested*dt;
-            moved+=output*dt;
-            assert(std::fabs(moved-wanted)<.5f);
+            assert(std::fabs(moved-wanted)<.72f);
+            held=output;
         }
         assert(pulses.apply(0,6,.05f)==0);
         assert(pulses.apply(-requested,6,.05f)*requested<=0);

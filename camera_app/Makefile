@@ -442,7 +442,7 @@ tests/test_rpi_jpeg: tests/test_rpi_jpeg.cpp src/backends/rpi_libcam/jpeg.cpp sr
 rpi_jpeg-test: tests/test_rpi_jpeg
 	./tests/test_rpi_jpeg
 
-tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rate.h $(APCAM_HEADERS)
+tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rate.h include/camera_app/tracking_rate.h $(APCAM_HEADERS)
 	$(call progress,Linking $@)
 	$(HOST_CXX) -I../include -Iinclude -DAPCAM_TARGET=APCAM_TARGET_A8 $(APP_CXXFLAGS) -o $@ $< -lm
 

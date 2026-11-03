@@ -120,7 +120,8 @@ void APC_Tracking::update(ca_backend *gimbal, bool manual, float hfov)
     if(manual) stop();
     const uint64_t now=tracking_ms();
     if(now-_command_ms<50) return;
-    const float dt=std::min(.1f,(now-_command_ms)*.001f);
+    const float elapsed=(now-_command_ms)*.001f;
+    const float dt=std::min(.1f,elapsed);
     _command_ms=now;
     ca_gimbal_attitude attitude {};
     const bool fresh=ca_backend_gimbal_attitude(gimbal,&attitude) &&
@@ -162,8 +163,8 @@ void APC_Tracking::update(ca_backend *gimbal, bool manual, float hfov)
         }
         float pitch=std::clamp(s.pitch_rate+1.5f*control.pitch_error+_integral[0],-limit,limit);
         float yaw=std::clamp(s.yaw_rate+1.5f*control.yaw_error+_integral[1]-(aircraft?m.vehicle_yaw_rate_rad_s:0),-limit,limit);
-        pitch=_rate_pulses[0].apply(pitch,minimum[0],dt);
-        yaw=_rate_pulses[1].apply(yaw,minimum[1],dt);
+        pitch=_rate_pulses[0].apply(pitch,minimum[0],elapsed);
+        yaw=_rate_pulses[1].apply(yaw,minimum[1],elapsed);
         if((attitude.pitch_rad<=APCAM_GIMBAL_PITCH_MIN*.01745329252f && pitch<0) ||
            (attitude.pitch_rad>=APCAM_GIMBAL_PITCH_MAX*.01745329252f && pitch>0)) {
             pitch=0; _integral[0]=0; _rate_pulses[0].reset();
