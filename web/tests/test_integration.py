@@ -19,6 +19,7 @@ import urllib.parse
 
 from test_parameters_browser import check_parameters_browser
 from test_reboot_browser import check_reboot_browser
+from test_live_language_browser import check_live_browser, check_language_browser, check_login_language_browser
 from test_terrain_upload import check_terrain_upload
 
 
@@ -97,6 +98,8 @@ camera_events = {
     "attitude_requests": 0,
     "lidar_enabled": False,
     "lidar_controls": [],
+    "zoom": 5.6,
+    "zoom_delay": 0,
 }
 
 
@@ -123,6 +126,10 @@ def camera_api_mock():
             camera_events["attitude_requests"] += 1
             response_opcode = opcode
             payload = struct.pack("<hhhhhh", 1234, -456, 78, 19, -20, 3)
+        elif opcode == 0x18:
+            response_opcode = opcode
+            tenths = round(camera_events['zoom'] * 10)
+            payload = bytes((tenths // 10, tenths % 10))
         elif opcode == 0x0C and packet[8:-2] == b"\x00":
             camera_events["captures"] += 1
             capture = root / "mnt" / "DCIM" / "capture" / "2026-09-01"
@@ -165,6 +172,9 @@ def manual_mock():
         assert magic == 0x4d434131
         assert action == 1 or token == manual_token
         manual_events.append((action, value))
+        if action == 9:
+            time.sleep(camera_events['zoom_delay'])
+            camera_events['zoom'] = value
         manual_socket.sendto(struct.pack("=II16sfi", magic, action, manual_token, value, 0), peer)
 
 
@@ -523,6 +533,10 @@ def test_login_and_languages(csrf):
     )
     assert status == 303 and dict(headers)["Location"] == "/users"
     assert set_cookies(headers)["lang"][0] == "ja"
+    status, _, fragment_headers = raw_request('POST', '/language',
+        {'Content-Type':'application/x-www-form-urlencoded', 'Cookie':cookie_header(jar)},
+        urllib.parse.urlencode({'csrf':csrf,'lang':'ja','next':'/parameters#network'}).encode())
+    assert status == 303 and dict(fragment_headers)['Location'] == '/parameters#network'
     jar["lang"] = "ja"
     status, body, _ = raw_request("GET", "/users", {"Cookie": cookie_header(jar)})
     assert status == 200 and b"<html lang=ja>" in body
@@ -1025,6 +1039,7 @@ try:
     assert status == 200
     assert b'"yaw_deg":-123.4' in body and b'"pitch_deg":-45.6' in body
     assert b'"roll_deg":7.8' in body and b'"yaw_rate_dps":-1.9' in body
+    assert json.loads(body)['zoom'] == 5.6
     assert headers["Cache-Control"] == "no-store"
     assert camera_events["attitude_requests"] == 1
     status, body, headers = request("GET", "/live/video1.mp4", "initial-password")
@@ -1052,6 +1067,28 @@ try:
     assert [a for a, v in manual_events] == [1, 4, 9, 2, 3]
     assert manual_events[1][1] == 30
     assert not camera_events["controls"]
+
+    # The slow optical operation must succeed regardless of UI language. The
+    # former one-second UDP timeout rejected it and the browser dropped its lease.
+    camera_events['zoom_delay'] = 1.25
+    for language in ('en', 'zh', 'ja'):
+        payload = urllib.parse.urlencode({'csrf': csrf, 'action': 'zoom',
+                    'value': '10.0', 'lease': manual_token.hex()}).encode()
+        status, body, _ = request('POST', '/live/control', 'initial-password', payload,
+                    {'Content-Type':'application/x-www-form-urlencoded', 'Cookie':'lang='+language})
+        assert status == 200, (language, body)
+        status, data, _ = request('GET', '/live/attitude.json', 'initial-password')
+        assert status == 200 and json.loads(data)['zoom'] == 10
+        status, page, _ = request('GET', '/live', 'initial-password', headers={'Cookie':'lang='+language})
+        status, script, _ = request('GET', '/live.js', 'initial-password', headers={'Cookie':'lang='+language})
+        check_live_browser(page, script, language)
+        status, page, _ = request('GET', '/parameters', 'initial-password', headers={'Cookie':'lang='+language})
+        status, script, _ = request('GET', '/language.js', 'initial-password', headers={'Cookie':'lang='+language})
+        check_language_browser(page, script, language)
+        status, page, _ = raw_request('GET', '/login?lang='+language)
+        assert status == 200
+        check_login_language_browser(page, script, language)
+    camera_events['zoom_delay'] = 0
 
     status, _, _ = form("/sensors/capture", "initial-password", "0" * 64, {})
     assert status == 400 and camera_events["captures"] == 0

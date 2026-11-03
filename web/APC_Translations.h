@@ -27,6 +27,7 @@ enum string_id {
     S_ZT30_FIXED_VIDEO,
     S_LANGUAGE_NAME,
     S_LANGUAGE,
+    S_LANGUAGE_UNSAVED,
     S_APPLY,
     S_NAV_TOP,
     S_NAV_STATUS,
@@ -662,6 +663,7 @@ static constexpr Translations translations = [] {
     Translations result {};
     result[S_LANGUAGE_NAME] = {"English", "简体中文", "日本語"};
     result[S_LANGUAGE] = {"Language", "语言", "言語"};
+    result[S_LANGUAGE_UNSAVED] = {"Changing language will discard unsaved edits. Continue?", "切换语言将丢弃尚未保存的更改。是否继续？", "言語を変更すると未保存の変更が失われます。続行しますか？"};
     result[S_APPLY] = {"Apply", "应用", "適用"};
     result[S_NAV_TOP] = {"Go to the top of the %s control page", "回到 %s 控制页面顶部", "%s コントロールページの先頭へ"};
     result[S_NAV_STATUS] = {"Status", "状态", "ステータス"};

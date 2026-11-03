@@ -52,8 +52,22 @@
     if (end - video.currentTime > 1.5) start();
   };
   window.setInterval(catchUp, 250);
-  stream.addEventListener('change', start); start();
+  try {
+    const selected = sessionStorage.getItem('camera.live.stream');
+    if ([...stream.options].some(option => option.value === selected)) stream.value = selected;
+    const selectedRate = Number(sessionStorage.getItem('camera.live.rate'));
+    if (selectedRate >= Number(rate.min) && selectedRate <= Number(rate.max)) {
+      rate.value = selectedRate;
+      rateValue.textContent = Number(rate.value).toFixed(0) + '°/s';
+    }
+  } catch (_) {}
+  stream.addEventListener('change', () => {
+    try { sessionStorage.setItem('camera.live.stream', stream.value); } catch (_) {}
+    start();
+  }); start();
   let lease = '', held = null, renewing = false, leaving = false;
+  let zoomEditing = false, zoomPending = false, zoomWanted = null, zoomGeneration = 0;
+  zoomValue.textContent = '—';
   const controls = [...document.querySelectorAll('[data-direction]'), document.getElementById('live-center'), rate, zoom];
   const refreshControls = () => { controls.forEach(control => { control.disabled = !lease; }); };
   enable.checked = false; refreshControls();
@@ -61,7 +75,9 @@
     const body = new URLSearchParams({csrf: script.dataset.csrf, action, lease: token});
     if (value !== undefined) body.set('value', value);
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 1500);
+    // The web endpoint waits up to five seconds for the camera. Optical lens
+    // motion can also delay a renewal queued behind the zoom operation.
+    const timeout = window.setTimeout(() => controller.abort(), 6500);
     try {
       const response = await fetch('/live/control', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body, signal: controller.signal});
       const message = (await response.text()).trim();
@@ -112,7 +128,9 @@
       await new Promise(resolve => window.setTimeout(resolve, 50));
       return lease === previous;
     } catch (error) {
-      if (lease === previous) dropControl();
+      // A rejected zoom/command is not a lost lease. Stop any held direction;
+      // the independent renewal detects expiry, restart or disconnection.
+      held = null;
       controlStatus.textContent = L.controlFailed + error.message; return false;
     }
   };
@@ -123,9 +141,36 @@
   }));
   window.addEventListener('pointerup', release); window.addEventListener('pointercancel', release); window.addEventListener('blur', release);
   document.getElementById('live-center').addEventListener('click', () => sendControl('center'));
-  rate.addEventListener('input', () => { rateValue.textContent = Number(rate.value).toFixed(0) + '°/s'; });
-  zoom.addEventListener('input', () => { zoomValue.textContent = Number(zoom.value).toFixed(1) + 'x'; });
-  zoom.addEventListener('change', () => sendControl('zoom', Number(zoom.value).toFixed(1)));
+  rate.addEventListener('input', () => {
+    rateValue.textContent = Number(rate.value).toFixed(0) + '°/s';
+    try { sessionStorage.setItem('camera.live.rate', rate.value); } catch (_) {}
+  });
+  zoom.addEventListener('pointerdown', () => { zoomEditing = true; });
+  window.addEventListener('pointerup', () => { zoomEditing = false; });
+  window.addEventListener('pointercancel', () => { zoomEditing = false; });
+  zoom.addEventListener('blur', () => { zoomEditing = false; });
+  zoom.addEventListener('input', () => {
+    ++zoomGeneration;
+    zoomValue.textContent = Number(zoom.value).toFixed(1) + 'x';
+  });
+  zoom.addEventListener('change', async () => {
+    ++zoomGeneration;
+    zoomWanted = Number(zoom.value).toFixed(1);
+    if (zoomPending) return;
+    zoomPending = true;
+    try {
+      // Coalesce quick keyboard/slider changes while a physical move is busy.
+      while (zoomWanted !== null && lease) {
+        const wanted = zoomWanted; zoomWanted = null;
+        if (!await sendControl('zoom', wanted)) { zoomWanted = null; break; }
+      }
+    } finally {
+      // Invalidate polls started during the move as well as those started
+      // before it: a delayed response may arrive after zoomPending clears.
+      ++zoomGeneration;
+      zoomPending = false;
+    }
+  });
   let attitudePending = false;
   const attitudeUnavailable = message => {
     attitudeRoll.textContent = attitudePitch.textContent = attitudeYaw.textContent = '—';
@@ -137,10 +182,18 @@
   };
   const refreshAttitude = async () => {
     if (attitudePending) return; attitudePending = true;
+    const generation = zoomGeneration;
     try {
       const response = await fetch('/live/attitude.json', {cache: 'no-store'});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
+      if (data.zoom !== null && Number.isFinite(data.zoom) && data.zoom >= 1 &&
+          generation === zoomGeneration && !zoomEditing && !zoomPending) {
+        // The encoder may report a quantized optical ratio just beyond the
+        // command limit. Show the actual ratio and clamp only the slider thumb.
+        zoom.value = Math.max(Number(zoom.min), Math.min(Number(zoom.max), data.zoom));
+        zoomValue.textContent = data.zoom.toFixed(1) + 'x';
+      }
       if (data.roll_deg === null || data.pitch_deg === null || data.yaw_deg === null) { attitudeUnavailable(L.attitudeUnavailable); return; }
       const roll = Number(data.roll_deg), pitch = Number(data.pitch_deg), yaw = Number(data.yaw_deg);
       attitudeRoll.textContent = roll.toFixed(1) + '°'; attitudePitch.textContent = pitch.toFixed(1) + '°'; attitudeYaw.textContent = yaw.toFixed(1) + '°';

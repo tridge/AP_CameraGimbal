@@ -33,6 +33,7 @@ int ca_backend_set_zoom(struct ca_backend *b, float z)
 {
     (void)b;
     (void)z;
+    assert(pitch_rate == 0 && yaw_rate == 0);
     return 0;
 }
 void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *s)
@@ -80,6 +81,10 @@ int main(void)
     clock_ms += APCAM_MANUAL_PULSE_MS + 1;
     ca_manual_control_update(&c);
     assert(yaw_rate == 0 && c.active);
+    p.action = APCAM_MANUAL_RIGHT;
+    assert(exchange(&c, fd, p).result == 0 && yaw_rate > .5f);
+    p.action = APCAM_MANUAL_ZOOM; p.value = 10;
+    assert(exchange(&c, fd, p).result == 0 && yaw_rate == 0 && c.stop_ms == 0 && c.active);
     for (unsigned i = 0; i < 10; i++) {
         clock_ms += 1000;
         p.action = APCAM_MANUAL_RENEW;

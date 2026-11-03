@@ -89,6 +89,10 @@ static int command(struct ca_manual_control *c, struct apcam_manual_packet *p)
     if (p->action == APCAM_MANUAL_ZOOM &&
         (!isfinite(p->value) || p->value < 1 || p->value > APCAM_ZOOM_CONTROL_MAX))
         return -EINVAL;
+    // Optical lens movement can block the control loop. Stop a preceding
+    // bounded pan/tilt pulse before entering that operation.
+    if (p->action == APCAM_MANUAL_ZOOM && c->stop_ms && stop_motion(c) < 0)
+        return -EIO;
     int result;
     c->executing = true;
     if (pulse) {

@@ -3471,7 +3471,9 @@ static bool send_live_control(const APC_HTTPRequest *request, char *error,
     }
     if (!port) { snprintf(error,error_size,"%s",T(S_E_CAMERA_NOT_RUNNING)); goto done; }
     struct sockaddr_in address={.sin_family=AF_INET,.sin_port=htons(port),.sin_addr = { .s_addr = htonl(INADDR_LOOPBACK) }};
-    const struct timeval timeout={.tv_sec=1};
+    // MT11 optical zoom and focus moves are synchronous and can exceed one
+    // second. Renewals can queue behind them on the camera's control loop.
+    const struct timeval timeout={.tv_sec=5};
     fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
     if (fd<0 || setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout))<0 ||
         connect(fd,(struct sockaddr *)&address,sizeof(address))<0 ||
@@ -4524,6 +4526,8 @@ static void append_language_select(APC_StringBuffer *page, const char *id)
 {
     page->appendf("<select name=lang id=%s aria-label=\"", id);
     page->append_html(T(S_LANGUAGE));
+    page->append("\" data-unsaved=\"");
+    page->append_html(T(S_LANGUAGE_UNSAVED));
     page->append("\">");
     for (size_t i = 0; i < LANG_COUNT; i++) {
         page->appendf("<option value=%s%s>", languages[i].code,
@@ -5853,7 +5857,7 @@ static bool safe_local_path(const char *path)
         path[1] == '/' || path[1] == '\\') return false;
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)path[i];
-        if (!(isalnum(c) || strchr("/?=&%._~-", c) != NULL)) return false;
+        if (!(isalnum(c) || strchr("/?=&%._~-#", c) != NULL)) return false;
     }
     return true;
 }
@@ -6050,19 +6054,33 @@ static void send_live_attitude_json(int fd)
 {
     struct camera_attitude_values attitude;
     APC_StringBuffer json;
+    float zoom = NAN;
+#if APCAM_HAVE_ZOOM && !APCAM_WEB_CONTROL_MAVLINK
+    const struct timeval timeout = {.tv_sec = 0, .tv_usec = 350000};
+    int source = open_camera_api_socket(&timeout);
+    if (source >= 0) {
+        uint8_t reply[16];
+        size_t length = 0;
+        if (vendor_siyi_exchange(source, 0x7503U, 0x18U, NULL, 0,
+                                 reply, sizeof(reply), &length) && length >= 2 &&
+            reply[1] < 10 && reply[0] >= 1)
+            zoom = reply[0] + reply[1] * .1f;
+        close(source);
+    }
+#endif
 
     read_camera_attitude(&attitude);
     json.reset();
     if (attitude.have_attitude) {
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI
         json.appendf("{\"yaw_deg\":%.1f,\"pitch_deg\":%.1f,\"roll_deg\":%.1f,"
-                   "\"yaw_rate_dps\":null,\"pitch_rate_dps\":null,\"roll_rate_dps\":null}\n",
+                   "\"yaw_rate_dps\":null,\"pitch_rate_dps\":null,\"roll_rate_dps\":null",
                    attitude.yaw_tenths / 10.0, attitude.pitch_tenths / 10.0,
                    attitude.roll_tenths / 10.0);
 #else
         json.appendf("{\"yaw_deg\":%.1f,\"pitch_deg\":%.1f,\"roll_deg\":%.1f,"
                    "\"yaw_rate_dps\":%.1f,\"pitch_rate_dps\":%.1f,"
-                   "\"roll_rate_dps\":%.1f}\n",
+                   "\"roll_rate_dps\":%.1f",
                    attitude.yaw_tenths / 10.0,
                    attitude.pitch_tenths / 10.0,
                    attitude.roll_tenths / 10.0,
@@ -6073,8 +6091,10 @@ static void send_live_attitude_json(int fd)
     } else {
         json.append("{\"yaw_deg\":null,\"pitch_deg\":null,\"roll_deg\":null,"
                   "\"yaw_rate_dps\":null,\"pitch_rate_dps\":null,"
-                  "\"roll_rate_dps\":null}\n");
+                  "\"roll_rate_dps\":null");
     }
+    if (isfinite(zoom)) json.appendf(",\"zoom\":%.1f}\n", zoom);
+    else json.append(",\"zoom\":null}\n");
     send_response(fd, 200, "OK", "application/json; charset=utf-8",
                   json.data(), json.size(), "Cache-Control: no-store\r\n");
     json.reset();
