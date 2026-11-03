@@ -100,6 +100,10 @@ web-app: generated
 safe-tar-test:
 	python3 tests/test_safe_tar.py
 
+.PHONY: mt11-storage-test
+mt11-storage-test:
+	python3 tests/test_mt11_storage.py
+
 camera-definitions:
 	python3 tools/build_camera_definitions.py
 
@@ -123,7 +127,7 @@ release-test:
 	python3 tests/test_prebuilt_tools.py
 
 .PHONY: platform-test
-platform-test:
+platform-test: mt11-storage-test
 	python3 tests/test_siyi_uuid.py
 	python3 tests/test_zr10_install.py
 	python3 tests/test_platform_packages.py '$(RELEASE_ROOT)/$(MT11_VERSION)'
