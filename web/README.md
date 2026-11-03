@@ -89,6 +89,12 @@ captured application output on the Debug page, stay as they are. The strings
 live in `APC_Translations.h`, indexed by a string id with one column per
 language.
 
+Changing language preserves the current parameter tab and file/directory path.
+The browser asks before discarding edited forms, including login credentials;
+credentials and form contents are not copied into browser storage. Live view
+retains the selected stream and command-rate preference for the browser tab,
+and reads the camera's current zoom rather than resetting its display to 1×.
+
 The service deliberately implements HTTP rather than TLS. It is intended only
 for the MT11's isolated management network.
 
@@ -127,7 +133,11 @@ Manual pan/tilt is disabled until explicitly enabled on the page. Each held
 direction request uses the selected 5--60 degrees/second command rate (30 by
 default) for 180 ms and the HTTP worker then sends three stop packets. This
 bounds motion even if the browser disconnects. Centre and 1.0x--10.0x zoom are
-one-shot operations. The live gimbal panel updates roll, pitch and yaw angles
+one-shot operations. Optical moves may take several seconds; the control API
+allows five seconds for their completion and queued lease renewals. Command
+rejection is reported without releasing a valid lease; failed renewal still
+disables manual control. Rapid zoom requests are coalesced to the newest value.
+The live gimbal panel updates roll, pitch and yaw angles
 and angular rates at 4 Hz, with yaw positive to the right. Aircraft, MAVLink
 and Lua gimbal controllers can
 still conflict with manual commands, which is why the page presents an
