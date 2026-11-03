@@ -13,6 +13,14 @@ frame's absolute UTC time, filling the apcg.telemetry.v1 snapshot. This also
 requires pymavlink. --tlog also supplies measured SIYI CROLL/CPITCH/CYAW (degrees,
 level roll/pitch, vehicle-relative yaw), TMIN/TMAX (Celsius) and SIYI_LIDR (metres).
 Tlog timestamps are reception UTC, not the frequently reused time_boot_ms.
+
+--byte-order big accepts big-endian sensor files (e.g. ZT30 SD card and MAVProxy
+captures); pixels are stored as gray16le and extraction restores the original
+bytes. MAVProxy GCS names (IMG_0001_2025_12_18_22_15_09_329.bin) are host local
+time and need --filename-timezone. --gimbal-source siat uses the SIYI attitude
+the SIYI_control.lua script logs (measured, vehicle-relative yaw), corrected by
+--gimbal-yaw-offset. --klv also embeds a MISB ST 0601 local set per frame as a
+second block addition (BlockAddIDType 'KLVA').
 """
 import argparse
 import bisect
@@ -40,6 +48,12 @@ GPS_LEAP_SECONDS = 18       # GPS minus UTC; constant since 2017-01
 # Milliseconds are an integer, not a decimal fraction: _13 means 13 ms.
 FILENAME_TIME = re.compile(r'^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d{1,3})(?:_\d+)?_I'
                            r'(?:_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}_\d{1,3})?\.bin$')
+# MAVProxy SIYI raw_thermal.py: camera name plus camera UTC rendered in host local time
+MAVPROXY_TIME = re.compile(r'^IMG_\d+_(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})_(\d{3})\.bin$')
+KLV_ADDITION_ID = 3
+KLV_ADDITION_TYPE = 0x4B4C5641  # 'KLVA', the ST 1402 format identifier
+KLV_MODEL = 'SIYI ZT30 thermal'
+UAS_LOCAL_SET_KEY = bytes.fromhex('060e2b34020b01010e01030101000000')
 
 
 def uint(value):
@@ -61,8 +75,9 @@ def text(tag, value):
     return element(tag, value.encode('utf-8'))
 
 
-def matroska_header(extra, frame_duration_ns, duration_ms):
-    """Same FFV1 track and BlockAdditionMapping as thermal_matroska.h."""
+def matroska_header(extra, frame_duration_ns, duration_ms, klv=False):
+    """Same FFV1 track and BlockAdditionMapping as thermal_matroska.h, plus an
+    optional ST 0601 KLV mapping."""
     ebml = b''.join(integer(tag, value) for tag, value in
                     ((0x4286, 1), (0x42F7, 1), (0x42F2, 4), (0x42F3, 8)))
     ebml += text(0x4282, 'matroska') + integer(0x4287, 4) + integer(0x4285, 2)
@@ -71,7 +86,7 @@ def matroska_header(extra, frame_duration_ns, duration_ms):
     info += text(0x4D80, 'AP_CameraGimbal') + text(0x5741, 'thermal_to_video.py')
     info += element(0x4489, struct.pack('>d', duration_ms))
     track = b''.join(integer(tag, value) for tag, value in
-                     ((0xD7, 1), (0x73C5, 1), (0x83, 1), (0x9C, 0), (0x55EE, 2)))
+                     ((0xD7, 1), (0x73C5, 1), (0x83, 1), (0x9C, 0), (0x55EE, KLV_ADDITION_ID if klv else 2)))
     track += integer(0x23E383, frame_duration_ns)
     track += text(0x86, 'V_FFV1') + element(0x63A2, extra)
     video = integer(0xB0, WIDTH) + integer(0xBA, HEIGHT)
@@ -80,23 +95,139 @@ def matroska_header(extra, frame_duration_ns, duration_ms):
     mapping = integer(0x41F0, 2) + text(0x41A4, 'apcg.thermal.v1 JSON')
     mapping += integer(0x41E7, ADDITION_TYPE)
     track += element(0x41E4, mapping)
+    if klv:
+        track += element(0x41E4, integer(0x41F0, KLV_ADDITION_ID) + text(0x41A4, 'MISB ST 0601 KLV') +
+                         integer(0x41E7, KLV_ADDITION_TYPE))
     return element(0x1A45DFA3, ebml) + segment + element(0x1549A966, info) + element(0x1654AE6B, element(0xAE, track))
 
 
-def matroska_frame(encoded, metadata, pts_ms):
+def matroska_frame(encoded, metadata, pts_ms, klv=None):
     block = element(0xA1, b'\x81\0\0\0' + encoded)
     extra = json.dumps(metadata, separators=(',', ':'), allow_nan=False).encode('utf-8')
-    additions = element(0x75A1, element(0xA6, integer(0xEE, 2) + element(0xA5, extra)))
-    return element(0x1F43B675, integer(0xE7, pts_ms) + element(0xA0, block + additions))
+    more = element(0xA6, integer(0xEE, 2) + element(0xA5, extra))
+    if klv:
+        # FFmpeg keeps only the last BlockMore, so APCG must come last.
+        more = element(0xA6, integer(0xEE, KLV_ADDITION_ID) + element(0xA5, klv)) + more
+    return element(0x1F43B675, integer(0xE7, pts_ms) + element(0xA0, block + element(0x75A1, more)))
 
 
-def filename_time(path):
+def _llround(value):
+    # C llround: halves round away from zero (Python round() is ties-to-even).
+    lower = math.floor(value)
+    fraction = value - lower
+    return int(lower) + (fraction > 0.5 or (fraction == 0.5 and value > 0))
+
+
+def _angle_degrees(radians, limit):
+    # As misb.cpp angle_degrees(): clamp float32 boundary values (e.g. pi/2).
+    angle = math.degrees(radians)
+    if abs(radians) <= struct.unpack('<f', struct.pack('<f', math.radians(limit)))[0]:
+        return max(-limit, min(limit, angle))
+    return angle
+
+
+class _LocalSet:
+    """ST 0601 local set builder, as camera_app/src/recording/misb.cpp."""
+
+    def __init__(self):
+        self.data = bytearray()
+
+    def item(self, tag, value, size):
+        self.data += bytes((tag, size)) + (value & ((1 << (8*size)) - 1)).to_bytes(size, 'big')
+
+    def text(self, tag, value):
+        raw = value.encode('ascii')[:127]
+        if raw:
+            self.data += bytes((tag, len(raw))) + raw
+
+    def unsigned_angle(self, tag, value, span, size):
+        if value is not None and math.isfinite(value) and 0 <= value <= span:
+            self.item(tag, _llround(value / span * ((1 << (8*size)) - 1)), size)
+
+    def signed_angle(self, tag, value, span, size):
+        if value is None or not math.isfinite(value):
+            return
+        limit = (1 << (8*size - 1)) - 1
+        # The most negative integer is the ST 0601 out-of-range indicator.
+        self.item(tag, _llround(value / span * limit) if abs(value) <= span else -limit - 1, size)
+
+
+def _rotation(roll, pitch, yaw):
+    cr, sr, cp, sp, cy, sy = (math.cos(roll), math.sin(roll), math.cos(pitch), math.sin(pitch),
+                              math.cos(yaw), math.sin(yaw))
+    return ((cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr),
+            (sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr),
+            (-sp, cp*sr, cp*cr))
+
+
+def misb_klv(snapshot, hfov_deg, width=WIDTH, height=HEIGHT, model=KLV_MODEL):
+    """MISB ST 0601.8 UAS Datalink Local Set for one apcg.telemetry.v1 snapshot.
+    Unknown measurements are omitted, never sent as zero."""
+    if not snapshot or not isinstance(snapshot.get('utc_us'), int) or snapshot['utc_us'] <= 0:
+        return None
+    s = _LocalSet()
+    s.item(2, snapshot['utc_us'], 8)
+    s.text(11, model)
+    s.text(12, 'Geodetic WGS84')
+    position = snapshot.get('position')
+    if position:
+        if -900000000 <= position['lat_e7'] <= 900000000:
+            s.signed_angle(13, position['lat_e7'] * 1e-7, 90, 4)
+        if -1800000000 <= position['lon_e7'] <= 1800000000:
+            s.signed_angle(14, position['lon_e7'] * 1e-7, 180, 4)
+        alt = position['alt_amsl_m']
+        if -900 <= alt <= 19000:
+            s.unsigned_angle(15, alt + 900, 19900, 2)
+    vehicle = snapshot.get('vehicle_attitude')
+    if vehicle:
+        roll, pitch, yaw = vehicle['roll_rad'], vehicle['pitch_rad'], vehicle['yaw_rad']
+        s.unsigned_angle(5, math.degrees(yaw) % 360, 360, 2)
+        s.signed_angle(6, _angle_degrees(pitch, 20), 20, 2)
+        s.signed_angle(7, _angle_degrees(roll, 50), 50, 2)
+        s.signed_angle(90, _angle_degrees(pitch, 90), 90, 4)
+        s.signed_angle(91, _angle_degrees(roll, 90), 90, 4)
+    if hfov_deg and 0 < hfov_deg < 180:
+        s.unsigned_angle(16, hfov_deg, 180, 2)
+        s.unsigned_angle(17, 2*math.degrees(math.atan(math.tan(math.radians(hfov_deg)/2)*height/width)), 180, 2)
+    gimbal = snapshot.get('gimbal_attitude')
+    if vehicle and gimbal and all(k in gimbal for k in ('roll_rad', 'pitch_rad', 'yaw_rad')):
+        # Sensor angles relative to the platform; gimbal roll/pitch are level, yaw vehicle-relative.
+        platform = _rotation(roll, pitch, yaw)
+        camera = _rotation(gimbal['roll_rad'], gimbal['pitch_rad'], yaw + gimbal['yaw_rad'])
+        rel = [[sum(platform[k][i]*camera[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+        horizontal = math.hypot(rel[0][0], rel[1][0])
+        sensor_pitch = math.atan2(-rel[2][0], horizontal)
+        if horizontal > 1e-8:
+            sensor_yaw, sensor_roll = math.atan2(rel[1][0], rel[0][0]), math.atan2(rel[2][1], rel[2][2])
+        else:
+            sensor_yaw, sensor_roll = math.atan2(-rel[0][1], rel[1][1]), 0.0
+        s.unsigned_angle(18, math.degrees(sensor_yaw) % 360, 360, 4)
+        s.signed_angle(19, math.degrees(sensor_pitch), 180, 4)
+        s.unsigned_angle(20, math.degrees(sensor_roll) % 360, 360, 4)
+    s.item(65, 8, 1)
+    length = len(s.data) + 4
+    ber = bytes((length,)) if length < 128 else bytes((0x81, length)) if length < 256 else bytes((0x82,)) + length.to_bytes(2, 'big')
+    packet = UAS_LOCAL_SET_KEY + ber + bytes(s.data) + b'\x01\x02'
+    checksum = sum(b << (0 if i % 2 else 8) for i, b in enumerate(packet)) & 0xFFFF
+    return packet + checksum.to_bytes(2, 'big')
+
+
+def filename_time(path, timezone=None):
     match = FILENAME_TIME.fullmatch(path.name)
+    if match:
+        date = datetime.datetime.strptime(match[1], '%Y-%m-%d_%H-%M-%S')
+        delta = date - datetime.datetime(1970, 1, 1)
+        return (delta.days*86400 + delta.seconds)*1000 + int(match[2])
+    match = MAVPROXY_TIME.fullmatch(path.name)
     if not match:
         return None
-    date = datetime.datetime.strptime(match[1], '%Y-%m-%d_%H-%M-%S')
-    delta = date - datetime.datetime(1970, 1, 1)
-    return (delta.days*86400 + delta.seconds)*1000 + int(match[2])
+    if timezone is None:
+        raise ValueError('%s is a MAVProxy host-local name; pass --filename-timezone' % path.name)
+    date = datetime.datetime.strptime(match[1], '%Y_%m_%d_%H_%M_%S').replace(tzinfo=timezone)
+    # A repeated DST hour is ambiguous; host local names cannot resolve it.
+    if date.utcoffset() != date.replace(fold=1).utcoffset():
+        raise ValueError('%s falls in an ambiguous local hour' % path.name)
+    return int(date.timestamp())*1000 + int(match[2])
 
 
 def _wrap_pi(angle):
@@ -207,19 +338,41 @@ class BinTelemetry:
         return snapshot
 
 
-def load_bin_telemetry(bin_path, max_gap_ms=2000):
+def boot_clock(boot_ms):
+    """TimeUS -> UTC ms; boot_ms is a constant offset or already a mapping."""
+    return boot_ms if callable(boot_ms) else lambda time_us: boot_ms + time_us / 1000.0
+
+
+def fit_utc_clock(pairs):
+    """Least-squares TimeUS -> UTC fit. A constant offset is not enough: some
+    flight controller clocks run thousands of ppm off GPS time."""
+    n = len(pairs)
+    mean_t = sum(t for t, _ in pairs) / n
+    mean_u = sum(u for _, u in pairs) / n
+    var = sum((t - mean_t) ** 2 for t, _ in pairs)
+    rate = sum((t - mean_t) * (u - mean_u) for t, u in pairs) / var if n > 1 and var > 0 else 1.0
+    if not 0.98 < rate < 1.02:
+        raise ValueError('implausible flight controller clock rate %.6f against GPS' % rate)
+    residuals = sorted(abs(u - (mean_u + rate * (t - mean_t))) for t, u in pairs)
+    return (lambda time_us: (mean_u + rate * (time_us / 1e6 - mean_t)) * 1000.0,
+            (rate - 1) * 1e6, residuals[int(0.99 * (n - 1))])
+
+
+def load_bin_telemetry(bin_path, max_gap_ms=2000, gimbal=None):
     """Read the pose time-series a dataflash log needs to reconstruct telemetry.
 
     GPS week/ms give absolute UTC against each record's boot-relative TimeUS, so
-    every message maps to UTC and to the thermal frames' filename timestamps."""
+    every message maps to UTC and to the thermal frames' filename timestamps.
+    gimbal: None/{'source': 'mnt'} for MNT, or {'source': 'siat', 'yaw_offset_deg': x}
+    for the SIYI_control.lua SIAT attitude."""
     try:
         from pymavlink import mavutil
     except ImportError as error:
         raise RuntimeError("Install pymavlink for --bin: python3 -m pip install pymavlink") from error
     if not bin_path.is_file():
         raise ValueError('dataflash log not found: %s' % bin_path)
-    rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
-    boot_offsets = []
+    rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE', 'SIAT')}
+    gps_times = {}
     log = mavutil.mavlink_connection(str(bin_path))
     while True:
         message = log.recv_match(type=['GPS'] + list(rows))
@@ -230,19 +383,45 @@ def load_bin_telemetry(bin_path, max_gap_ms=2000):
             if getattr(message, 'GWk', 0) > 0:
                 utc_s = (GPS_UNIX_EPOCH + message.GWk * 604800 +
                          message.GMS / 1000.0 - GPS_LEAP_SECONDS)
-                boot_offsets.append(utc_s - message.TimeUS / 1e6)
+                gps_times.setdefault(getattr(message, 'I', 0), []).append((message.TimeUS / 1e6, utc_s))
             continue
         if kind == 'XKF1' and getattr(message, 'C', 0) != 0:
             continue  # primary EKF lane only
         if kind == 'MNT' and getattr(message, 'I', 0) != 0:
             continue  # first mount only
         rows[kind].append(message)
-    if not boot_offsets:
+    if not gps_times:
         raise ValueError('%s has no GPS UTC; cannot align frame timestamps' % bin_path.name)
-    boot_ms = statistics.median(boot_offsets) * 1000.0
-    built, gimbal_yaw_earth, gimbal_source = build_telemetry_series(rows, boot_ms)
+    clock, drift_ppm, residual = fit_utc_clock(max(gps_times.values(), key=len))
+    print('%s: GPS UTC fit, clock drift %.0f ppm, 99%% residual %.3f s' %
+          (bin_path.name, drift_ppm, residual), flush=True)
     log.close()
+    gimbal = gimbal or {}
+    if gimbal.get('source', 'mnt') == 'siat':
+        if not rows['SIAT']:
+            raise ValueError('%s has no SIAT gimbal attitude' % bin_path.name)
+        rows['MNT'] = []
+    built, gimbal_yaw_earth, gimbal_source = build_telemetry_series(rows, clock)
+    if rows['SIAT'] and gimbal.get('source') == 'siat':
+        built['gimbal_attitude'], gimbal_source = build_siat_gimbal(
+            rows['SIAT'], clock, gimbal.get('yaw_offset_deg', 0.0))
+        gimbal_yaw_earth = False
     return BinTelemetry(built, bin_path.name, gimbal_yaw_earth, gimbal_source, max_gap_ms)
+
+
+def build_siat_gimbal(records, boot_ms, yaw_offset_deg=0.0):
+    """SIYI attitude as logged by SIYI_control.lua: degrees, level roll/pitch and
+    vehicle-relative yaw. yaw_offset_deg is subtracted from the reported yaw for
+    gimbals whose yaw zero is not the vehicle nose."""
+    clock = boot_clock(boot_ms)
+    ordered = sorted(records, key=lambda r: r.TimeUS)
+    times = [clock(r.TimeUS) for r in ordered]
+    data = {'roll_rad': [math.radians(r.R) for r in ordered],
+            'pitch_rad': [math.radians(r.P) for r in ordered],
+            'yaw_rad': [_wrap_pi(math.radians(r.Y - yaw_offset_deg)) for r in ordered]}
+    source = dict(roll='actual', pitch='actual', yaw='actual', yaw_frame='vehicle',
+                  message='SIAT', yaw_offset_deg=yaw_offset_deg)
+    return (times, data, {'yaw_rad'}), source
 
 
 def euler_yaw_rate_series(rate_records, attitude, boot_ms):
@@ -253,9 +432,10 @@ def euler_yaw_rate_series(rate_records, attitude, boot_ms):
     if attitude is None or not rate_records:
         return None
     att_times, att, _ = attitude
+    clock = boot_clock(boot_ms)
     times, values = [], []
     for record in sorted(rate_records, key=lambda r: r.TimeUS):
-        t = boot_ms + record.TimeUS / 1000.0
+        t = clock(record.TimeUS)
         if t < att_times[0] or t > att_times[-1]:
             continue
         hi = min(bisect.bisect_right(att_times, t), len(att_times) - 1)
@@ -283,7 +463,7 @@ def build_telemetry_series(rows, boot_ms):
         if not records:
             return None
         ordered = sorted(records, key=lambda record: record.TimeUS)
-        times = [boot_ms + record.TimeUS / 1000.0 for record in ordered]
+        times = [boot_clock(boot_ms)(record.TimeUS) for record in ordered]
         data = {column: [read(record) for record in ordered] for column, read in columns.items()}
         return (times, data, set(angle_columns))
 
@@ -351,7 +531,7 @@ def build_gimbal(records, boot_ms, rad):
     if not usable:
         return None, False, None
     usable.sort(key=lambda r: r.TimeUS)
-    times = [boot_ms + r.TimeUS / 1000.0 for r in usable]
+    times = [boot_clock(boot_ms)(r.TimeUS) for r in usable]
     data = {column: [rad(get(r)) for r in usable] for column, get in read.items()}
     source = dict(roll=roll_src, pitch=pitch_src, yaw=yaw_src,
                   yaw_frame='earth' if yaw_earth else 'vehicle')
@@ -520,8 +700,8 @@ def load_tlog_telemetry(path, max_gap_ms=2000):
 class CombinedTelemetry:
     """Prefer dataflash vehicle pose and measured tlog gimbal pose, per frame."""
 
-    def __init__(self, bin_log=None, tlog=None, max_gap_ms=2000):
-        self.bin = load_bin_telemetry(bin_log, max_gap_ms) if bin_log else None
+    def __init__(self, bin_log=None, tlog=None, max_gap_ms=2000, gimbal=None):
+        self.bin = load_bin_telemetry(bin_log, max_gap_ms, gimbal) if bin_log else None
         self.tlog = load_tlog_telemetry(tlog, max_gap_ms) if tlog else None
         self.source_name = ', '.join(str(p) for p in (bin_log, tlog) if p)
         self.max_gap_ms = max_gap_ms
@@ -552,13 +732,13 @@ class CombinedTelemetry:
         return base
 
 
-def inputs(directory, fps=None):
+def inputs(directory, fps=None, timezone=None):
     if not directory.is_dir():
         raise ValueError('encoding input must be a directory')
     files = list(directory.glob('*.bin'))
     if not files:
         raise ValueError('no .bin thermal frames found')
-    stamps = [filename_time(p) for p in files]
+    stamps = [filename_time(p, timezone) for p in files]
     use_names = all(t is not None for t in stamps)
     entries = []
     for path, stamp in zip(files, stamps):
@@ -576,9 +756,12 @@ def inputs(directory, fps=None):
 
 
 def metadata_for_frame(path, data, pixels, number, count, pts_ms, mtime_ns, timing, rotation,
-                       telemetry=None, gimbal_source=None):
+                       telemetry=None, gimbal_source=None, byte_order='little'):
     lo, hi = int(pixels.min()), int(pixels.max())
     extra = dict(gimbal_pose_source=gimbal_source) if telemetry is not None and gimbal_source else {}
+    if byte_order != 'little':
+        # source_sha256 is over the original file bytes, not the stored gray16le values
+        extra['source_byte_order'] = byte_order
     return dict(schema=SCHEMA, frame_id=number, capture_monotonic_us=pts_ms*1000+1,
                 timestamp_source=timing, capture_clock='reconstructed_relative', simulated=False,
                 width=WIDTH, height=HEIGHT, pixel_format='gray16le', bits_per_sample=16,
@@ -599,12 +782,14 @@ def dependencies():
     return av, np
 
 
-def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, max_gap_ms=2000):
+def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, max_gap_ms=2000,
+           byte_order='little', timezone=None, klv=False, gimbal=None):
     av, np = dependencies()
-    entries, timestamps, duration_ns, timing = inputs(directory, fps)
+    entries, timestamps, duration_ns, timing = inputs(directory, fps, timezone)
     if output.exists():
         raise ValueError('output already exists: %s' % output)
-    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms) if bin_log or tlog else None
+    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms, gimbal) if bin_log or tlog else None
+    klv_frames = 0
     codec = av.CodecContext.create('ffv1', 'w')
     codec.width, codec.height = WIDTH, HEIGHT
     codec.pix_fmt = 'gray16le'
@@ -624,12 +809,13 @@ def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, m
            ', telemetry from %s' % telemetry.source_name if telemetry else '', output), flush=True)
     try:
         with os.fdopen(fd, 'wb') as dest:
-            dest.write(matroska_header(codec.extradata, duration_ns, timestamps[-1]+duration_ns/1000000))
+            dest.write(matroska_header(codec.extradata, duration_ns, timestamps[-1]+duration_ns/1000000, klv))
             for number, ((stamp, path, mtime_ns), pts) in enumerate(zip(entries, timestamps), 1):
                 data = path.read_bytes()
                 if len(data) != FRAME_BYTES or path.stat().st_mtime_ns != mtime_ns:
                     raise ValueError('input changed during encoding: %s' % path)
-                pixels = np.frombuffer(data, dtype='<u2').reshape(HEIGHT, WIDTH)
+                pixels = np.frombuffer(data, dtype='<u2' if byte_order == 'little' else '>u2')
+                pixels = pixels.astype('<u2', copy=False).reshape(HEIGHT, WIDTH)
                 frame = av.VideoFrame.from_ndarray(pixels.astype(np.uint16, copy=False), format='gray16le')
                 frame.pts, frame.time_base = pts, codec.time_base
                 packets = codec.encode(frame)
@@ -638,8 +824,10 @@ def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, m
                 snapshot = telemetry.sample(stamp, pts) if telemetry else None
                 gimbal_source = telemetry.gimbal_source if telemetry else None
                 metadata = metadata_for_frame(path, data, pixels, number, len(entries), pts, mtime_ns,
-                                              timing, rotation, snapshot, gimbal_source)
-                dest.write(matroska_frame(bytes(packets[0]), metadata, pts))
+                                              timing, rotation, snapshot, gimbal_source, byte_order)
+                packet = misb_klv(snapshot, metadata['hfov_deg']) if klv else None
+                klv_frames += packet is not None
+                dest.write(matroska_frame(bytes(packets[0]), metadata, pts, packet))
                 now = time.monotonic()
                 if now-last_report >= 10 or number == len(entries):
                     print('  %u/%u frames, %.1f frames/s, %.1f MB written' %
@@ -656,6 +844,9 @@ def encode(directory, output, fps=None, rotation=180, bin_log=None, tlog=None, m
     raw_size, compressed = len(entries)*FRAME_BYTES, output.stat().st_size
     result = dict(frames=len(entries), raw_bytes=raw_size, matroska_bytes=compressed,
                   compression_ratio=raw_size/compressed, saving_percent=100*(1-compressed/raw_size))
+    if klv:
+        print('MISB ST 0601 KLV on %u of %u frames' % (klv_frames, len(entries)), flush=True)
+        result['klv_frames'] = klv_frames
     print('Encoded %u frames: %s raw bytes -> %s Matroska bytes; %.3f:1, %.2f%% smaller' %
           (len(entries), format(raw_size, ','), format(compressed, ','), result['compression_ratio'], result['saving_percent']), flush=True)
     return result
@@ -677,8 +868,17 @@ def packet_metadata(packet):
     return m
 
 
-def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
-    """Copy encoded FFV1 packets verbatim, replacing only their telemetry JSON."""
+def has_klv_mapping(path):
+    # FFmpeg drops all but the last BlockMore, so look for the track mapping directly.
+    with path.open('rb') as f:
+        head = f.read(1 << 16).split(bytes.fromhex('1f43b675'))[0]  # stop at first Cluster
+    return integer(0x41E7, KLV_ADDITION_TYPE) in head and integer(0x41F0, KLV_ADDITION_ID) in head
+
+
+def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000, klv=False,
+                    gimbal=None, timezone=None):
+    """Copy encoded FFV1 packets verbatim, replacing only their telemetry JSON
+    (and regenerating ST 0601 KLV when requested)."""
     av, _ = dependencies()
     if not source.is_file():
         raise ValueError('metadata update input must be a Matroska file')
@@ -686,7 +886,10 @@ def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
         raise ValueError('output already exists: %s' % output)
     if not bin_log and not tlog:
         raise ValueError('metadata update needs --bin or --tlog')
-    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms)
+    if not klv and has_klv_mapping(source):
+        print('%s has ST 0601 KLV; regenerating it' % source, flush=True)
+        klv = True
+    telemetry = CombinedTelemetry(bin_log, tlog, max_gap_ms, gimbal)
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix='.' + output.name + '.', suffix='.tmp', dir=output.parent)
     temporary = Path(name)
@@ -703,7 +906,7 @@ def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
             if not container.duration or not stream.codec_context.extradata:
                 raise ValueError('missing archive duration or FFV1 CodecPrivate')
             duration_ns = round(1e9 / stream.average_rate) if stream.average_rate else 200000000
-            dest.write(matroska_header(stream.codec_context.extradata, duration_ns, container.duration / 1000))
+            dest.write(matroska_header(stream.codec_context.extradata, duration_ns, container.duration / 1000, klv))
             for packet in container.demux(stream):
                 if not packet.size:
                     continue
@@ -723,7 +926,7 @@ def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
                 existing = metadata.get('telemetry')
                 stamp_us = existing.get('utc_us') if isinstance(existing, dict) else None
                 if not isinstance(stamp_us, (int, float)) or not math.isfinite(stamp_us) or stamp_us <= 0:
-                    stamp = filename_time(Path(output_name(metadata)))
+                    stamp = filename_time(Path(output_name(metadata)), timezone)
                     if stamp is None:
                         raise ValueError('frame has no absolute UTC timestamp')
                 else:
@@ -734,7 +937,8 @@ def update_metadata(source, output, bin_log=None, tlog=None, max_gap_ms=2000):
                     metadata['gimbal_pose_source'] = telemetry.gimbal_source
                 else:
                     metadata.pop('gimbal_pose_source', None)
-                dest.write(matroska_frame(bytes(packet), metadata, pts))
+                packet_klv = misb_klv(snapshot, metadata.get('hfov_deg')) if klv else None
+                dest.write(matroska_frame(bytes(packet), metadata, pts, packet_klv))
                 count += 1
                 for key in coverage:
                     value = snapshot.get(key) if key in snapshot else snapshot.get('named_values', {}).get(key)
@@ -802,7 +1006,10 @@ def extract(source, output, save_metadata=False):
                 if len(frames) != 1 or frames[0].format.name != 'gray16le' or (frames[0].width, frames[0].height) != (WIDTH, HEIGHT):
                     raise ValueError('decoder did not return one native gray16le frame')
                 pixels = frames[0].to_ndarray()
-                data = pixels.astype('<u2', copy=False).tobytes()
+                order = m.get('source_byte_order', 'little')
+                if order not in ('little', 'big'):
+                    raise ValueError('unsupported source byte order')
+                data = pixels.astype('<u2' if order == 'little' else '>u2', copy=False).tobytes()
                 digest = m.get('source_sha256')
                 if digest is not None:
                     if digest != hashlib.sha256(data).hexdigest():
@@ -857,6 +1064,16 @@ def main():
                         help='timestamped MAVLink log for measured SIYI attitude, temperatures and range')
     parser.add_argument('--max-telemetry-gap', type=float, default=2.0, metavar='SECONDS',
                         help='maximum interpolation gap / named measurement age (default: 2 seconds)')
+    parser.add_argument('--byte-order', choices=('little', 'big'), default='little',
+                        help='raw file sample byte order (ZT30 files are big; default: little)')
+    parser.add_argument('--filename-timezone', metavar='ZONE',
+                        help='IANA zone of MAVProxy host-local filename times, e.g. Australia/Sydney')
+    parser.add_argument('--gimbal-source', choices=('mnt', 'siat'), default='mnt',
+                        help='dataflash gimbal attitude: MNT, or SIYI_control.lua SIAT (default: mnt)')
+    parser.add_argument('--gimbal-yaw-offset', type=float, default=0.0, metavar='DEGREES',
+                        help='subtracted from SIAT yaw to make it nose-relative (default: 0)')
+    parser.add_argument('--klv', action='store_true',
+                        help='also embed a MISB ST 0601 KLV local set per frame')
     args = parser.parse_args()
     if args.fps is not None and (not math.isfinite(args.fps) or not 0 < args.fps <= 1000):
         parser.error('--fps must be finite and between 0 and 1000')
@@ -874,15 +1091,35 @@ def main():
         parser.error('--max-telemetry-gap must be finite and positive')
     if not args.extract and args.metadata:
         parser.error('--metadata is only for extraction')
+    if args.extract and (args.klv or args.byte_order != 'little' or args.gimbal_source != 'mnt' or
+                         args.filename_timezone):
+        parser.error('--klv, --byte-order, --gimbal-source and --filename-timezone are not for --extract')
+    if args.update_metadata and args.byte_order != 'little':
+        parser.error('--byte-order is only for encoding raw frames')
+    if args.gimbal_yaw_offset and args.gimbal_source != 'siat':
+        parser.error('--gimbal-yaw-offset applies to --gimbal-source siat')
+    if args.gimbal_source != 'mnt' and args.bin_log is None:
+        parser.error('--gimbal-source siat needs --bin')
+    if not math.isfinite(args.gimbal_yaw_offset):
+        parser.error('--gimbal-yaw-offset must be finite')
+    timezone = None
+    if args.filename_timezone:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            timezone = ZoneInfo(args.filename_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            parser.error('unknown --filename-timezone %s' % args.filename_timezone)
+    gimbal = dict(source=args.gimbal_source, yaw_offset_deg=args.gimbal_yaw_offset)
     try:
         if args.extract:
             extract(args.input, args.output, args.metadata)
         elif args.update_metadata:
-            update_metadata(args.input, args.output, args.bin_log, args.tlog, args.max_telemetry_gap * 1000)
+            update_metadata(args.input, args.output, args.bin_log, args.tlog, args.max_telemetry_gap * 1000,
+                            args.klv, gimbal, timezone)
         else:
             encode(args.input, args.output, args.fps, args.rotation if args.rotation is not None else 180,
-                   args.bin_log, args.tlog,
-                   args.max_telemetry_gap * 1000)
+                   args.bin_log, args.tlog, args.max_telemetry_gap * 1000,
+                   args.byte_order, timezone, args.klv, gimbal)
     except (OSError, ValueError, RuntimeError, EOFError) as error:
         parser.exit(1, 'thermal_to_video: %s\n' % error)
 

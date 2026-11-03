@@ -56,8 +56,9 @@ the camera's 140 MiB `/app` volume.
 
 ## Legacy thermal directories to lossless video
 
-`thermal_to_video.py` converts a flat directory of 640x512 little-endian uint16
-`.bin` frames to the same FFV1 level-3 Matroska profile used by the MT11 raw
+`thermal_to_video.py` converts a flat directory of 640x512 uint16 `.bin` frames
+(little-endian by default; `--byte-order big` for ZT30 SD card and MAVProxy
+captures, which are stored as gray16le values and restored byte-exact on extraction) to the same FFV1 level-3 Matroska profile used by the MT11 raw
 stream. It uses range coding, slice CRCs and independent frames; every sensor
 bit is preserved. Install `numpy` and `av>=18.1` in the Python environment.
 
@@ -77,7 +78,10 @@ By default, playback timing comes from the camera filenames
 13 milliseconds, before `_100`). Names with an additional host reception timestamp,
 such as `2026-08-28_03-08-46_548_I_2026_08_28_13_08_46_880.bin`, also use the
 first (camera UTC) timestamp. If any filename lacks that format, file
-modification times are used for ordering and timing instead. `--fps 5` overrides
+modification times are used for ordering and timing instead. MAVProxy
+`raw_thermal.py` names such as `IMG_0009_2025_12_18_22_15_09_329.bin` hold the
+camera time rendered in the GCS's local zone, so they require
+`--filename-timezone Australia/Sydney` (or the GCS's IANA zone). `--fps 5` overrides
 playback timing with a fixed 5 Hz cadence while retaining original names and
 modification times. This does not resample or discard any frames. Gaps in the
 original capture are otherwise retained.
@@ -93,7 +97,9 @@ is supplied. Display rotation is 180 degrees by default (upright MT11);
 
 `--bin FLIGHT.bin` reconstructs each frame's `apcg.telemetry.v1` snapshot from an
 ArduPilot dataflash log. GPS week/ms give the log absolute UTC, so every record
-maps to the frames' absolute filename (or modification) time. Position (`POS`),
+maps to the frames' absolute filename (or modification) time. TimeUS is mapped to
+UTC with a least-squares fit, not a single offset: flight controller clocks can
+run thousands of ppm off GPS time, and the drift and fit residual are printed. Position (`POS`),
 NED velocity (`XKF1` lane 0), vehicle attitude and yaw rate (`ATT`, `RATE`) and
 gimbal attitude (`MNT`) are linearly interpolated between the bracketing samples,
 with yaw and heading following the shortest arc; each field's `age_ms` is the
@@ -106,10 +112,25 @@ chosen source per axis is recorded in each frame's `gimbal_pose_source`. This
 needs `pymavlink`. Requires filenames or modification times that already sit on
 the same absolute UTC clock as the log; it does not resample frames.
 
+`--gimbal-source siat` uses the `SIAT` attitude logged by `SIYI_control.lua`
+instead of `MNT`. With a servo mount (`MNT1_TYPE=1`) `MNT` is only the demand and
+misses gimbal moves commanded directly from the GCS, while `SIAT` is measured.
+`--gimbal-yaw-offset DEGREES` is subtracted from the `SIAT` yaw for gimbals whose
+reported yaw zero is not the vehicle nose; the offset is recorded in
+`gimbal_pose_source`.
+
+`--klv` also embeds a MISB ST 0601.8 local set per frame (the same tag subset as
+the camera's MPEG-TS writer) as a second block addition, BlockAddID 3 with
+BlockAddIDType `KLVA`. FFmpeg exposes only the last block addition of a block, so
+the `apcg.thermal.v1` JSON is written last and remains what FFmpeg/PyAV readers see;
+the KLV is for Matroska-aware readers. The viewer uses the APCG JSON.
+`--update-metadata` regenerates the KLV whenever the input archive has it.
+
 `--tlog FLIGHT.tlog` adds SIYI measurements from `NAMED_VALUE_FLOAT`: `CROLL`,
 `CPITCH`, `CYAW` are degrees, with level roll/pitch and vehicle-relative yaw, and
 take priority over dataflash `MNT` (including demanded angles). The sender's yaw
 sign is already converted by the SIYI driver; the converter does not negate it.
+`CYAW` carries the same yaw zero as `SIAT`; no yaw offset is applied to it.
 Position, velocity and vehicle attitude from `GLOBAL_POSITION_INT` / `ATTITUDE`
 fill missing dataflash fields, so `--tlog` can also be used without `--bin`.
 Timestamp matching uses the tlog's reception UTC. Named values often reuse an
