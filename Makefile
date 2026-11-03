@@ -116,6 +116,7 @@ release: camera-definitions
 
 release-test:
 	python3 tests/test_cpp_build.py
+	python3 tests/test_build_version.py
 	python3 tests/test_release.py
 	python3 tests/test_build_dependencies.py
 	python3 tests/test_parallel_build.py

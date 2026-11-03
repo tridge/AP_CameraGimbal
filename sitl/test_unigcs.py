@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Isolated SIYI UniGCS wire-protocol integration test (no physical camera)."""
 import argparse
+import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -17,6 +19,21 @@ from test_sitl import reserve_port, terminate, read_rtsp_sdp, verify_rtsp_sdp, v
 
 
 CAMERA_ADDRESS = 0x34
+
+
+def camera_version(product_id, version=None):
+    """Expected build identity; override for binaries from another build tree."""
+    if version is None:
+        header = Path(__file__).resolve().parents[1]/'camera_app/build/binlog_version.h'
+        value = re.search(r'^#define CA_FIRMWARE_VERSION (.+)$', header.read_text(), re.M)
+        assert value, f'No firmware identity in {header}'
+        version = json.loads(value[1])
+    match = re.fullmatch(r'v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?', version)
+    numbers = [int(part or 0) for part in match.groups()] if match else [0, 0, 0]
+    if any(part > 255 for part in numbers):
+        numbers = [0, 0, 0]
+    return bytes((*reversed(numbers), product_id))
+
 
 def long_crc(data):
     crc=0
@@ -220,6 +237,7 @@ def main():
     parser.add_argument('--backend', choices=('mt11','a8','zr10'), default='mt11')
     parser.add_argument('--orientation', choices=('upright','inverted'), default='upright')
     parser.add_argument('--video-codec', choices=('h264', 'h265'))
+    parser.add_argument('--firmware-version', help='expected MT11_VERSION; defaults to the generated build header')
     parser.add_argument('--late-interface', action='store_true',
                         help='test delayed NIC discovery; run with sudo unshare -n')
     args = parser.parse_args()
@@ -227,6 +245,7 @@ def main():
         assert os.geteuid() == 0 and {n for _, n in socket.if_nameindex()} == {'lo'}, 'Use sudo unshare -n'
         subprocess.run(['ip', 'link', 'set', 'lo', 'up'], check=True)
     product_id = {'mt11':0x89, 'a8':0x72, 'zr10':0x6b}[args.backend]
+    version_reply = camera_version(product_id, args.firmware_version)
     thermal = args.backend == 'mt11'
     verify_native_gimbal(args.backend)
     def read_pose(public):
@@ -342,7 +361,7 @@ def main():
                 raw = b'\xaa\x09\x03\x00\x10\x00'+command(0x94)+command(0x80)
                 for part in (raw[:3],raw[3:9],raw[9:]):
                     c.sock.sendall(part)
-                assert c.reply(0x94) == bytes((12,0,1,product_id)) + (bytes((0,0,1,0x87)) if args.video_codec else b'')
+                assert c.reply(0x94) == version_reply + (bytes((0,0,1,0x87)) if args.video_codec else b'')
                 assert c.reply(0x80) == bytes(5)
                 # MT11 starts on its wide RGB sensor, but its visible scene is
                 # still Zoom. Wide (01) makes Android hide the target button.
@@ -464,7 +483,7 @@ def main():
                 captured=bytes.fromhex('5566aabb01000000000000802d977a34b7ad40eb')
                 old.sock.sendall(captured[:2]); old.sock.sendall(captured[2:])
                 assert len(old.reply(0x80))==5
-                assert old.request(0x94)==bytes((12,0,1,product_id)) + (bytes((0,0,1,0x87)) if args.video_codec else b'')
+                assert old.request(0x94)==version_reply + (bytes((0,0,1,0x87)) if args.video_codec else b'')
                 assert len(old.request(0x83,b'\x00'))==9
                 old.received.clear()
                 old.sock.sendall(long_command(0x94,control=0)+long_command(0x80))
