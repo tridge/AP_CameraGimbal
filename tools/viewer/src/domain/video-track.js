@@ -1,6 +1,53 @@
 import { finite } from './time.js';
 import { freshMapPosition } from '../map/map-config.js';
 
+// Shared by the map and its legend, independently of the video display palette.
+export const TRACK_TEMPERATURE_STOPS = [
+  [40, 120, 255],
+  [32, 217, 232],
+  [255, 227, 77],
+  [255, 138, 36],
+  [237, 37, 37],
+];
+
+export function frameMaximumC(frame) {
+  // Raw archives carry the maximum of this image outside the nested snapshot.
+  // Read temperatures from the image's metadata, never the time-aligned pose.
+  if (frame.thermalMetadata)
+    return finite(frame.thermalMetadata.maximum_c) ? frame.thermalMetadata.maximum_c : null;
+  const maximum = frame.telemetry?.thermal?.maximum_c;
+  if (finite(maximum)) return maximum;
+  const item = frame.telemetry?.named_values?.TMAX;
+  if (finite(item)) return item;
+  return finite(item?.value) &&
+    item.valid !== false &&
+    (!finite(item.age_ms) || item.age_ms <= 2000)
+    ? item.value
+    : null;
+}
+
+export function trackTemperatureRange(points) {
+  let min = Infinity,
+    max = -Infinity;
+  for (const p of points) {
+    if (!finite(p.tmaxC)) continue;
+    min = Math.min(min, p.tmaxC);
+    max = Math.max(max, p.tmaxC);
+  }
+  return min <= max ? { min, max } : null;
+}
+
+export function trackTemperatureColor(value, range) {
+  if (!finite(value) || !range) return null;
+  const fraction = range.max === range.min ? 0.5 : (value - range.min) / (range.max - range.min),
+    t = Math.max(0, Math.min(1, fraction)) * (TRACK_TEMPERATURE_STOPS.length - 1),
+    i = Math.min(TRACK_TEMPERATURE_STOPS.length - 2, Math.floor(t)),
+    f = t - i;
+  return TRACK_TEMPERATURE_STOPS[i].map((v, c) =>
+    Math.round(v * (1 - f) + TRACK_TEMPERATURE_STOPS[i + 1][c] * f),
+  );
+}
+
 export function connectedTrackPoints(a, b) {
   return (
     !!a &&
@@ -22,11 +69,23 @@ function* trackBuilder(frames, recordForFrame, budget) {
   let segment = 0,
     first = null,
     last = null,
-    selected = [];
+    selected = [],
+    bucketMin = null,
+    bucketMax = null,
+    bucketMissing = null;
+  const flushBucket = () => {
+    // Up to three points per stride: its first point, a low/missing value and
+    // its peak. A brief hot spot must survive spatial display simplification.
+    selected.push(...[bucketMissing || bucketMin, bucketMax].filter(Boolean));
+    bucketMin = bucketMax = bucketMissing = null;
+  };
   const commit = () => {
+    flushBucket();
     // Retain short valid bursts too. At the hard display budget omit whole
     // segments rather than joining across a missing-data interval.
-    const points = [first, ...selected, last].filter((p, i, a) => p && (i === 0 || p !== a[i - 1]));
+    const points = [...new Set([first, ...selected, last].filter(Boolean))].sort(
+      (a, b) => a.pts - b.pts,
+    );
     if (first && first !== last) {
       if (out.length + points.length <= budget * 3 + 2) out.push(...points);
       else out.limited = true;
@@ -48,6 +107,7 @@ function* trackBuilder(frames, recordForFrame, budget) {
       ...position,
       pts: frame.pts,
       frameId: frame.id,
+      tmaxC: frameMaximumC(frame),
       utcUs: record.pose_utc_us ?? record.utc_us,
       clockSegment: segment,
     };
@@ -57,7 +117,14 @@ function* trackBuilder(frames, recordForFrame, budget) {
     }
     if (!first) first = point;
     last = point;
-    if (i % stride === 0 || i === frames.length - 1) selected.push(point);
+    if (i % stride === 0) {
+      flushBucket();
+      selected.push(point);
+    }
+    if (finite(point.tmaxC)) {
+      if (!bucketMin || point.tmaxC < bucketMin.tmaxC) bucketMin = point;
+      if (!bucketMax || point.tmaxC > bucketMax.tmaxC) bucketMax = point;
+    } else bucketMissing ||= point;
   }
   commit();
   return out;

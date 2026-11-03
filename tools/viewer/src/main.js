@@ -6,6 +6,7 @@ import { LocalSource } from './media/local-source.js';
 import { FrameDecoder } from './media/native-decoder.js';
 import { selectLogAt } from './domain/flight-log.js';
 import { ReviewMap } from './map/map-view.js';
+import { trackTemperatureColor, TRACK_TEMPERATURE_STOPS } from './domain/video-track.js';
 import { ElevationModel, validPose } from './domain/geometry.js';
 import {
   PoseTimeline,
@@ -222,8 +223,25 @@ function updateVideoTrack() {
       $('map-track-hint').textContent = map.trackLimited
         ? 'Track simplified; click visible segments to seek'
         : 'Click the video track to seek';
+      updateTrackLegend();
     })
     .catch(error);
+}
+function updateTrackLegend() {
+  const range = map?.trackTemperatureRange;
+  $('map-temperature-legend').hidden = !range;
+  if (!range) return;
+  $('map-temperature-low').textContent = `${range.min.toFixed(1)} °C`;
+  $('map-temperature-high').textContent = `${range.max.toFixed(1)} °C`;
+  const stops = TRACK_TEMPERATURE_STOPS.map((_, i, a) => {
+    const rgb = trackTemperatureColor(
+      range.min + ((range.max - range.min) * i) / (a.length - 1),
+      range,
+    );
+    return `rgb(${rgb.join(',')})`;
+  });
+  $('map-temperature-scale').style.background = `linear-gradient(to right, ${stops.join(',')})`;
+  $('map-temperature-missing').hidden = !map.videoTrack.some((p) => p.tmaxC === null);
 }
 async function seekFromTrack(pts) {
   if (!finite(pts) || !state.frames.length) return;
@@ -370,6 +388,7 @@ async function openVideo(file) {
   $('telemetry-fields').replaceChildren(...field('Recorded UTC', '—'), ...field('Position', '—'));
   state.seekGeneration++;
   map?.clear();
+  updateTrackLegend();
   $('video-canvas').hidden = true;
   $('empty-video').hidden = false;
   $('source-name').textContent = file.name;

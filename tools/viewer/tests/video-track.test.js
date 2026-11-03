@@ -4,6 +4,10 @@ import {
   buildVideoTrack,
   buildVideoTrackAsync,
   nearestTrackTime,
+  frameMaximumC,
+  trackTemperatureRange,
+  trackTemperatureColor,
+  TRACK_TEMPERATURE_STOPS,
 } from '../src/domain/video-track.js';
 const frame = (i) => ({
   id: i,
@@ -133,4 +137,68 @@ test('large track building yields and cancellation prevents stale navigation map
   controller.abort();
   await assert.rejects(pending, { name: 'AbortError' });
   assert.ok(read <= 2048);
+});
+
+test('track temperatures use image maxima before nested TMAX, keeping zero and negative Celsius', () => {
+  const f = frame(0);
+  f.telemetry.named_values = { TMAX: { value: 100, valid: true, age_ms: 100 } };
+  assert.equal(frameMaximumC(f), 100);
+  f.thermalMetadata = { maximum_c: -19.275 };
+  assert.equal(frameMaximumC(f), -19.275);
+  f.thermalMetadata.maximum_c = 0;
+  assert.equal(frameMaximumC(f), 0);
+  f.thermalMetadata.maximum_c = null;
+  assert.equal(frameMaximumC(f), null);
+  delete f.thermalMetadata;
+  f.telemetry.named_values.TMAX.valid = false;
+  assert.equal(frameMaximumC(f), null);
+  f.telemetry.named_values.TMAX = { value: 100, age_ms: 3000 };
+  assert.equal(frameMaximumC(f), null);
+  f.telemetry.named_values.TMAX = NaN;
+  assert.equal(frameMaximumC(f), null);
+  delete f.telemetry.named_values;
+  assert.equal(frameMaximumC(f), null);
+});
+
+test('thermal decimation preserves short peaks, lows and missing data within the display budget', () => {
+  const frames = Array.from({ length: 10000 }, (_, i) => ({
+    ...frame(i),
+    thermalMetadata: { maximum_c: 30 },
+  }));
+  frames[453].thermalMetadata.maximum_c = 250;
+  frames[756].thermalMetadata.maximum_c = -10;
+  frames[5467].thermalMetadata.maximum_c = null;
+  const track = buildVideoTrack(frames, undefined, 20);
+  assert.ok(track.length <= 62);
+  assert.ok(track.some((p) => p.frameId === 453 && p.tmaxC === 250));
+  assert.ok(track.some((p) => p.frameId === 756 && p.tmaxC === -10));
+  assert.ok(track.some((p) => p.frameId === 5467 && p.tmaxC === null));
+  assert.deepEqual(trackTemperatureRange(track), { min: -10, max: 250 });
+  assert.equal(track.limited, undefined);
+  for (let i = 1; i < track.length; i++) assert.ok(track[i].pts > track[i - 1].pts);
+});
+
+test('time alignment moves the pose while temperature stays attached to the video frame', () => {
+  const frames = [frame(0), frame(1)];
+  frames[0].thermalMetadata = { maximum_c: 50 };
+  frames[1].thermalMetadata = { maximum_c: 60 };
+  const track = buildVideoTrack(frames, (f) => ({
+    ...f.telemetry,
+    named_values: { TMAX: 999 },
+    thermal: { maximum_c: 888 },
+  }));
+  assert.deepEqual(
+    track.map((p) => p.tmaxC),
+    [50, 60],
+  );
+});
+
+test('temperature range and palette handle missing, constant and out-of-range values', () => {
+  assert.equal(trackTemperatureRange([{ tmaxC: null }, { tmaxC: NaN }]), null);
+  const range = trackTemperatureRange([{ tmaxC: -20 }, { tmaxC: 0 }, { tmaxC: 130 }]);
+  assert.deepEqual(trackTemperatureColor(-20, range), TRACK_TEMPERATURE_STOPS[0]);
+  assert.deepEqual(trackTemperatureColor(130, range), TRACK_TEMPERATURE_STOPS.at(-1));
+  assert.deepEqual(trackTemperatureColor(-200, range), TRACK_TEMPERATURE_STOPS[0]);
+  assert.equal(trackTemperatureColor(null, range), null);
+  assert.deepEqual(trackTemperatureColor(0, { min: 0, max: 0 }), TRACK_TEMPERATURE_STOPS[2]);
 });

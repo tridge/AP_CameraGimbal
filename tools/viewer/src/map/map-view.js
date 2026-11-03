@@ -23,13 +23,25 @@ import {
   Matrix4,
   EllipsoidalOccluder,
   CallbackProperty,
+  Primitive,
+  GeometryInstance,
+  PolylineGeometry,
+  PolylineColorAppearance,
+  PointPrimitiveCollection,
+  BlendOption,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { freshMapPosition, validateMapConfiguration } from './map-config.js';
 import { finite } from '../domain/time.js';
 import { missionSegments, resolveMissionAltitude } from '../domain/flight-log.js';
 import { TerrainElevation } from './terrain-elevation.js';
-import { buildVideoTrack, buildVideoTrackAsync, nearestTrackTime } from '../domain/video-track.js';
+import {
+  buildVideoTrack,
+  buildVideoTrackAsync,
+  nearestTrackTime,
+  trackTemperatureRange,
+  trackTemperatureColor,
+} from '../domain/video-track.js';
 
 globalThis.CESIUM_BASE_URL = `${import.meta.env.BASE_URL}vendor/cesium/${CESIUM_VERSION}/`;
 Ion.defaultAccessToken = '';
@@ -492,14 +504,96 @@ export class ReviewMap {
           : buildVideoTrack(frames, recordForFrame);
       if (controller.signal.aborted) return false;
       this.clearEntities(this.flightEntities);
+      this.clearTemperatureTrack();
       this.trackLimited = !!track.limited;
       this.videoTrack = track.map((p) => ({ ...p, world: this.position(p.lat, p.lon, p.altMsl) }));
-      this.drawTrack(this.videoTrack, this.flightEntities, color.track, true);
+      this.trackTemperatureRange = trackTemperatureRange(track);
+      if (this.trackTemperatureRange) this.drawTemperatureTrack();
+      else this.drawTrack(this.videoTrack, this.flightEntities, color.track, true);
       return true;
     } catch (e) {
       if (e.name === 'AbortError') return false;
       throw e;
     }
+  }
+  clearTemperatureTrack() {
+    if (this.temperatureTrack) this.viewer.scene.primitives.remove(this.temperatureTrack);
+    if (this.temperaturePoints) this.viewer.scene.primitives.remove(this.temperaturePoints);
+    this.temperatureTrack = null;
+    this.temperaturePoints = null;
+    this.trackTemperatureRange = null;
+  }
+  drawTemperatureTrack() {
+    const instances = [];
+    let positions = [],
+      colors = [],
+      previous = null,
+      thermal = null;
+    const commit = () => {
+      if (positions.length > 1)
+        instances.push(
+          new GeometryInstance({
+            geometry: new PolylineGeometry({
+              positions,
+              colors,
+              colorsPerVertex: true,
+              width: 3,
+              vertexFormat: PolylineColorAppearance.VERTEX_FORMAT,
+            }),
+          }),
+        );
+      positions = [];
+      colors = [];
+    };
+    const tint = (point) => {
+      const rgb = thermal && trackTemperatureColor(point.tmaxC, this.trackTemperatureRange);
+      return rgb ? Color.fromBytes(...rgb) : Color.CYAN;
+    };
+    for (const point of this.videoTrack) {
+      if (previous && point.clockSegment === previous.clockSegment) {
+        const available = finite(previous.tmaxC) && finite(point.tmaxC);
+        // Missing temperatures remain cyan; don't interpolate across them.
+        if (available !== thermal) commit();
+        thermal = available;
+        if (!positions.length) {
+          positions.push(previous.world);
+          colors.push(tint(previous));
+        }
+        positions.push(point.world);
+        colors.push(tint(point));
+      } else commit();
+      previous = point;
+    }
+    commit();
+    if (instances.length)
+      this.temperatureTrack = this.viewer.scene.primitives.add(
+        new Primitive({
+          geometryInstances: instances,
+          appearance: new PolylineColorAppearance({ translucent: false }),
+          // One batched primitive keeps long tracks out of the entity updater.
+          asynchronous: false,
+          allowPicking: false,
+        }),
+      );
+    // A short peak can be smaller than a screen pixel, or underneath another
+    // pass at a higher altitude. Keep each sampled temperature visible on the
+    // track, drawing the hottest samples last where passes overlap.
+    this.temperaturePoints = this.viewer.scene.primitives.add(
+      // One alpha-blended pass preserves sample order and leaves the depth
+      // buffer available for terrain occlusion checks during track seeking.
+      new PointPrimitiveCollection({ blendOption: BlendOption.TRANSLUCENT }),
+    );
+    const samples = this.videoTrack
+      .filter((p) => finite(p.tmaxC))
+      .sort((a, b) => a.tmaxC - b.tmaxC);
+    for (const point of samples)
+      this.temperaturePoints.add({
+        position: point.world,
+        color: Color.fromBytes(...trackTemperatureColor(point.tmaxC, this.trackTemperatureRange)),
+        pixelSize: 4,
+        disableDepthTestDistance: Infinity,
+      });
+    this.render();
   }
   pickVideoTrack(click) {
     const scene = this.viewer.scene;
@@ -658,6 +752,7 @@ export class ReviewMap {
   clear() {
     this.trackController?.abort();
     this.clearEntities(this.flightEntities);
+    this.clearTemperatureTrack();
     this.clearEntities(this.findingEntities);
     for (const piece of this.footprintPieces) piece.show = false;
     for (let i = 0; i < this.footprintCoordinates.length; i++) this.footprintCoordinates[i] = [];

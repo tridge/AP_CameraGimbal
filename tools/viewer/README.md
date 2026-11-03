@@ -126,7 +126,18 @@ keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also wo
 from the timeline or focused map buttons; text/number inputs, dialogs and browser
 Ctrl/Command zoom shortcuts keep their normal behaviour.
 
-Click the cyan **video track**, or within8 screen pixels, to pause and seek to
+The **video track** is colored by each frame's maximum temperature (TMAX) when
+thermal telemetry is available. Blue marks the coolest maxima and red the
+hottest, with a Celsius range legend below the map. Raw thermal archives use
+their image maximum; other recordings use valid, fresh embedded TMAX readings.
+The scale covers the available track and updates while indexing. RGB recordings
+without thermal telemetry, and intervals missing temperature, remain cyan.
+Long-track simplification retains brief temperature peaks to help locate hot
+spots. Small colored samples keep hot passes visible where tracks overlap.
+These are temperatures seen by the camera along the aircraft route,
+not mapped ground-temperature measurements.
+
+Click the **video track**, or within8 screen pixels, to pause and seek to
 that location in the recording. At overlapping passes the time closest to the
 current playback position wins. White log tracks and mission/fence overlays do
 not seek the video. Position/clock gaps stay disconnected, and the track is

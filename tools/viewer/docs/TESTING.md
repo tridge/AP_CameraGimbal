@@ -147,3 +147,10 @@ failure/cancellation handling. Regeneration is optional and requires SciPy;
 ordinary tests only read the fixture. Use
 `node scripts/qualify-thermal-analysis.mjs` for controlled weak-source injection
 measurements; its output is not a real-flight detection-accuracy claim.
+
+track-temperature.spec.js checks the TMAX legend, rendered cool/hot pixels in
+2D/3D, missing-temperature intervals and the cyan RGB fallback. Set
+VIEWER_TEMPERATURE_VIDEO to a local raw thermal archive to compare its full
+frame-maximum range with the displayed range and check that hot samples remain
+visible on overlapping passes. This opt-in does not require a flight log or
+generate decoded-frame references.
