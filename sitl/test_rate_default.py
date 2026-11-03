@@ -79,6 +79,51 @@ def main():
                 with mcu.lock:
                     assert mcu.gimbal.commanded_rates == (0,0), mcu.gimbal.commanded_rates
                     mcu.drop_feedback=False
+                # Directly below the vehicle has valid angles but undefined
+                # LOS rates. Factory Rate must still point down, then resume
+                # ordinary rate tracking when the target moves away from nadir.
+                angle_count = mcu.count()
+                feed(20)
+                link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_SET_ROI_LOCATION,
+                    0, 0, 0, 0, 0, 0, -350000000, 1490000000, 500)
+                ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_DO_SET_ROI_LOCATION)
+                assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                start=time.monotonic()
+                while time.monotonic()-start<3:
+                    feed(20+time.monotonic()-start); time.sleep(.05)
+                with mcu.lock:
+                    assert abs(mcu.gimbal.pitch+90)<.6, mcu.gimbal.pitch
+                    assert mcu.gimbal.commanded_rates == (0,0), mcu.gimbal.commanded_rates
+                assert mcu.count()>angle_count, 'nadir never sent an angle command'
+                # The fallback must retain the same freshness guards as Rate.
+                with mcu.lock: mcu.drop_feedback=True
+                start=time.monotonic()
+                while time.monotonic()-start<.8:
+                    feed(24+time.monotonic()-start); time.sleep(.05)
+                angle_count=mcu.count()
+                # Change the requested angle while the gimbal feedback is
+                # stale, so backend duplicate-command suppression cannot hide
+                # a missing freshness check in the fallback.
+                link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_SET_ROI_LOCATION,
+                    0, 0, 0, 0, 0, 0, -350000000, 1490000000, 700)
+                ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_DO_SET_ROI_LOCATION)
+                assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                start=time.monotonic()
+                while time.monotonic()-start<.5:
+                    feed(25+time.monotonic()-start); time.sleep(.05)
+                assert mcu.count()==angle_count, 'nadir bypassed stale feedback guard'
+                with mcu.lock: mcu.drop_feedback=False
+                link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_SET_ROI_LOCATION,
+                    0, 0, 0, 0, 0, 0, round(target_lat*1e7), 1490000000, 500)
+                ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_DO_SET_ROI_LOCATION)
+                assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                start=time.monotonic(); resumed=False
+                while time.monotonic()-start<1:
+                    feed(26+time.monotonic()-start); time.sleep(.05)
+                    with mcu.lock:
+                        resumed |= any(abs(v)>0 for v in mcu.gimbal.commanded_rates)
+                assert resumed, 'Rate did not resume after leaving nadir'
+                print('PASS nadir angle fallback, stale feedback guard and Rate recovery',flush=True)
                 # Stale vehicle data stops both axes even after pose recovers.
                 time.sleep(2)
                 with mcu.lock:

@@ -23,7 +23,7 @@
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
-#include "camera_app/gimbal_rate.h"
+#include "camera_app/tracking_rate.h"
 #include "camera_app/survey.h"
 #include "camera_app/telemetry_time.h"
 #include "camera_app/thermal_stream.h"
@@ -1462,7 +1462,8 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     if (now - server->last_target_location_ms < interval) return;
     int32_t lat, lon;
     float alt, vehicle_yaw, vehicle_yaw_rate, pitch, yaw_earth;
-    float dt = fminf((now - server->last_target_location_ms) * .001f, .1f);
+    const float elapsed = (now - server->last_target_location_ms) * .001f;
+    float dt = fminf(elapsed, .1f);
     server->last_target_location_ms = now;
     if (!current_vehicle_position(server, &lat, &lon, &alt) ||
         !current_vehicle_attitude(server, &vehicle_yaw, &vehicle_yaw_rate) ||
@@ -1502,7 +1503,11 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
             server->target_lon_e7, server->target_alt_amsl_m,
             server->vehicle_vn_m_s, server->vehicle_ve_m_s, server->vehicle_vd_m_s,
             &pitch_rate, &yaw_rate)) {
+        // At nadir (and the geographic poles) the LOS derivative has no
+        // defined bearing. Valid angles and fresh vehicle/gimbal telemetry
+        // were checked above, so retain Angle mode's ability to point there.
         stop_tracking_rate(server);
+        (void)ca_backend_set_gimbal_angles(server->backend, pitch, yaw);
         return;
     }
     float desired[2] = {pitch, yaw};
@@ -1544,7 +1549,7 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
                                                        APCAM_GIMBAL_RATE_MAX * radians * dt);
         if (!circular && ((feedback[i] <= minimum[i] && output[i] < 0) ||
             (feedback[i] >= maximum[i] && output[i] > 0))) output[i] = 0;
-        command[i] = ca_tracking_rate_command(output[i], minimum_rate[i], dt,
+        command[i] = ca_tracking_rate_command(output[i], minimum_rate[i], elapsed,
                                                &server->tracking_pulse[i]);
         CA_BINLOG(i ? CA_LOG_PIDY : CA_LOG_PIDP, ca_log_pid,
             .target=desired[i]/radians, .actual=feedback[i]/radians,
