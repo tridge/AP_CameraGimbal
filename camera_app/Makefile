@@ -280,6 +280,8 @@ build/binlog_version.h: FORCE ../tools/write_build_version.py
 src/recording/binlog.o $(SITL_OBJDIR)/c/src/recording/binlog.o \
  build/$(CAMERA_BACKEND)/c/src/recording/binlog.o \
  build/z1mini-host/c/src/recording/binlog.o \
+ src/protocol/unigcs.o $(SITL_OBJDIR)/c/src/protocol/unigcs.o \
+ build/$(CAMERA_BACKEND)/c/src/protocol/unigcs.o \
  build/zt30-sitl/c/src/backends/zt30/control.o \
  build/windows-zt30/c/src/backends/zt30/control.o: build/binlog_version.h
 
@@ -401,7 +403,7 @@ unigcs-time-test: build/test_unigcs_time
 
 build/test_unigcs_time: tests/test_unigcs_time.cpp src/protocol/unigcs.cpp \
                        src/protocol/private_uart.cpp src/protocol/siyi.cpp include/camera_app/private_uart.h \
-                       include/camera_app/unigcs.h src/config.cpp $(APCAM_HEADERS)
+                       include/camera_app/unigcs.h src/config.cpp build/binlog_version.h $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \

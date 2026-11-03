@@ -9,6 +9,7 @@
 #include "camera_app/binlog.h"
 #include "camera_app/siyi.h"
 #include "apcam/target.h"
+#include "binlog_version.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -284,8 +285,12 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         break;
     case 0x94:
         if(n) break;
-        // Protocol compatibility version and model-specific product ID (not AP build ID).
-        out[0]=12; out[2]=1; out[3]=product_id;
+        // UniGCS formats these bytes as vMAJOR.MINOR.PATCH. The camera
+        // model is a separate byte; neither field can carry an "AP-" prefix.
+        out[0]=CA_FIRMWARE_VERSION_PATCH;
+        out[1]=CA_FIRMWARE_VERSION_MINOR;
+        out[2]=CA_FIRMWARE_VERSION_MAJOR;
+        out[3]=product_id;
         // AI type 87 exposes region tracking without the classifier/settings UI.
         if(ca_media_tracking_available(s->media)) { out[6]=1; out[7]=0x87; }
         reply(s,0x94,out,out[7]?8:4); return;

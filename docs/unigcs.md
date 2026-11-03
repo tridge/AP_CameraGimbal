@@ -382,8 +382,19 @@ path and worker. The startup
 catalogue query returns zero classes and an empty name list, so a client can
 complete the query without being told that stock tracking models are present.
 
-`16/94` currently advertises the captured 1.0.12 compatibility version and
-the selected model's device ID, not the ArduPilot build version. `16/E1` preserves the stock
+`16/94` reports the AP release version from the build's `MT11_VERSION`, using
+the same identity source as the web Status page and BIN log. For example,
+`v1.0.1` produces patch/minor/major bytes `01 00 01`, followed by the unchanged
+camera-model ID. Two-part tags such as `v1.0` use patch zero. Unknown versions
+or components outside 0–255 report `0.0.0` rather than a stock version or a
+wrapped value. Build through the top-level Makefile to select the release tag
+automatically, or provide `MT11_VERSION` when building camera_app directly.
+
+UniGCS constructs its version label from these three bytes, so a prefix such
+as `AP-1.0.1` requires a UniGCS change; this reply has no version-string field.
+The model byte and optional AI capability/version bytes retain their existing
+meanings. Gimbal/MCU version requests remain separate and are relayed unchanged.
+`16/E1` preserves the stock
 V1.0.5 layout, including its duplicate ISO byte. Encoder queries report current
 sizes/codecs/frame rates and the MT11 encoder's nominal bitrate policy; the
 SITL renderer does not use that hardware bitrate policy. Encoder *setters* are
@@ -402,7 +413,7 @@ named handler. These mappings alone do not establish complete payload layouts.
 | `f0/3b` | `reset_dev_param_action` | Not implemented |
 | `f0/07` | `shell_action` | Not implemented |
 | `16/f0` | `get_local_info_action` | Heartbeat; client location payload accepted but not used |
-| `16/94` | `get_camera_ver_action` | Compatibility version / MT11 identification |
+| `16/94` | `get_camera_ver_action` | AP release version / camera-model identification |
 | `16/91` | `get_utc_time_info_action` | Receives validated local calendar time following camera's `91/01` request |
 | `16/74` | `get_ip_action` | Pending payload/backend implementation |
 | `16/75` | `set_ip_action` | Pending payload/backend implementation |

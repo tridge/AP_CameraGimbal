@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 
 os.environ.setdefault('MAVLINK20', '1')
 from pymavlink import mavutil
-from test_unigcs import Client, LongClient
+from test_unigcs import Client, LongClient, camera_version
 from test_sitl import reserve_port, terminate, request as public_request, verify_rtsp_video
 from test_mavlink_parameters import receive, drain, wait_ready
 
@@ -110,7 +110,7 @@ def run(build, orientation, no_version_reply=False):
                 verify_rtsp_video(rtsp,'video2',(640,512),'h264')
                 c=Client(ports['private']);clients.append(c)
                 identity=c.request(0x94)
-                assert identity[:4]==bytes((12,0,1,0x7b)),identity
+                assert identity[:4]==camera_version(0x7b),identity
                 assert c.request(0x92)==b'\x00\x02'
                 assert c.request(0xd0,b'\x0a')==b'\x0a'+struct.pack('<HHHH',1800,10,300,10)
                 ext_zoom(1); fov(58.1)
@@ -136,7 +136,7 @@ def run(build, orientation, no_version_reply=False):
                 assert c.request(0x93,b'\x02\x00')==b'\x02\x00'
                 for value in (1,90,180):
                     module_zoom(c,value);assert c.request(0x92)==b'\x02\x00';fov(24.2,640/512)
-                assert c.request(0x94)==bytes((12,0,1,0x7b,0,0,1,0x87))
+                assert c.request(0x94)==camera_version(0x7b)+bytes((0,0,1,0x87))
                 assert c.request(0xaa,b'\x01'+struct.pack('<HHHH',200,200,400,400))==b'\x01'
                 assert c.request(0xaa,b'\x00'+bytes(8))==b'\x01'
                 ext_set('CAM_ZOOM',2,accepted=False)
@@ -146,7 +146,7 @@ def run(build, orientation, no_version_reply=False):
                 ext_set('CAM_LENS',1);ext_zoom(30);fov(2.14)
                 c.sock.close();time.sleep(.15)
                 old=LongClient(ports['private']);clients.append(old)
-                assert old.request(0x94)[:4]==bytes((12,0,1,0x7b))
+                assert old.request(0x94)[:4]==camera_version(0x7b)
                 module_zoom(old,1);fov(58.1)
                 old.sock.close()
                 with socket.create_connection(('127.0.0.1',ports['public']),2) as public:

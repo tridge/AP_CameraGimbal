@@ -29,6 +29,7 @@ ZT30_APP_XOP := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%, \
 ZT30_APP_OBJECTS := $(patsubst %.cpp,$(ZT30_APP_DIR)/c/%.o,$(ZT30_APP_SRC)) \
  $(patsubst $(RTSP_ROOT)/%.cpp,$(ZT30_APP_DIR)/xop/%.o,$(ZT30_APP_XOP)) \
  $(ZT30_APP_DIR)/patched-rtsp.o $(ZT30_APP_DIR)/patched-rtp.o $(ZT30_APP_DIR)/patched-scheduler.o $(ZT30_APP_DIR)/tracking_dlib.o
+$(ZT30_APP_DIR)/c/src/protocol/unigcs.o: build/binlog_version.h
 ifeq ($(ZT30_DEV_BUILD),1)
 ZT30_THERMAL_LIBS := $(THERMAL_CODECS_ROOT)/armv7/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/armv7/lib/libavutil.a
 $(ZT30_THERMAL_LIBS) &: ../tools/build_thermal_codecs.sh
