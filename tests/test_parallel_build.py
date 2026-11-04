@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Exercise generated-input ordering, diagnostics and failed-build recovery."""
 import hashlib
+import http.server
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import struct
 import subprocess
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +110,62 @@ sys.exit(17)
 
     def test_serial_parent_keeps_thermal_submake_serial(self):
         self.assertEqual(self.thermal_submake(1), 1)
+
+    def test_thermal_download_recovers_from_connection_reset(self):
+        payload = b'complete source fixture after connection reset'
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            requests = 0
+
+            def do_GET(self):
+                Handler.requests += 1
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                if Handler.requests == 1:
+                    self.wfile.write(payload[:3])
+                    self.wfile.flush()
+                    self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                               struct.pack('ii', 1, 0))
+                    self.close_connection = True
+                else:
+                    self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        root = self.root / 'build/deps/thermal-codecs'
+        source = root / 'ffmpeg-8.0.1'
+        source.mkdir(parents=True)
+        (source / 'COPYING.LGPLv2.1').write_text('fixture')
+        configure = source / 'configure'
+        configure.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+prefix = next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--prefix='))
+Path('Makefile').write_text('.PHONY: all install\\nall:\\ninstall:\\n\\tmkdir -p ' + prefix + '/lib\\n\\ttouch ' + prefix + '/lib/libavcodec.a ' + prefix + '/lib/libavutil.a\\n')
+''')
+        configure.chmod(0o755)
+        script = (ROOT / 'tools/build_thermal_codecs.sh').read_text()
+        script = script.replace('05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41',
+                                hashlib.sha256(payload).hexdigest())
+        script = script.replace('https://ffmpeg.org/releases/ffmpeg-$version.tar.xz',
+                                f'http://127.0.0.1:{server.server_port}/ffmpeg.tar.xz')
+        target_script = self.root / 'tools/build_thermal_codecs.sh'
+        target_script.write_text(script)
+        result = subprocess.run(['sh', str(target_script)], env=self.env, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(Handler.requests, 2)
+        archive = root / 'downloads/ffmpeg-8.0.1.tar.xz'
+        self.assertEqual(archive.read_bytes(), payload)
+        self.assertFalse(archive.with_suffix('.xz.tmp').exists())
+        self.assertTrue((root / 'host/lib/libavcodec.a').is_file())
 
     def thermal_submake(self, jobs):
         # Eight outer workers plus four nested workers must share ten slots.

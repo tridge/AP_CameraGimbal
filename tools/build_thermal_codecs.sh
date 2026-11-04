@@ -13,7 +13,9 @@ exec 9>"$root/.lock"
 python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)'
 archive=$root/downloads/ffmpeg-$version.tar.xz
 if [ ! -f "$archive" ]; then
-    curl --fail --location --silent --show-error "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" -o "$archive.tmp"
+    curl --fail --location --silent --show-error \
+        --retry 4 --retry-all-errors --retry-max-time 180 --connect-timeout 20 --max-time 180 \
+        "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" -o "$archive.tmp"
     printf '%s  %s\n' "$sha" "$archive.tmp" | sha256sum -c -
     mv "$archive.tmp" "$archive"
 fi
