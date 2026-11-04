@@ -13,7 +13,12 @@ Install the Python fixture dependencies in a virtual environment with
 `python -m pip install av==18.1.0 numpy`; older distribution PyAV packages may
 lack `add_data_stream`. Use `PYTHON=/path/to/venv/bin/python npx playwright test`
 when that interpreter is not first on PATH.
-The CI workflow uses a virtual parent display and a dedicated Xephyr child.
+Normal push and pull-request CI runs formatting checks, unit tests and the
+production build. Xephyr browser qualification is opt-in: manually run the
+**Video viewer** workflow on the desired branch and enable **Run optional
+Xephyr browser qualification**. That run uses a virtual parent display and a
+dedicated Xephyr child, and uploads its browser results. Browser tests remain
+available locally using the commands below.
 
 Chrome runs visibly inside a dedicated Xephyr X server, default `:99`. Start
 that display separately with a suitable viewport; do not run these tests on
