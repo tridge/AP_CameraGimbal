@@ -180,3 +180,26 @@ still apply. The converter handles raw pixels and file timestamps, and does not
 import any external telemetry sidecar files.
 
 Run the converter regressions with `python3 tests/test_thermal_to_video.py`.
+
+## Camera recordings to MPEG-TS with KLV
+
+`video_to_ts.py` remuxes an H.264/H.265 recording (e.g. a SIYI SD card MP4) to
+MPEG-TS with a MISB ST 0601 KLV set per video frame, reconstructed from an
+ArduPilot dataflash log by the same code as `thermal_to_video.py --bin`. Video
+packets are copied, not re-encoded. The layout matches the camera's MISB
+recorder (`camera_app/src/recording/misb_ts.cpp`): video PID 0x101, synchronous
+metadata on PID 0x102 (stream_type 0x15, ST 1402 descriptors, one AU cell with
+the video frame's PTS), which the web viewer reads as frame telemetry.
+
+```sh
+python3 tools/video_to_ts.py Rec_0006.mp4 Rec_0006.ts --bin 00000019.BIN --gimbal-source siat
+```
+
+SIYI recordings carry no creation time, so the UTC of the first frame defaults
+to the file modification time (when recording stopped) minus the video
+duration; this depends on the camera clock and on copies preserving mtime.
+`--start-utc 2024-11-06T23:47:08.9Z` sets it explicitly and `--time-offset`
+adjusts either. `--hfov` defaults to 84.5 degrees, SIYI's published ZT30
+wide-lens value; use the lens actually recorded. Frames outside the log's
+coverage or in a gimbal log gap keep the fields that are available. Run the
+regressions with `python3 tests/test_video_to_ts.py`.
