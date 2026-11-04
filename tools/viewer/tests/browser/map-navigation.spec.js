@@ -110,13 +110,33 @@ test('map clicks near the video track seek and pause in 2D and 3D, while off-tra
   for (const mode of ['2d', '3d']) {
     await page.locator('#map-' + mode).click();
     await page.evaluate(() => window.fireViewer.map.focus(-35.3192, 148.8416, 3500));
-    await page.waitForTimeout(250);
-    const target = await page.evaluate(() => {
-      const { map, state } = window.fireViewer,
-        point = map.videoTrack.find((p) => p.frameId === state.frames[8].id),
-        screen = map.viewer.scene.cartesianToCanvasCoordinates(point.world);
-      return { x: screen.x, y: screen.y };
-    });
+    // A busy software renderer may not have a 3D camera matrix after 250 ms.
+    // Wait for the route's actual on-screen projection before clicking it.
+    const targetHandle = await page.waitForFunction(
+      () => {
+        const { map, state } = window.fireViewer,
+          scene = map.viewer.scene,
+          point = map.videoTrack.find((p) => p.frameId === state.frames[8].id);
+        scene.requestRender();
+        if (!point) return null;
+        const screen = scene.cartesianToCanvasCoordinates(point.world);
+        if (
+          !screen ||
+          !Number.isFinite(screen.x) ||
+          !Number.isFinite(screen.y) ||
+          screen.x < 10 ||
+          screen.y < 10 ||
+          screen.x > scene.canvas.clientWidth - 10 ||
+          screen.y > scene.canvas.clientHeight - 10
+        )
+          return null;
+        return { x: screen.x, y: screen.y };
+      },
+      null,
+      { timeout: 15_000 },
+    );
+    const target = await targetHandle.jsonValue();
+    await targetHandle.dispose();
     const bounds = await page.locator('#map canvas').first().boundingBox();
     await page.mouse.click(bounds.x + target.x, bounds.y + target.y + 4);
     await page.waitForFunction(
