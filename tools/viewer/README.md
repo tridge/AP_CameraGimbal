@@ -91,7 +91,9 @@ Raw thermal review is substantially faster and retains exact sensor values.
    in Auto and supports manual levels/gamma. A change in display units resets
    the window to Auto. Invalid edits retain the last valid display settings
    while frames continue advancing. These controls never change raw temperature
-   readout, pixel coordinates or peak-finding data.
+   readout, pixel coordinates or peak-finding data. Processed analysis results
+   retain their separate automatic window in score units; the original-image
+   window and gamma controls resume when Compare returns to Original.
 3. **Add a BIN or tlog** when mission/fence context is useful. Plan selection
    defaults to the video pose time; the latest-log overview is explicit. Unknown
    time, unknown home and unconfirmed/incomplete mission uploads are labelled.

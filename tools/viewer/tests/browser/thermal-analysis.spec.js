@@ -134,6 +134,49 @@ test('raw-coordinate ROI, rotation, histogram CSV and raw/result comparison', as
   await screenshot(page, testInfo, 'analysis-roi-log-histogram.png');
 });
 
+test('zoom and raw gamma windows survive processed-score comparison without changing temperatures', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#stretch').selectOption('gamma');
+  await page.locator('#stretch-low').fill('5');
+  await page.locator('#stretch-high').fill('30');
+  await page.locator('#display-gamma').fill('1.7');
+  await page.locator('#palette').selectOption('GloryHot');
+  await page.locator('#video-zoom').selectOption('4');
+  const displayPixel = () =>
+    page.evaluate(() => [
+      ...window.fireViewer.state.image.getContext('2d').getImageData(300, 200, 1, 1).data,
+    ]);
+  const originalDisplay = await displayPixel();
+  const raw = await page.evaluate(() => window.fireViewer.state.decoded.data[30 * 640 + 20]);
+  await apply(page, 'matched');
+  await expect(page.locator('#stretch')).toBeDisabled();
+  await expect(page.locator('#display-gamma')).toBeDisabled();
+  await expect(page.locator('#stretch-low')).toBeDisabled();
+  await expect(page.locator('#stretch-high')).toBeDisabled();
+  await expect(page.locator('#display-note')).toContainText('score units');
+  await expect(page.locator('#video-zoom')).toHaveValue('4');
+  await page.locator('#pixel-x').fill('20');
+  await page.locator('#pixel-y').fill('30');
+  await expect(page.locator('#hover-reading')).toContainText('1.94 °C');
+  expect(await page.evaluate(() => window.fireViewer.state.decoded.data[30 * 640 + 20])).toBe(raw);
+  await page.locator('#analysis-view').selectOption('raw');
+  await expect(page.locator('#stretch')).toBeEnabled();
+  await expect(page.locator('#display-gamma')).toBeEnabled();
+  await expect(page.locator('#stretch')).toHaveValue('gamma');
+  await expect(page.locator('#display-gamma')).toHaveValue('1.7');
+  await expect(page.locator('#stretch-low')).toHaveValue('5');
+  await expect(page.locator('#stretch-high')).toHaveValue('30');
+  expect(await displayPixel()).toEqual(originalDisplay);
+  await page.locator('#frame-input').fill('3');
+  await page.locator('#frame-go').click();
+  await expect(page.locator('#frame-number')).toContainText('Frame 3 / 12');
+  await expect(page.locator('#video-zoom')).toHaveValue('4');
+  await expect(page.locator('#display-gamma')).toHaveValue('1.7');
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+});
+
 test('seeking, cancellation, playback and RGB source replacement discard processed results', async ({
   page,
 }) => {

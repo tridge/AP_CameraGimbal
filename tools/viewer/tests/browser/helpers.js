@@ -87,6 +87,9 @@ export async function seekNumber(page, number) {
 }
 
 export async function pointAt(page, x, y) {
+  // Analysis controls can scroll the video out of the review column's viewport.
+  // Bring it back before calculating a physical mouse position over the bitmap.
+  await page.locator('#video-stage').scrollIntoViewIfNeeded();
   const point = await page.locator('#video-canvas').evaluate(
     (canvas, { x, y }) => {
       const s = window.fireViewer.state,
