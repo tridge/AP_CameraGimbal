@@ -159,6 +159,7 @@ struct ca_mavlink_server {
     uint32_t image_tracking_interval_ms;
     uint64_t last_telemetry_request_ms;
     uint64_t last_target_location_ms;
+    uint64_t last_tracking_rate_ms;
     uint64_t vehicle_attitude_updated_ms;
     uint64_t vehicle_position_updated_ms;
     uint64_t primary_attitude_ms;
@@ -1433,6 +1434,7 @@ static void stop_tracking_rate(struct ca_mavlink_server *server)
         (void)ca_backend_set_gimbal_rates(server->backend, 0, 0);
     if (server->tracking_rate_active) ca_binlog_message("Tracking rate stopped");
     server->tracking_rate_active = false;
+    server->last_tracking_rate_ms = 0;
     memset(server->tracking_error, 0, sizeof(server->tracking_error));
     memset(server->tracking_integral, 0, sizeof(server->tracking_integral));
     memset(server->tracking_rate, 0, sizeof(server->tracking_rate));
@@ -1462,7 +1464,10 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     if (now - server->last_target_location_ms < interval) return;
     int32_t lat, lon;
     float alt, vehicle_yaw, vehicle_yaw_rate, pitch, yaw_earth;
-    const float elapsed = (now - server->last_target_location_ms) * .001f;
+    // Changed ROIs reset the scheduling timer, not the time the last motor
+    // command was held. Use a nominal period only before the first command.
+    const float elapsed = server->last_tracking_rate_ms
+        ? (now - server->last_tracking_rate_ms) * .001f : interval * .001f;
     float dt = fminf(elapsed, .1f);
     server->last_target_location_ms = now;
     if (!current_vehicle_position(server, &lat, &lon, &alt) ||
@@ -1561,6 +1566,7 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     }
     if (ca_backend_set_gimbal_rates(server->backend, command[0], command[1]) == 0) {
         server->tracking_rate_active = true;
+        server->last_tracking_rate_ms = now;
         memcpy(server->tracking_rate, output, sizeof(output));
     } else {
         stop_tracking_rate(server);

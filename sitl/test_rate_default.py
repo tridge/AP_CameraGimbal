@@ -129,6 +129,25 @@ def main():
                 with mcu.lock:
                     assert mcu.gimbal.commanded_rates == (0,0), mcu.gimbal.commanded_rates
                 print('PASS pulse state stops on stale gimbal and vehicle telemetry',flush=True)
+                # Each changed ROI clears the scheduler's last-update sentinel.
+                # Updates faster than the 50 ms control interval must still move
+                # using the actual time since the preceding motor command.
+                with mcu.lock:
+                    mcu.gimbal.yaw, mcu.gimbal.pitch = 20, -30
+                start=time.monotonic(); updates=0
+                while time.monotonic()-start<2:
+                    feed(30+time.monotonic()-start)
+                    link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_SET_ROI_LOCATION,
+                        0, 0, 0, 0, 0, 0, round(target_lat*1e7)+(updates%2), 1490000000, 500)
+                    updates+=1
+                    time.sleep(.02)
+                    while link.recv_match(blocking=False) is not None: pass
+                with mcu.lock:
+                    mcu.gimbal.update()
+                    assert abs(mcu.gimbal.yaw)<10, mcu.gimbal.yaw
+                    assert abs(mcu.gimbal.pitch+45)<8, mcu.gimbal.pitch
+                assert updates>30, updates
+                print('PASS frequent changed ROIs retain Rate motion on both axes',flush=True)
             except Exception:
                 log.flush();print((root/'camera.log').read_text());raise
             finally:
