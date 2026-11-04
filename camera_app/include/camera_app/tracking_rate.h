@@ -12,13 +12,18 @@ struct ca_tracking_rate_pulse {
 static inline float ca_tracking_rate_command(float rate, float minimum, float dt,
                                              ca_tracking_rate_pulse *pulse)
 {
-    if (!std::isfinite(rate) || !std::isfinite(dt) || dt <= 0 || dt > .1f) {
+    if (!std::isfinite(rate)) {
         *pulse = {};
         return 0;
     }
+    // Continuous rates and stops do not depend on a valid integration period.
     if (rate == 0 || !(minimum > 0) || std::fabs(rate) >= minimum) {
         *pulse = {};
         return rate;
+    }
+    if (!std::isfinite(dt) || dt <= 0) {
+        *pulse = {};
+        return 0;
     }
     // Direction changes discard the previous direction's credit/debt. Do not
     // debit a new pulse using a past interval: it will be held until next tick.
@@ -27,8 +32,10 @@ static inline float ca_tracking_rate_command(float rate, float minimum, float dt
     const float direction = std::copysign(1.f, rate);
     // Use the last period only to predict the next pulse length. Any timing
     // error is corrected by accounting for its actual held time on the next call.
-    const float quantum = minimum * dt;
-    const bool moving = direction * pulse->angle + std::fabs(rate) * dt >= quantum * .5f;
+    // Account for a late tick in full, but do not predict another long stall.
+    const float period = std::fmin(dt, .1f);
+    const float quantum = minimum * period;
+    const bool moving = direction * pulse->angle + std::fabs(rate) * period >= quantum * .5f;
     pulse->rate = rate;
     pulse->command = moving ? direction * minimum : 0;
     return pulse->command;
