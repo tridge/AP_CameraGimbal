@@ -291,8 +291,10 @@ a C++ toolchain. No real flight recording is committed. See
 
 ## Video navigation and map height
 
-Use **Video zoom** to magnify the fitted image by 2×, 4× or 8×, and scroll the
-video viewport to inspect a region. **Fit** shows the whole frame again. Zoom is
+Use **Video zoom** to show the image at 1×, 2×, 4× or 8× its source size, and scroll
+the video viewport to inspect a region. At **1×**, one source pixel occupies one
+CSS pixel; numeric zoom stays fixed when the viewport resizes. **Fit** is the
+default and scales the whole frame to the available viewport. Zoom is
 a display operation; raw pixel coordinates, temperatures and exported findings
 are unchanged, including with 180° display rotation.
 
