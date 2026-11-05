@@ -1274,7 +1274,7 @@ $('frame-jump').onsubmit = (event) => {
   pause();
   showFrame(number - 1).catch(error);
 };
-$('video-zoom').onchange = (event) => videoViewport.setZoom(Number(event.target.value));
+$('video-zoom').onchange = (event) => videoViewport.setZoom(event.target.value);
 $('seek').oninput = (e) => {
   pause();
   showFrame(frameAt(state.frames, Number(e.target.value), state.origin));

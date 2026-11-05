@@ -36,15 +36,29 @@ test('video magnification scrolls while raw hover, rotation and findings retain 
   await openFile(page, fixture('thermal.mkv'), { kind: 'gray16' });
   await waitIndexed(page);
   const backing = await page.locator('#video-canvas').evaluate((c) => [c.width, c.height]);
-  for (const zoom of ['2', '4', '8']) {
+  await expect(page.locator('#video-zoom')).toHaveValue('fit');
+  for (const zoom of ['1', '2', '4', '8']) {
     await page.locator('#video-zoom').selectOption(zoom);
-    await expect
-      .poll(() =>
-        page
-          .locator('#video-stage')
-          .evaluate((s) => s.scrollWidth > s.clientWidth && s.scrollHeight > s.clientHeight),
-      )
-      .toBe(true);
+    const displayedSize = () =>
+      page.locator('#video-canvas').evaluate((c) => {
+        const rect = c.getBoundingClientRect();
+        return [rect.width, rect.height];
+      });
+    await expect.poll(displayedSize).toEqual(backing.map((size) => size * Number(zoom)));
+    if (zoom === '1') {
+      await page.setViewportSize({ width: 1000, height: 800 });
+      await expect.poll(displayedSize).toEqual(backing);
+      await page.setViewportSize({ width: 1500, height: 1000 });
+      await expect.poll(displayedSize).toEqual(backing);
+    } else {
+      await expect
+        .poll(() =>
+          page
+            .locator('#video-stage')
+            .evaluate((s) => s.scrollWidth > s.clientWidth && s.scrollHeight > s.clientHeight),
+        )
+        .toBe(true);
+    }
     await hoverRaw(page, 500, 400);
     await expect(page.locator('#pixel-x')).toHaveValue('500');
     await expect(page.locator('#pixel-y')).toHaveValue('400');
@@ -59,7 +73,7 @@ test('video magnification scrolls while raw hover, rotation and findings retain 
     x: 500,
     y: 400,
   });
-  await page.locator('#video-zoom').selectOption('1');
+  await page.locator('#video-zoom').selectOption('fit');
   await expect
     .poll(() =>
       page
