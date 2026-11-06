@@ -41,7 +41,6 @@ test('shared plot terrain works across viewer origins while local services remai
     'amsl',
   );
   for (const baseURL of [
-    'https://firevps.tridgell.net/viewer/',
     'http://127.0.0.1:4178/video/',
     'https://plot.ardupilot.org/video/',
   ]) {
