@@ -19,6 +19,7 @@ import argparse
 import datetime
 import math
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -214,7 +215,9 @@ class TransportWriter:
 
 def parse_utc(value):
     """ISO 8601 time; a time without a zone is UTC. Returns Unix milliseconds."""
-    date = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    # Python 3.10 only accepts 3 or 6 fractional digits
+    value = re.sub(r'(\.\d{1,6})\d*', lambda m: m.group(1).ljust(7, '0'), value.replace('Z', '+00:00'), count=1)
+    date = datetime.datetime.fromisoformat(value)
     if date.tzinfo is None:
         date = date.replace(tzinfo=datetime.timezone.utc)
     return date.timestamp() * 1000.0
