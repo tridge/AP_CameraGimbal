@@ -14,6 +14,7 @@ video's first frame time defaults to its modification time minus its duration.
 import argparse
 import datetime
 import json
+import re
 from pathlib import Path
 import sys
 
@@ -26,7 +27,9 @@ from splat_common import LocalFrame, camera_rotation, fatal, intrinsics  # noqa:
 
 
 def parse_utc(text):
-    t = datetime.datetime.fromisoformat(text.replace('Z', '+00:00'))
+    # Python 3.10 only accepts 3 or 6 fractional digits
+    text = re.sub(r'(\.\d{1,6})\d*', lambda m: m.group(1).ljust(7, '0'), text.replace('Z', '+00:00'), count=1)
+    t = datetime.datetime.fromisoformat(text)
     if t.tzinfo is None:
         t = t.replace(tzinfo=datetime.timezone.utc)
     return t.timestamp()
