@@ -1,0 +1,170 @@
+"""Shared helpers for the thermal Gaussian splat tools."""
+import json
+import math
+import os
+from pathlib import Path
+import site
+import sys
+
+import numpy as np
+
+EARTH_RADIUS = 6378137.0
+# OpenCV camera axes (x right, y down, z forward) expressed in body FRD axes
+R_BODY_CAM = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=float)
+R_ENU_NED = np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]], dtype=float)
+
+
+def setup_cuda_env():
+    """Point torch extensions at the pip CUDA toolkit (nvidia/cu13) if CUDA_HOME is unset."""
+    # the venv's ninja is needed for the JIT build even when the venv is not activated
+    bindir = str(Path(sys.executable).parent)
+    if bindir not in os.environ.get('PATH', '').split(os.pathsep):
+        os.environ['PATH'] = bindir + os.pathsep + os.environ.get('PATH', '')
+    if os.environ.get('CUDA_HOME'):
+        return
+    for base in site.getsitepackages() + [site.getusersitepackages()]:
+        home = Path(base) / 'nvidia' / 'cu13'
+        if (home / 'bin' / 'nvcc').exists():
+            os.environ['CUDA_HOME'] = str(home)
+            os.environ['PATH'] = str(home / 'bin') + os.pathsep + os.environ.get('PATH', '')
+            break
+    if 'TORCH_CUDA_ARCH_LIST' not in os.environ:
+        try:
+            import torch
+            major, minor = torch.cuda.get_device_capability()
+            os.environ['TORCH_CUDA_ARCH_LIST'] = '%d.%d' % (major, minor)
+        except Exception:
+            pass
+
+
+def import_pycolmap():
+    """Import pycolmap-cuda12, first loading the CUDA 12 runtime from the venv's nvidia wheels: the
+    extension finds libcudart.so.12 only via the system library path otherwise."""
+    import ctypes
+    for base in site.getsitepackages() + [site.getusersitepackages()]:
+        for lib in ('cuda_runtime/lib/libcudart.so.12', 'curand/lib/libcurand.so.10'):
+            p = Path(base) / 'nvidia' / lib
+            if p.exists():
+                try:
+                    ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+    import pycolmap
+    return pycolmap
+
+
+def read_mkv_metadata(path):
+    """Yield (index, packet, metadata dict) for each video packet of an APCG thermal mkv."""
+    import av
+    container = av.open(str(path))
+    stream = container.streams.video[0]
+    index = 0
+    for packet in container.demux(stream):
+        if packet.size == 0:
+            continue
+        data = bytes(packet.get_sidedata('matroska_block_additional'))
+        yield index, packet, json.loads(data[8:])
+        index += 1
+    container.close()
+
+
+def decode_frames(path, wanted):
+    """Yield (index, metadata, uint16 HxW array) for frame indices in the set `wanted`."""
+    import av
+    container = av.open(str(path))
+    stream = container.streams.video[0]
+    index = 0
+    last = max(wanted) if wanted else -1
+    for packet in container.demux(stream):
+        if packet.size == 0:
+            continue
+        if index in wanted:
+            data = bytes(packet.get_sidedata('matroska_block_additional'))
+            meta = json.loads(data[8:])
+            for frame in packet.decode():
+                yield index, meta, frame.to_ndarray(format='gray16le')
+        index += 1
+        if index > last:
+            break
+    container.close()
+
+
+def rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+
+def rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
+def rot_z(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+class LocalFrame:
+    """Flat-earth ENU frame about an origin; adequate over a few km."""
+
+    def __init__(self, lat, lon, alt):
+        self.lat, self.lon, self.alt = lat, lon, alt
+        self.coslat = math.cos(math.radians(lat))
+
+    def to_enu(self, lat, lon, alt):
+        n = math.radians(lat - self.lat) * EARTH_RADIUS
+        e = math.radians(lon - self.lon) * EARTH_RADIUS * self.coslat
+        return np.array([e, n, alt - self.alt])
+
+    def to_geodetic(self, enu):
+        lat = self.lat + math.degrees(enu[1] / EARTH_RADIUS)
+        lon = self.lon + math.degrees(enu[0] / (EARTH_RADIUS * self.coslat))
+        return lat, lon, self.alt + enu[2]
+
+
+def camera_rotation(telemetry):
+    """World(ENU)-from-camera rotation from APCG telemetry (gimbal roll/pitch level, yaw vehicle-relative)."""
+    g = telemetry.get('gimbal_attitude') or {}
+    yaw = telemetry['vehicle_attitude']['yaw_rad'] + g.get('yaw_rad', 0.0)
+    r_ned_body = rot_z(yaw) @ rot_y(g.get('pitch_rad', 0.0)) @ rot_x(g.get('roll_rad', 0.0))
+    return R_ENU_NED @ r_ned_body @ R_BODY_CAM
+
+
+def intrinsics(width, height, hfov_deg):
+    f = (width / 2) / math.tan(math.radians(hfov_deg) / 2)
+    return np.array([[f, 0, width / 2], [0, f, height / 2], [0, 0, 1.0]])
+
+
+def triangulate_rays(centres, dirs, focal, iterations=5):
+    """Robust least-squares intersection of rays; returns (point, median error in pixels)."""
+    weights = np.ones(len(centres))
+    for _ in range(iterations):
+        A = np.zeros((3, 3))
+        b = np.zeros(3)
+        for w, c, d in zip(weights, centres, dirs):
+            P = np.eye(3) - np.outer(d, d)
+            A += w * P
+            b += w * P @ c
+        X = np.linalg.solve(A, b)
+        err = np.array([np.linalg.norm((np.eye(3) - np.outer(d, d)) @ (X - c)) / np.linalg.norm(X - c)
+                        for c, d in zip(centres, dirs)]) * focal
+        scale = max(np.median(err), 5.0)
+        weights = 1 / (1 + (err / (2 * scale)) ** 2)
+    return X, float(np.median(err))
+
+
+def raw_to_celsius(raw, meta):
+    scale = meta.get('temperature_scale_k', 1 / 64)
+    offset = meta.get('temperature_offset_k', 0)
+    return raw.astype(np.float32) * scale + offset - 273.15
+
+
+def upright(image, meta):
+    """Rotate a frame by its display rotation so it is upright."""
+    k = (meta.get('rotation_deg', 0) // 90) % 4
+    return np.rot90(image, k) if k else image
+
+
+def fatal(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
