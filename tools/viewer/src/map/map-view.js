@@ -12,6 +12,7 @@ import {
   CesiumTerrainProvider,
   OpenStreetMapImageryProvider,
   UrlTemplateImageryProvider,
+  DiscardMissingTileImagePolicy,
   Google2DImageryProvider,
   PolylineDashMaterialProperty,
   HeightReference,
@@ -297,6 +298,24 @@ export class ReviewMap {
           provider = new UrlTemplateImageryProvider({
             url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             credit: 'Esri, Maxar, Earthstar Geographics',
+            maximumLevel: 23,
+            enablePickFeatures: false,
+            // Esri returns HTTP-200 placeholder JPEGs beyond local coverage.
+            // Match the same reference tile/pixels as Cesium's ArcGIS provider
+            // so it retains valid ancestor imagery. Avoid a metadata request:
+            // imagery outages must not prevent terrain/datum configuration.
+            tileDiscardPolicy: new DiscardMissingTileImagePolicy({
+              missingImageUrl:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/23/0/0',
+              pixelsToCheck: [
+                [0, 0],
+                [200, 20],
+                [20, 200],
+                [80, 110],
+                [160, 130],
+              ].map(([x, y]) => new Cartesian2(x, y)),
+              disableCheckIfAllPixelsAreTransparent: true,
+            }),
           });
         if (validated.imagery === 'google')
           provider = await Google2DImageryProvider.fromUrl({
