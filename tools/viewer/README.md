@@ -205,7 +205,10 @@ window.VIEWER_CONFIG = {
 };
 ```
 
-Esri satellite imagery is the default. Map tile requests reveal the viewport to
+Esri satellite imagery is the default. Where detailed imagery is unavailable,
+zooming in retains the nearest available imagery instead of showing the provider's
+"Map data not yet available" tiles. This works in both 2D and 3D.
+Map tile requests reveal the viewport to
 the selected imagery provider, including the aircraft area once a video is opened.
 No file bytes are sent. OpenStreetMap and an offline globe are selectable. Google imagery uses the
 [Google2DImageryProvider Map Tiles API](https://cesium.com/learn/cesiumjs/ref-doc/Google2DImageryProvider.html).

@@ -144,6 +144,11 @@ editable-field and browser-shortcut handling, and zoom retention during Follow.
 Its moving partial-footprint test reads rendered yellow pixels in 2D/3D to detect
 the asynchronous geometry flicker that entity visibility flags cannot reveal.
 
+`imagery-fallback.spec.js` serves an ArcGIS tile fixture with HTTP-200 missing
+images above local coverage. Rendered pixels verify parent imagery remains
+visible in 2D/3D while detailed imagery still loads elsewhere. An imagery outage
+case checks that terrain and geoid offset settings still apply.
+
 video-projection.spec.js checks the default-off Project video checkbox beside
 2D/3D, reads rendered quadrant colors to catch flipped texture coordinates in
 both modes, and verifies frame/palette updates, stale-pose hiding and resource
