@@ -1,10 +1,18 @@
-# Video flight review
+# <img src="../../assets/camera-gimbal.svg" alt="" width="40" height="40"> Video flight review
 
 A local-file web viewer for reviewing AP_CameraGimbal imagery and investigating
 thermal observations. It runs as a static site: videos, logs, raw thermal pixels
 and findings stay in the browser. There is no upload endpoint or video backend.
 A video alone supplies playback, embedded telemetry and its aircraft track.
 Optional flight logs add the mission, geofences, home and actual flight track.
+
+Click **ⓘ** beside the filename above the image for **Video information**. The
+popup shows codec and dimensions, average/nominal frame rates and timing gaps,
+duration, payload rate, decoder, telemetry formats/coverage, source clocks,
+thermal calibration and indexing diagnostics. Expand **All available metadata**
+or download its JSON for the full parsed track/current-frame metadata, including
+codec headers and provenance. Statistics update while indexing; unknown values
+stay unavailable. Opening the popup pauses playback for a stable frame snapshot.
 
 ## Run locally
 
@@ -49,6 +57,14 @@ precision. KLV checksums and invalid sentinels are checked; unavailable values
 stay unavailable. Standard full-range tags 90/91 supersede legacy pitch/roll
 fields, including when explicitly invalid. Existing raw thermal archives from
 `tools/thermal_to_video.py` retain native uint16 pixels and calibration.
+
+Synchronous KLV retains exact video-PTS association. Asynchronous KLV uses the
+nearest available transport timestamp, allowing a snapshot to trail by at most
+two seconds or lead by at most half a video frame (capped at 100 ms). Its pose
+ages include the timing difference; recorded KLV UTC is preserved. Legacy
+SCAR recordings with incorrectly unmarked complete metadata cells are accepted
+only when the entire cell contains one checksum-valid local set. These files
+show a compatibility diagnostic and an approximate-association timing label.
 
 The container index is incremental and uses bounded `File.slice()` reads.
 Playback begins before the full telemetry scan finishes. A malformed tail keeps
@@ -133,6 +149,16 @@ The **Follow** checkbox below the map is enabled by default. It centres on the
 current video's aligned aircraft position while preserving zoom and 3D camera
 orientation. Uncheck it to pan and inspect a fixed area; **Center** recentres
 once without enabling Follow. Dragging temporarily suspends automatic movement.
+
+The **Project video** checkbox beside **2D / 3D** places the current video image
+onto the terrain in either map mode. It starts off. The projection follows frame
+stepping, playback, the selected palette/contrast and applied thermal processing.
+It uses the same aligned camera pose, FOV and terrain intersections as pixel
+picking, sampled across a grid rather than stretched over four corners. Sky and
+unavailable terrain leave gaps; the status below the map explains missing or
+partial coverage. Stale or missing poses hide the image. Display rotation and
+video zoom affect presentation only; projected raw pixels keep the same ground
+locations as the pixel inspector. No video frames are sent to the map provider.
 
 Use the map's **+ / −** buttons, or keyboard **+ / −** (also **=** and numpad
 keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also work

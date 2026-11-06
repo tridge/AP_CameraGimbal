@@ -111,9 +111,9 @@ small {
   gap: 12px;
 }
 .brand-mark {
-  font-size: 35px;
-  color: var(--accent);
-  text-shadow: 0 0 22px #ff9a3d40;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
 }
 .brand p {
   font-size: 12px;
@@ -158,6 +158,28 @@ small {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+.video-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.video-panel > .panel-heading {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.video-info-button {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 50%;
+  font:
+    bold 14px Georgia,
+    serif;
+  color: var(--accent);
 }
 .video-stage {
   height: clamp(300px, 42vh, 590px);
@@ -384,6 +406,26 @@ kbd {
 .map-heading h2 {
   font-size: 13px;
 }
+.map-panel > .panel-heading {
+  flex-wrap: wrap;
+}
+.map-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.map-projection-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.projection-note {
+  margin: 0;
+  padding: 7px 10px;
+}
 .segmented {
   display: flex;
   gap: 0;
@@ -589,6 +631,55 @@ dialog textarea {
   display: flex;
   justify-content: flex-end;
   gap: 7px;
+}
+#video-info-dialog {
+  width: min(850px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+#video-info-dialog .dialog-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 0;
+  background: #172834;
+}
+.video-info-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 18px 24px;
+}
+.video-info-content h3 {
+  margin: 4px 0 12px;
+  font-size: 13px;
+  color: var(--mint);
+}
+.video-info-content dl {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 1.2fr);
+  gap: 7px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.video-info-content dt {
+  color: var(--muted);
+}
+.video-info-content dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.video-info-raw {
+  margin: 20px 0;
+  font-size: 12px;
+}
+.video-info-raw pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
 }
 .cesium-viewer-bottom {
   font-size: 10px;

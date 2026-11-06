@@ -305,11 +305,35 @@ export function parseMetadataPES(data, options) {
   while (at + 5 <= data.length) {
     const flags = data[at + 2],
       size = data[at + 3] * 256 + data[at + 4];
-    if (at + 5 + size > data.length || (flags & 0xc0) !== 0xc0) break;
+    if (at + 5 + size > data.length) break;
     // H.222.0 (10/2014), Tables 2-108/109: bits 7..6 identify a
     // complete AU; bit 5 signals decoder configuration, not fragmentation.
     // Configuration-bearing AUs need format-specific handling and are skipped.
-    if (!(flags & 0x20)) result.push(...parseKLV(data.subarray(at + 5, at + 5 + size), options));
+    if (!(flags & 0x20)) {
+      const payload = data.subarray(at + 5, at + 5 + size);
+      if ((flags & 0xc0) === 0xc0) result.push(...parseKLV(payload, options));
+      else if (flags === 0x0f && equal(payload.subarray(0, 16), UAS_KEY)) {
+        // Some legacy recordings (including WESCAM SCAR) mark every standalone
+        // set as a middle fragment. Accept only one complete, checksum-valid
+        // local set occupying the entire cell; never join or scan fragments.
+        try {
+          const [length, value] = ber(payload, 16);
+          if (value + length === payload.length) {
+            const records = parseKLV(payload, options);
+            if (records.length === 1)
+              result.push({
+                ...records[0],
+                provenance: {
+                  ...records[0].provenance,
+                  klv_au_cell_compatibility: 'unmarked-complete-cell',
+                },
+              });
+          }
+        } catch {
+          // An incomplete/invalid fragment remains unavailable.
+        }
+      }
+    }
     at += 5 + size;
   }
   return result;

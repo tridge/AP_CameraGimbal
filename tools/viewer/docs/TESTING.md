@@ -6,6 +6,12 @@ Run from `tools/viewer`. The tests use the built application at
 `http://127.0.0.1:5173/viewer/` for development. Qualification should finish
 against the production build.
 
+video-info.spec.js checks the project artwork against the canonical SVG, the
+information button beside the filename, thermal/encoded-video metadata and JSON
+export, dialog keyboard focus, filename escaping and a 390 px mobile layout.
+Domain tests verify measured/nominal rates, variable timing, telemetry coverage,
+missing values and lossless metadata serialization without touching video pixels.
+
 Install Xephyr, ImageMagick (the `import` command), Python with NumPy/PyAV,
 and FFmpeg with libx264 before running browser tests. On Debian/Ubuntu the
 system packages are `xserver-xephyr imagemagick ffmpeg python3-venv`.
@@ -137,6 +143,22 @@ keyboard +/− input. map-zoom-footprint.spec.js covers ordinary/numpad keys,
 editable-field and browser-shortcut handling, and zoom retention during Follow.
 Its moving partial-footprint test reads rendered yellow pixels in 2D/3D to detect
 the asynchronous geometry flicker that entity visibility flags cannot reveal.
+
+video-projection.spec.js checks the default-off Project video checkbox beside
+2D/3D, reads rendered quadrant colors to catch flipped texture coordinates in
+both modes, and verifies frame/palette updates, stale-pose hiding and resource
+cleanup. Domain tests cover sloping terrain, raw image edges, partial horizons
+and missing terrain without a flat fallback.
+Set VIEWER_PROJECT_VIDEO to a local recording, VIEWER_PROJECT_FRAME to a frame
+index, and VIEWER_PROJECT_TERRAIN_URL to a quantized-mesh URL to opt into the
+real-terrain case. It captures 2D/3D screenshots and compares rendered pixels
+with the projection hidden to verify the frame remains visible on terrain.
+
+Set VIEWER_SCAR_VIDEO to the original SCAR-2016-11-16-153822_IR.ts to enable
+scar-telemetry.spec.js. It checks the first decoded pose and its independent
+PTS offset, pose coverage throughout indexing, and projection at 40 seconds in
+both map modes. Unit vectors additionally reject invalid/truncated legacy cells
+and cover timestamp wrap, B-frame order, metadata dropouts and discontinuities.
 
 Thermal analysis qualification adds `thermal-analysis.spec.js`: all processing
 methods, raw/processed histograms, ROI and180° rotation, CSV and finding

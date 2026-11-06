@@ -1006,10 +1006,13 @@ async function* tsFrames(source) {
     emittedOrder = [],
     queue = [],
     pmtPids = new Set(),
-    streamTypes = new Map();
+    streamTypes = new Map(),
+    asynchronousPids = new Set();
   let clock = null,
     start = 0,
-    lastVideo = null;
+    lastVideo = null,
+    asynchronousRecords = 0,
+    asynchronousMatches = 0;
   const probe = await reader.read(0, Math.min(188 * 6, source.file.size));
   while (
     start < Math.min(188, probe.length) &&
@@ -1064,7 +1067,13 @@ async function* tsFrames(source) {
               annexB: true,
               nalLengthSize: 0,
             });
-        } else if ((type === 0x15 || type === 6) && klva) streamTypes.set(id, 'klv');
+        } else if ((type === 0x15 || type === 6) && klva) {
+          streamTypes.set(id, 'klv');
+          // ST1402 synchronous metadata (0x15) belongs to an exact video PTS.
+          // Private-data KLV (0x06) has its own sampling/presentation times.
+          if (type === 6) asynchronousPids.add(id);
+          else asynchronousPids.delete(id);
+        }
         at += 5 + size;
       }
     }
@@ -1140,11 +1149,20 @@ async function* tsFrames(source) {
       const errors = [],
         records = parseMetadataPES(data, { errors });
       errors.forEach(warn);
-      if (records.length && emittedTicks.has(pts))
+      const legacyCell = records.at(-1)?.provenance?.klv_au_cell_compatibility,
+        asynchronous = asynchronousPids.has(pid) || !!legacyCell;
+      if (legacyCell)
+        warn(
+          'Legacy KLV cell fragment flags: validated complete sets use approximate timestamp association',
+        );
+      if (records.length && !asynchronous && emittedTicks.has(pts))
         warn(
           'Late KLV arrived after its video frame was emitted; telemetry not retroactively applied',
         );
-      else if (records.length) metadata.set(pts, records.at(-1));
+      else if (records.length) {
+        metadata.set(pts, { record: records.at(-1), asynchronous, pid });
+        if (asynchronous) asynchronousRecords++;
+      }
       while (metadata.size > 4096) metadata.delete(metadata.keys().next().value);
       return;
     }
@@ -1192,19 +1210,69 @@ async function* tsFrames(source) {
     lastVideo = frame;
     queue.push(frame);
   }
+  function selectMetadata(frame) {
+    const exact = metadata.get(frame.timestampTicks);
+    if (exact) return { tick: frame.timestampTicks, entry: exact };
+    // Retain the nearest available asynchronous sample for at most the same
+    // two-second freshness window as camera poses. A sample may lead by half
+    // a video frame, covering quantisation/mux jitter at the start of a clip.
+    const duration =
+        frame.duration ?? source.tracks.find((t) => t.id === frame.trackId)?.defaultDuration ?? 0,
+      lead = Math.max(0, Math.min(0.1, duration / 2)) * 90000;
+    let best = null,
+      distance = Infinity;
+    for (const [tick, entry] of metadata) {
+      if (!entry.asynchronous) continue;
+      const offset = frame.timestampTicks - tick;
+      if (offset < -lead || offset > 180000) continue;
+      const delta = Math.abs(offset);
+      if (delta < distance || (delta === distance && tick < best.tick)) {
+        best = { tick, entry };
+        distance = delta;
+      }
+    }
+    return best;
+  }
+  function discardAsynchronous(pid) {
+    for (const [tick, entry] of metadata)
+      if (entry.asynchronous && (pid === undefined || entry.pid === pid)) metadata.delete(tick);
+  }
   function attach(frame) {
     emittedTicks.add(frame.timestampTicks);
     emittedOrder.push(frame.timestampTicks);
     if (emittedOrder.length > 4096) emittedTicks.delete(emittedOrder.shift());
-    const klv = metadata.get(frame.timestampTicks);
-    if (klv) {
-      frame.klvTelemetry = normalizeTelemetry(klv, { format: 'misb-klv', container: 'mpegts' });
+    const match = selectMetadata(frame);
+    if (match) {
+      const { tick, entry } = match;
+      let record = entry.record;
+      const provenance = { format: 'misb-klv', container: 'mpegts' };
+      if (entry.asynchronous) {
+        asynchronousMatches++;
+        const offsetMs = (frame.timestampTicks - tick) / 90;
+        // Every reused snapshot gets its own ages; never mutate the original
+        // sample or advance its recorded UTC to an invented exposure time.
+        record = { ...record };
+        for (const key of ['position', 'vehicle_attitude', 'gimbal_attitude', 'velocity'])
+          if (record[key] && Number.isFinite(record[key].age_ms))
+            record[key] = { ...record[key], age_ms: record[key].age_ms + Math.abs(offsetMs) };
+        provenance.association = 'nearest-pts';
+        provenance.metadata_pts = tick / 90000;
+        provenance.metadata_offset_ms = offsetMs;
+        record.time_alignment = {
+          ...record.time_alignment,
+          basis: 'KLV; approximate transport timestamp association',
+        };
+      } else metadata.delete(tick);
+      frame.klvTelemetry = normalizeTelemetry(record, provenance);
       if (!frame.telemetry) frame.telemetry = frame.klvTelemetry;
-      metadata.delete(frame.timestampTicks);
     }
     frame.duration ??= source.tracks.find((t) => t.id === frame.trackId)?.defaultDuration ?? null;
     // Bound unmatched metadata in damaged or metadata-only streams.
     while (metadata.size > 4096) metadata.delete(metadata.keys().next().value);
+    const earliest =
+      queue.reduce((tick, f) => Math.min(tick, f.timestampTicks), frame.timestampTicks) - 180000;
+    for (const [tick, entry] of metadata)
+      if (entry.asynchronous && tick < earliest) metadata.delete(tick);
     return frame;
   }
   let advertised = false;
@@ -1213,6 +1281,7 @@ async function* tsFrames(source) {
     source.position = offset + 188;
     if (packet[0] !== 0x47) {
       pending.clear();
+      discardAsynchronous();
       sections.clear();
       continuity.clear();
       const scan = await reader.read(offset, Math.min(188 * 18, source.file.size - offset));
@@ -1244,6 +1313,7 @@ async function* tsFrames(source) {
       discontinuity = false;
     if (!control || packet[1] & 128 || packet[3] & 192) {
       pending.delete(pid);
+      discardAsynchronous(pid);
       sections.delete(pid);
       warn('Damaged or scrambled MPEG-TS packet');
       continue;
@@ -1261,12 +1331,17 @@ async function* tsFrames(source) {
     const previous = continuity.get(pid);
     if (discontinuity) {
       pending.delete(pid);
+      // A video clock discontinuity invalidates all held KLV; a metadata
+      // discontinuity invalidates that stream's snapshots only.
+      if (streamTypes.get(pid) === 'klv') discardAsynchronous(pid);
+      else if (typeof streamTypes.get(pid) === 'number') discardAsynchronous();
       sections.delete(pid);
       continuity.delete(pid);
     } else if (previous !== undefined && cc === previous)
       continue; // Repeated packet.
     else if (previous !== undefined && cc !== (previous + 1) % 16) {
       pending.delete(pid);
+      discardAsynchronous(pid);
       sections.delete(pid);
       warn('MPEG-TS continuity gap; incomplete PES discarded');
     }
@@ -1287,6 +1362,16 @@ async function* tsFrames(source) {
         } else {
           state.parts.push(payload);
           state.end = offset + 188;
+          // Sparse asynchronous metadata need not wait for the next metadata
+          // PES (which may never arrive) before becoming available to video.
+          if (streamTypes.get(pid) === 'klv') {
+            if (state.pesBytes === undefined && state.size >= 6) {
+              const header = state.parts[0].length >= 6 ? state.parts[0] : concat(state.parts);
+              const size = u16(header, 4);
+              state.pesBytes = size ? 6 + size : 0;
+            }
+            if (state.pesBytes && state.size >= state.pesBytes) finishPES(pid);
+          }
         }
       }
     }
@@ -1303,7 +1388,7 @@ async function* tsFrames(source) {
       if (
         expectsKLV &&
         !first.telemetry &&
-        !metadata.has(first.timestampTicks) &&
+        !selectMetadata(first) &&
         queue.length <= 180 &&
         clock / 90000 - first.dts <= 2
       )
@@ -1314,7 +1399,10 @@ async function* tsFrames(source) {
   if ((source.file.size - start) % 188) warn('Truncated final MPEG-TS packet');
   for (const pid of [...pending.keys()]) finishPES(pid);
   while (queue.length) yield attach(queue.shift());
-  if (metadata.size) warn('Unmatched KLV remained after the final video frame');
+  if ([...metadata.values()].some((entry) => !entry.asynchronous))
+    warn('Unmatched KLV remained after the final video frame');
+  if (asynchronousRecords && !asynchronousMatches)
+    warn('Asynchronous KLV could not be associated with video within the freshness window');
   if (!source.tracks.length) throw new Error('No AVC/HEVC MPEG-TS track advertised');
 }
 

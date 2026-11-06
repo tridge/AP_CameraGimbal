@@ -1,4 +1,4 @@
-# AP_CameraGimbal
+# <img src="assets/camera-gimbal.svg" alt="" width="40" height="40"> AP_CameraGimbal
 
 AP_CameraGimbal is an firmware for camera/gimbal devices. It provides
 MAVLink Camera Protocol v2, MAVLink Gimbal Protocol v2 and vendor
