@@ -387,6 +387,12 @@ function tsFixture({
   repeats = 5,
   largePayload = false,
   delayMetadata = false,
+  asynchronous = false,
+  metadataOffset = 0,
+  metadataEvery = 1,
+  metadataCount = Infinity,
+  metadataDiscontinuity = -1,
+  metadataFlags = 0xdf,
 } = {}) {
   const pat = section(Uint8Array.of(0, 0, 0, 0, 1, 0xc1, 0, 0, 0, 1, 0xf0, 0));
   const pmt = section(
@@ -408,7 +414,7 @@ function tsFixture({
       1,
       0xf0,
       0,
-      0x15,
+      asynchronous ? 6 : 0x15,
       0xe1,
       2,
       0xf0,
@@ -424,7 +430,7 @@ function tsFixture({
   const klv = hex(
     '060e2b34020b01010e0103010100000069020800065f1ab5f649f10b044d5431310c0e47656f64657469632057475338340d04cdd211ec0e0469f59be40f0213110502071c06020000070200005a04000000005b04000000001002226b1102138f1204000000001304eaaaaaa114040000000041010801020fc2',
   );
-  const cell = join(Uint8Array.of(0, 0, 0xdf, 0, klv.length), klv);
+  const cell = join(Uint8Array.of(0, 0, metadataFlags, 0, klv.length), klv);
   const video = Uint8Array.of(0, 0, 1, 9, 0xf0, 0, 0, 1, 0x65, 0x80);
   const packets = [
     tsPacket(0, join(Uint8Array.of(0), pat)),
@@ -457,11 +463,17 @@ function tsFixture({
       data[5] = (data.length - 6) & 255;
     }
     const v = packetize(257, data, gap && i === 1 ? 3 : videoCC),
-      m = packetize(
-        258,
-        pes(0xfc, bFrames ? 2 ** 33 - 6000 + [6000, 12000, 9000, 18000, 15000][i] : time, cell),
-        metadataCC,
-      );
+      metadataTime =
+        (bFrames ? 2 ** 33 - 6000 + [6000, 12000, 9000, 18000, 15000][i] : time) + metadataOffset,
+      m =
+        i % metadataEvery === 0 && i < metadataCount
+          ? packetize(
+              258,
+              pes(asynchronous ? 0xbd : 0xfc, metadataTime, asynchronous ? klv : cell),
+              metadataCC,
+            )
+          : [];
+    if (i === metadataDiscontinuity && m.length && m[0][4]) m[0][5] |= 128;
     videoCC += v.length;
     metadataCC += m.length;
     if (delayMetadata) {
@@ -651,6 +663,96 @@ test('TS inserted byte resynchronizes in bounded window and late KLV is diagnose
   const late = (await indexAll(new Blob([tsFixture({ delayMetadata: true, repeats: 100 })])))
     .source;
   assert.ok(late.warnings.some((w) => /Late KLV/.test(w)));
+});
+
+test('asynchronous KLV tolerates sub-frame mux jitter before/after video across PTS wrap', async () => {
+  for (const metadataAfter of [false, true])
+    for (const metadataOffset of [-450, 450]) {
+      const { source } = await indexAll(
+        new Blob([tsFixture({ asynchronous: true, metadataAfter, metadataOffset })]),
+      );
+      assert.equal(source.frames.length, 5);
+      for (const frame of source.frames) {
+        assert.ok(frame.telemetry?.position);
+        assert.equal(frame.telemetry.utc_us, 1793418186869233);
+        assert.equal(frame.telemetry.provenance.association, 'nearest-pts');
+        assert.ok(Math.abs(frame.telemetry.provenance.metadata_offset_ms) <= 5);
+        assert.ok(frame.telemetry.position.age_ms <= 5);
+        assert.equal(
+          frame.telemetry.position.age_ms,
+          Math.abs(frame.telemetry.provenance.metadata_offset_ms),
+        );
+      }
+      assert.deepEqual(source.warnings, []);
+    }
+});
+
+test('synchronous KLV still requires exact matching PTS', async () => {
+  const { source } = await indexAll(new Blob([tsFixture({ metadataOffset: 450 })]));
+  assert.ok(source.frames.every((f) => !f.telemetry));
+  assert.ok(source.warnings.some((w) => /Unmatched KLV/.test(w)));
+});
+
+test('legacy unmarked complete KLV cells use validated, approximate timestamp association', async () => {
+  const { source } = await indexAll(
+    new Blob([tsFixture({ metadataFlags: 0x0f, metadataOffset: 450 })]),
+  );
+  assert.ok(source.frames.every((f) => f.telemetry?.position.age_ms === 5));
+  assert.equal(
+    source.frames[0].telemetry.provenance.klv_au_cell_compatibility,
+    'unmarked-complete-cell',
+  );
+  assert.equal(source.frames[0].telemetry.provenance.association, 'nearest-pts');
+  assert.ok(source.warnings.some((w) => /Legacy KLV/.test(w)));
+});
+
+test('sparse asynchronous snapshots age independently and expire without waiting for another PES', async () => {
+  const { source } = await indexAll(
+    new Blob([tsFixture({ asynchronous: true, repeats: 100, metadataCount: 1 })]),
+  );
+  const initial = source.frames[0],
+    near = source.frames[30],
+    stale = source.frames.at(-1);
+  assert.equal(initial.telemetry.position.age_ms, 0);
+  assert.ok(Math.abs(near.telemetry.position.age_ms - 1000) < 1e-6);
+  assert.equal(
+    initial.telemetry.position.age_ms,
+    0,
+    'reusing a snapshot must not mutate its earlier frame',
+  );
+  assert.equal(stale.telemetry, null);
+  assert.ok(source.frames.filter((f) => f.telemetry).length > 50);
+});
+
+test('asynchronous matching respects reordered B-frame presentation times and bounded leading samples', async () => {
+  const { source } = await indexAll(
+    new Blob([tsFixture({ asynchronous: true, bFrames: true, metadataOffset: 450 })]),
+  );
+  assert.ok(source.frames.every((f) => f.telemetry?.position.age_ms === 5));
+  const leading = (
+    await indexAll(
+      new Blob([tsFixture({ asynchronous: true, metadataOffset: 9000, metadataCount: 1 })]),
+    )
+  ).source;
+  assert.equal(leading.frames[0].telemetry, null);
+  assert.equal(leading.frames[1].telemetry, null);
+  assert.ok(leading.frames[3].telemetry);
+});
+
+test('metadata discontinuities invalidate held asynchronous snapshots', async () => {
+  const { source } = await indexAll(
+    new Blob([
+      tsFixture({
+        asynchronous: true,
+        repeats: 20,
+        metadataEvery: 10,
+        metadataDiscontinuity: 10,
+        metadataOffset: 9000,
+      }),
+    ]),
+  );
+  assert.equal(source.frames[11].telemetry, null);
+  assert.ok(source.frames[14].telemetry);
 });
 
 test('MP4 edit intervals hide preroll and postroll but retain decode packets, including fragments', async () => {

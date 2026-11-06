@@ -56,6 +56,15 @@ null. MISB is converted to this schema; co-carried APCG takes precedence. KLV
 presence and validity remain separately identifiable. Thermal metadata retains
 the outer `apcg.thermal.v1` object and explicit raw calibration.
 
+TS stream type 0x15 uses exact PTS matching for conforming complete metadata
+cells. Type 0x06 and legacy unmarked but independently validated complete cells
+use nearest available PTS with a two-second trailing/half-frame leading window
+(the latter capped at 100 ms). Reused component ages include the absolute timing
+difference, while original metadata UTC stays unchanged. The association and
+signed time difference are provenance. Held snapshots are bounded and cleared
+on relevant transport discontinuities. Sparse metadata PES are completed when
+their declared lengths arrive, without waiting for another metadata packet.
+
 Keep three axes: container playback time, recorded source UTC, and corrected
 pose-selection UTC. `PoseTimeline` looks up/interpolates valid embedded pose;
 clock anchors never rewrite video packets or labels. Per-file offset and anchors
@@ -85,6 +94,16 @@ frame/pose before awaiting terrain, discards results after file replacement,
 and rejects a terrain-configuration change. No flat fallback is invented.
 Display rotation transforms drawing and pointer conversion only; findings store
 raw pixels and the projection rotation hypothesis.
+
+Optional video projection samples a bounded 16×16 grid across the raw image
+plane through the same ElevationModel.project calls. Triangles touching missing
+intersections are omitted. A textured Cesium mesh uses the resolved AMSL heights
+and the current map datum in both 2D/3D, with a small surface offset to avoid
+z fighting. The texture comes from the rendered, unrotated image before review
+annotations or viewport zoom. Texture storage is reused for successive frames;
+geometry is reused until pose, FOV, image dimensions or terrain change. Terrain
+completion invalidates the current mesh. Disabling, file replacement and viewer
+closure release the projection's GPU resources.
 
 The map model owns aircraft, track, footprint, hovered ground point, mission,
 fences and findings. Both 2D and 3D share the same entities. Route segments come

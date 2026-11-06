@@ -2,6 +2,7 @@ import './ui/style.css';
 import { layout } from './ui/layout.js';
 import { ThermalWorkbench } from './ui/thermal-workbench.js';
 import { VideoViewport } from './ui/video-viewport.js';
+import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
 import { FrameDecoder } from './media/native-decoder.js';
 import { selectLogAt } from './domain/flight-log.js';
@@ -29,6 +30,7 @@ import {
 } from './domain/thermal.js';
 
 document.querySelector('#app').innerHTML = layout();
+document.querySelector('link[rel="icon"]').href = document.querySelector('.brand-mark').src;
 const $ = (id) => document.getElementById(id);
 const elevation = new ElevationModel(),
   poseTimeline = new PoseTimeline();
@@ -64,6 +66,7 @@ const state = {
   indexed: false,
   indexPercent: 0,
   indexFailed: false,
+  indexError: null,
   requestedNumber: null,
   requestedFrameId: null,
   initialFrameId: null,
@@ -79,6 +82,40 @@ const state = {
 };
 let map = null;
 let terrainRefresh = null;
+let videoInfoRefresh = null;
+function refreshVideoInformation() {
+  const report = videoInformation(state, alignedRecord());
+  $('video-info-index-note').textContent = state.indexFailed
+    ? 'Indexing stopped early. Counts, rates and coverage describe the available prefix.'
+    : state.indexed
+      ? 'Rates and telemetry coverage describe the indexed video. File timestamps and recorded telemetry UTC are separate.'
+      : 'Indexing is in progress. Counts, rates and coverage update as more frames become available.';
+  $('video-info-content').replaceChildren(
+    ...report.sections.map(({ title, rows }) => {
+      const section = document.createElement('section'),
+        heading = document.createElement('h3'),
+        list = document.createElement('dl');
+      heading.textContent = title;
+      for (const [label, value] of rows) {
+        const term = document.createElement('dt'),
+          detail = document.createElement('dd');
+        term.textContent = label;
+        detail.textContent = value;
+        list.append(term, detail);
+      }
+      section.append(heading, list);
+      return section;
+    }),
+  );
+  $('video-info-json').textContent = metadataJSON(report.raw);
+}
+function queueVideoInformation() {
+  if (!$('video-info-dialog').open || videoInfoRefresh !== null) return;
+  videoInfoRefresh = setTimeout(() => {
+    videoInfoRefresh = null;
+    if (!state.closed && $('video-info-dialog').open) refreshVideoInformation();
+  }, 250);
+}
 function terrainChanged() {
   if (terrainRefresh !== null) return;
   terrainRefresh = setTimeout(() => {
@@ -293,6 +330,7 @@ function videoIndexSummary() {
   const percent = !state.indexed || state.indexFailed ? `${state.indexPercent}% · ` : '';
   $('video-format').textContent =
     `${format} · ${percent}${state.frames.length.toLocaleString()} frames${state.indexFailed ? ' · incomplete' : ''}`;
+  queueVideoInformation();
 }
 function progress(batch) {
   const p = batch.progress || {};
@@ -382,6 +420,7 @@ async function openVideo(file) {
   state.indexed = false;
   state.indexPercent = 0;
   state.indexFailed = false;
+  state.indexError = null;
   state.requestedNumber = null;
   state.requestedFrameId = null;
   state.initialFrameId = null;
@@ -397,10 +436,13 @@ async function openVideo(file) {
   $('telemetry-fields').replaceChildren(...field('Recorded UTC', '—'), ...field('Position', '—'));
   state.seekGeneration++;
   map?.clear();
+  updateVideoProjection();
   updateTrackLegend();
   $('video-canvas').hidden = true;
   $('empty-video').hidden = false;
   $('source-name').textContent = file.name;
+  $('video-info').disabled = false;
+  queueVideoInformation();
   $('video-format').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 0% · 0 frames`;
   $('error-banner').hidden = true;
   for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding', 'scan-peaks'])
@@ -549,6 +591,7 @@ async function openVideo(file) {
         $('index-progress').hidden = true;
         state.indexed = true;
         state.indexFailed = true;
+        state.indexError = e.message;
         videoIndexSummary();
         syncFrameNavigation();
         error(e);
@@ -742,6 +785,7 @@ function renderImageSafely() {
       makeImage();
     } catch (fatal) {
       state.image = null;
+      updateVideoProjection();
       $('video-canvas').hidden = true;
       throw fatal;
     }
@@ -770,7 +814,20 @@ function makeImage() {
     .getContext('2d')
     .putImageData(new ImageData(new Uint8ClampedArray(rgba), d.width, d.height), 0, 0);
   state.image = image;
+  updateVideoProjection();
   paint();
+}
+function updateVideoProjection() {
+  const note = $('map-projection-note');
+  note.hidden = !map?.videoProjection.enabled;
+  if (note.hidden) return;
+  try {
+    note.textContent = map.videoProjection.update(state.image, alignedRecord(), elevation);
+  } catch (e) {
+    map.videoProjection.setEnabled(false);
+    $('map-project-video').checked = false;
+    note.textContent = `Video projection unavailable: ${e.message || String(e)}`;
+  }
 }
 function paint() {
   if (!state.image) return;
@@ -910,8 +967,10 @@ function updateTelemetry() {
     footprint = elevation.footprint(pose, width, height);
     map?.update(pose, footprint, state.frame.pts);
   }
+  updateVideoProjection();
   $('map-note').textContent =
     `${footprint?.reason ? footprint.reason + ' ' : ''}Ground picking: ${elevation.description}. Nominal FOV, pose and timing limit accuracy.`;
+  queueVideoInformation();
   if (state.cursor) inspectPixel(state.cursor);
   refreshLog();
 }
@@ -1365,10 +1424,24 @@ for (const mode of ['2d', '3d'])
   };
 $('log-time-mode').onchange = () => refreshLog(true);
 $('map-follow').onchange = (e) => map?.setFollow(e.target.checked);
+$('map-project-video').onchange = (e) => {
+  map?.videoProjection.setEnabled(e.target.checked);
+  updateVideoProjection();
+};
 $('map-center').onclick = () => map?.centerCurrent();
 $('map-zoom-in').onclick = () => map?.zoom(true);
 $('map-zoom-out').onclick = () => map?.zoom(false);
 $('dismiss-error').onclick = () => ($('error-banner').hidden = true);
+$('video-info').onclick = () => {
+  pause();
+  refreshVideoInformation();
+  $('video-info-dialog').showModal();
+};
+$('download-video-info').onclick = () => {
+  const report = videoInformation(state, alignedRecord()),
+    name = (state.file?.name || 'video').replace(/\.[^.]+$/, '') + '-video-info.json';
+  download(name, JSON.parse(metadataJSON(report.raw)));
+};
 $('settings-button').onclick = () => {
   for (const [id, key] of [
     ['imagery', 'imagery'],
@@ -1526,6 +1599,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('beforeunload', () => {
   state.closed = true;
   clearTimeout(terrainRefresh);
+  clearTimeout(videoInfoRefresh);
   state.generation++;
   state.controller?.abort();
   state.decoder?.close();

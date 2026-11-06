@@ -35,6 +35,7 @@ import { freshMapPosition, validateMapConfiguration } from './map-config.js';
 import { finite } from '../domain/time.js';
 import { missionSegments, resolveMissionAltitude } from '../domain/flight-log.js';
 import { TerrainElevation } from './terrain-elevation.js';
+import { VideoProjection } from './video-projection.js';
 import {
   buildVideoTrack,
   buildVideoTrackAsync,
@@ -74,6 +75,7 @@ export class ReviewMap {
     this.configuration = { imagery: 'none', terrainUrl: '', amslToEllipsoidMetres: 0 };
     this.terrain = new TerrainElevation(
       () => {
+        this.videoProjection?.invalidate();
         onTerrainChange();
         this.refreshPointerHeight();
       },
@@ -106,6 +108,9 @@ export class ReviewMap {
       sceneMode: SceneMode.SCENE2D,
     });
     this.viewer.scene.globe.baseColor = Color.fromCssColorString('#213847');
+    this.videoProjection = new VideoProjection(this.viewer.scene, (...args) =>
+      this.position(...args),
+    );
     this.viewer.scene.backgroundColor = Color.fromCssColorString('#101b24');
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.aircraft = this.viewer.entities.add({
@@ -751,6 +756,7 @@ export class ReviewMap {
   }
   clear() {
     this.trackController?.abort();
+    this.videoProjection.clear();
     this.clearEntities(this.flightEntities);
     this.clearTemperatureTrack();
     this.clearEntities(this.findingEntities);
@@ -766,6 +772,7 @@ export class ReviewMap {
   }
   destroy() {
     this.closed = true;
+    this.videoProjection.clear();
     clearTimeout(this.pointerTimer);
     cancelAnimationFrame(this.pointerFrame);
     this.viewer.scene.canvas.removeEventListener('pointermove', this.pointerMove);

@@ -109,6 +109,26 @@ test('synchronous AU cell and asynchronous raw KLV produce the same valid set', 
   }
 });
 
+test('legacy unmarked cells require exactly one complete, checksum-valid KLV set', () => {
+  const wrap = (payload, flags = 0x0f) =>
+    join(Uint8Array.of(0, 214, flags, payload.length >> 8, payload.length & 255), payload);
+  const [record] = parseMetadataPES(wrap(golden));
+  assert.equal(record.utc_us, 1793418186869233);
+  assert.equal(record.provenance.klv_au_cell_compatibility, 'unmarked-complete-cell');
+  const corrupt = golden.slice();
+  corrupt[40] ^= 1;
+  for (const payload of [
+    corrupt,
+    golden.subarray(0, golden.length - 1),
+    join(golden, Uint8Array.of(0)),
+    join(golden, golden),
+    golden.subarray(10),
+  ])
+    assert.deepEqual(parseMetadataPES(wrap(payload)), []);
+  for (const flags of [0x1f, 0x2f, 0x4f, 0x8f])
+    assert.deepEqual(parseMetadataPES(wrap(golden, flags)), []);
+});
+
 test('APCG AVC/HEVC SEI preserve unrestricted angles, named validity, and unknown future fields', () => {
   const record = {
     schema: 'apcg.telemetry.v1',
