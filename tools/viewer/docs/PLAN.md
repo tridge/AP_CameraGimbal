@@ -1,7 +1,7 @@
 # Video flight review viewer: staged implementation plan
 
 Build a static browser application under tools/viewer for eventual hosting at
-https://firevps.tridgell.net/viewer/. Local video/log File objects never upload.
+https://plot.ardupilot.org/video/. Local video/log File objects never upload.
 No deployment or git push is included. Preserve the existing camera application.
 
 ## Design boundaries
