@@ -107,6 +107,14 @@ geometry is reused until pose, FOV, image dimensions or terrain change. Terrain
 completion invalidates the current mesh. Disabling, file replacement and viewer
 closure release the projection's GPU resources.
 
+Playback projection requests coalesce into one pending latest-frame request.
+The scheduler yields a video paint, caps projection refresh at 5 Hz and adjusts
+the cadence toward a 20% budget using CPU preparation plus Cesium postRender time
+(with a bounded fallback). It never stores a queue of images or poses. Image,
+footprint and aircraft refresh together, while intermediate video frames avoid
+terrain intersections and projection rebuilds. Pauses/seeks bypass throttling;
+disable, replacement and closure cancel timers, paints and draw observers.
+
 Projection-only yaw stabilisation fits combined aircraft plus gimbal yaw on a
 centred timeline window. A robust local linear fit rejects spikes while retaining
 constant turns without phase lag; a short centred blend avoids inlier-set steps.

@@ -2,6 +2,7 @@ import './ui/style.css';
 import { layout } from './ui/layout.js';
 import { ThermalWorkbench } from './ui/thermal-workbench.js';
 import { VideoViewport } from './ui/video-viewport.js';
+import { ProjectionScheduler } from './ui/projection-scheduler.js';
 import { projectionPose } from './domain/projection-pose.js';
 import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
@@ -85,6 +86,8 @@ const state = {
 let map = null;
 let terrainRefresh = null;
 let videoInfoRefresh = null;
+let projectedFootprint = null;
+const projectionScheduler = new ProjectionScheduler(renderVideoProjection, { onError: error });
 function refreshVideoInformation() {
   const report = videoInformation(state, alignedRecord());
   $('video-info-index-note').textContent = state.indexFailed
@@ -394,13 +397,26 @@ function pause() {
   $('play').textContent = 'Play';
   $('play').setAttribute('aria-label', 'Play video');
   thermalWorkbench.activity();
+  const generation = state.generation,
+    epoch = state.playEpoch;
   queueMicrotask(() => {
-    if (!state.playing && !state.decoding && !state.closed) thermalWorkbench.paused();
+    if (
+      !state.playing &&
+      !state.decoding &&
+      !state.closed &&
+      generation === state.generation &&
+      epoch === state.playEpoch
+    ) {
+      thermalWorkbench.paused();
+      updateVideoProjection();
+    }
   });
 }
 async function openVideo(file) {
   if (!file) return;
   pause();
+  projectionScheduler.reset();
+  projectedFootprint = null;
   state.generation++;
   const own = state.generation;
   state.controller?.abort();
@@ -823,23 +839,80 @@ function makeImage() {
     .getContext('2d')
     .putImageData(new ImageData(new Uint8ClampedArray(rgba), d.width, d.height), 0, 0);
   state.image = image;
-  updateVideoProjection();
   paint();
+  updateVideoProjection();
 }
 function updateVideoProjection() {
   const note = $('map-projection-note');
   note.hidden = !map?.videoProjection.enabled;
-  if (note.hidden) return;
+  if (note.hidden) {
+    projectionScheduler.reset();
+    projectedFootprint = null;
+    return;
+  }
+  const record = alignedRecord();
+  // Never hold a formerly valid image across a pose/lens gap for rate limiting.
+  const available =
+    state.image &&
+    validPose(record) &&
+    finite(record.hfov_deg) &&
+    record.hfov_deg > 0 &&
+    record.hfov_deg < 179;
+  projectionScheduler.request(state.playing && !!available);
+}
+function renderVideoProjection(playing, complete) {
+  if (state.closed || !map?.videoProjection.enabled) {
+    complete();
+    return;
+  }
+  const note = $('map-projection-note');
   try {
     const record = projectedRecord();
     note.textContent = map.videoProjection.update(state.image, record, elevation);
     if (record?.projection_yaw_smoothing)
       note.textContent += ` Yaw stabilisation: ${state.projectionYawSeconds} s (projection only).`;
+    if (playing)
+      note.textContent += ` Projection updates: up to ${(1000 / projectionScheduler.interval).toFixed(1)} fps.`;
+    if (state.decoded) {
+      const { width, height } = state.decoded;
+      projectedFootprint = elevation.footprint(record, width, height);
+      map.update(record, projectedFootprint, state.frame.pts);
+      map.videoProjection.frameId = state.frame.id;
+      updateMapNote(projectedFootprint);
+    }
   } catch (e) {
     map.videoProjection.setEnabled(false);
+    projectedFootprint = null;
     $('map-project-video').checked = false;
     note.textContent = `Video projection unavailable: ${e.message || String(e)}`;
+    complete();
+    return;
   }
+  if (!playing) {
+    complete();
+    return;
+  }
+  // Include time through Cesium's next draw pass, not just CPU preparation.
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    remove();
+    clearTimeout(timeout);
+    complete();
+  };
+  const remove = map.viewer.scene.postRender.addEventListener(finish);
+  const timeout = setTimeout(finish, 250);
+  map.viewer.scene.requestRender();
+  return () => {
+    finished = true;
+    remove();
+    clearTimeout(timeout);
+  };
+}
+function updateMapNote(footprint) {
+  $('map-note').textContent =
+    `${footprint?.reason ? footprint.reason + ' ' : ''}Ground picking: ${elevation.description}. Nominal FOV, pose and timing limit accuracy.`;
 }
 function paint() {
   if (!state.image) return;
@@ -976,13 +1049,13 @@ function updateTelemetry() {
   let footprint = null;
   if (state.decoded) {
     const { width, height } = state.decoded;
-    const mapPose = map?.videoProjection.enabled ? projectedRecord(pose) : pose;
-    footprint = elevation.footprint(mapPose, width, height);
-    map?.update(mapPose, footprint, state.frame.pts);
+    if (!map?.videoProjection.enabled) {
+      footprint = elevation.footprint(pose, width, height);
+      map?.update(pose, footprint, state.frame.pts);
+    }
   }
   updateVideoProjection();
-  $('map-note').textContent =
-    `${footprint?.reason ? footprint.reason + ' ' : ''}Ground picking: ${elevation.description}. Nominal FOV, pose and timing limit accuracy.`;
+  updateMapNote(map?.videoProjection.enabled ? projectedFootprint : footprint);
   queueVideoInformation();
   if (state.cursor) inspectPixel(state.cursor);
   refreshLog();
@@ -1616,6 +1689,7 @@ document.addEventListener('keydown', (e) => {
 });
 window.addEventListener('beforeunload', () => {
   state.closed = true;
+  projectionScheduler.destroy();
   clearTimeout(terrainRefresh);
   clearTimeout(videoInfoRefresh);
   state.generation++;

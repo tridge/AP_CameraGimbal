@@ -167,6 +167,12 @@ findings retain the original aligned pose. Smoothing does not bridge missing or
 stale poses and gives the same result when seeking or playing backwards.
 No video frames are sent to the map provider.
 
+During playback the projection updates at up to five frames per second, slowing
+further when rendering is expensive. Intermediate projection frames are skipped;
+each update uses the latest video image and matching pose. The projected image,
+footprint and aircraft update together. Pausing or stepping a frame updates the
+projection immediately, and missing/stale poses still hide it immediately.
+
 Use the map's **+ / −** buttons, or keyboard **+ / −** (also **=** and numpad
 keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also work
 from the timeline or focused map buttons; text/number inputs, dialogs and browser
