@@ -1,4 +1,13 @@
-import { test, expect, fixture, start, openFile, waitIndexed, screenshot } from './helpers.js';
+import {
+  test,
+  expect,
+  fixture,
+  start,
+  openFile,
+  waitIndexed,
+  seekNumber,
+  screenshot,
+} from './helpers.js';
 
 // Target a raw detector pixel through the actual scrolled canvas, then use a
 // physical pointer event (not a direct call to the inspection implementation).
@@ -120,6 +129,34 @@ test('typed frame jumps use displayed numbering, reject invalid targets and upda
   await page.locator('#frame-input').fill(String(count));
   await page.locator('#frame-go').click();
   await expect.poll(() => page.evaluate(() => window.fireViewer.state.number)).toBe(count - 1);
+});
+
+test('video hover dot stays hidden after leaving, including frame and terrain refreshes', async ({
+  page,
+}) => {
+  await start(page);
+  await openFile(page, fixture('thermal.mkv'));
+  await waitIndexed(page);
+  await page.evaluate(() => {
+    window.fireViewer.elevation.terrain = { at: () => 0, description: 'Hover test terrain' };
+  });
+  for (const [i, mode] of ['2d', '3d'].entries()) {
+    await page.locator('#map-' + mode).click();
+    await hoverRaw(page, 320, 256);
+    expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(true);
+    await page.locator('#play').hover();
+    expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
+    await seekNumber(page, i + 1);
+    expect(await page.evaluate(() => window.fireViewer.state.cursor)).toEqual({ x: 320, y: 256 });
+    expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
+    await page.evaluate(() => window.fireViewer.map.terrain.onChange());
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
+    await page.locator('#pixel-x').fill('100');
+    expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
+  }
+  await hoverRaw(page, 100, 256);
+  expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(true);
 });
 
 test('map pointer shows sampled AMSL terrain height in both map modes and never uses a stale location', async ({
