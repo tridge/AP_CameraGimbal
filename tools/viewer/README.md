@@ -153,12 +153,19 @@ once without enabling Follow. Dragging temporarily suspends automatic movement.
 The **Project video** checkbox beside **2D / 3D** places the current video image
 onto the terrain in either map mode. It starts off. The projection follows frame
 stepping, playback, the selected palette/contrast and applied thermal processing.
-It uses the same aligned camera pose, FOV and terrain intersections as pixel
-picking, sampled across a grid rather than stretched over four corners. Sky and
+It uses the aligned camera pose, FOV and terrain intersections sampled across a
+grid, then drapes a geographic image onto the rendered terrain. This avoids gaps
+where separate flat triangles would cut through hills or a different terrain LOD.
+Sky and
 unavailable terrain leave gaps; the status below the map explains missing or
 partial coverage. Stale or missing poses hide the image. Display rotation and
-video zoom affect presentation only; projected raw pixels keep the same ground
-locations as the pixel inspector. No video frames are sent to the map provider.
+video zoom affect presentation only. **Projection yaw stabilisation** in Settings
+defaults to a centred two-second, outlier-resistant fit of the earth-frame camera
+yaw; choose one second or Off to reduce or disable it. The image and footprint
+use this display stabilisation. Recorded telemetry, pixel inspection and exported
+findings retain the original aligned pose. Smoothing does not bridge missing or
+stale poses and gives the same result when seeking or playing backwards.
+No video frames are sent to the map provider.
 
 Use the map's **+ / −** buttons, or keyboard **+ / −** (also **=** and numpad
 keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also work

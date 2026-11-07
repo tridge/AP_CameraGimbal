@@ -1,28 +1,39 @@
 import {
-  BoundingSphere,
-  Cartesian3,
-  ComponentDatatype,
-  Geometry,
-  GeometryAttribute,
+  ClassificationType,
   GeometryInstance,
+  GroundPrimitive,
   Material,
   MaterialAppearance,
-  Primitive,
-  PrimitiveType,
+  Rectangle,
+  RectangleGeometry,
   Texture,
 } from 'cesium';
 import { validPose } from '../domain/geometry.js';
 import { buildVideoProjection } from '../domain/video-projection.js';
 
-/** One current-frame texture and terrain mesh, shared by the 2D/3D scene.
+/** One current-frame geographic raster draped over the 2D/3D terrain.
  * Geometry is rebuilt only when pose, lens, dimensions or terrain change.
  */
 export class VideoProjection {
-  constructor(scene, position) {
+  constructor(scene, onChange = () => {}) {
     this.scene = scene;
-    this.position = position;
     this.enabled = false;
     this.dirty = true;
+    this.terrainHeightsReady = false;
+    GroundPrimitive.initializeTerrainHeights().then(
+      () => {
+        this.terrainHeightsReady = true;
+        this.dirty = true;
+        if (!this.scene.isDestroyed()) {
+          onChange();
+          this.scene.requestRender();
+        }
+      },
+      (error) => {
+        this.initializationError = error;
+        if (!this.scene.isDestroyed()) onChange();
+      },
+    );
   }
   setEnabled(enabled) {
     this.enabled = !!enabled;
@@ -34,6 +45,9 @@ export class VideoProjection {
   }
   update(image, record, elevation) {
     if (!this.enabled) return null;
+    if (this.initializationError) throw this.initializationError;
+    if (!GroundPrimitive.supportsMaterials(this.scene))
+      throw new Error('Terrain video projection needs depth-texture support.');
     if (!image) {
       this.clear();
       return 'Open a video to project it onto terrain.';
@@ -45,6 +59,7 @@ export class VideoProjection {
       this.terrain = elevation.terrain;
       this.dirty = false;
       this.removePrimitive();
+      this.rasterDirty = true;
       if (this.mesh.indices.length) {
         this.updateTexture(image);
         this.drawMesh();
@@ -56,11 +71,78 @@ export class VideoProjection {
       : `${this.mesh.indices.length ? 'Partial video projection' : 'Video projection unavailable'}: ${this.mesh.reason}`;
   }
   updateTexture(image) {
-    if (image === this.image) return;
+    if (image === this.image && !this.rasterDirty) return;
+    this.rasterDirty = false;
+    if (!this.raster || this.raster.width !== image.width || this.raster.height !== image.height)
+      this.raster = new OffscreenCanvas(image.width, image.height);
+    const points = this.mesh.vertices;
+    const west = Math.min(...points.map((p) => p.lon)),
+      east = Math.max(...points.map((p) => p.lon));
+    const south = Math.min(...points.map((p) => p.lat)),
+      north = Math.max(...points.map((p) => p.lat));
+    this.rectangle = Rectangle.fromDegrees(west, south, east, north);
+    const context = this.raster.getContext('2d');
+    context.clearRect(0, 0, image.width, image.height);
+    for (let i = 0; i < this.mesh.indices.length; i += 3) {
+      const triangle = this.mesh.indices.slice(i, i + 3).map((index) => points[index]);
+      const source = triangle.map((p) => ({ x: p.u * image.width, y: (1 - p.v) * image.height }));
+      const target = triangle.map((p) => ({
+        x: ((p.lon - west) / (east - west)) * image.width,
+        y: ((north - p.lat) / (north - south)) * image.height,
+      }));
+      const [a, b, c] = source,
+        [p, q, r] = target;
+      const det = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+      if (Math.abs(det) < 1e-9) continue;
+      const xx = ((q.x - p.x) * (c.y - a.y) - (r.x - p.x) * (b.y - a.y)) / det;
+      const xy = ((q.y - p.y) * (c.y - a.y) - (r.y - p.y) * (b.y - a.y)) / det;
+      const yx = ((r.x - p.x) * (b.x - a.x) - (q.x - p.x) * (c.x - a.x)) / det;
+      const yy = ((r.y - p.y) * (b.x - a.x) - (q.y - p.y) * (c.x - a.x)) / det;
+      // Subpixel overlap avoids antialiasing cracks at shared edges.
+      const cx = (p.x + q.x + r.x) / 3,
+        cy = (p.y + q.y + r.y) / 3;
+      const sx = (a.x + b.x + c.x) / 3,
+        sy = (a.y + b.y + c.y) / 3,
+        crop = [];
+      context.save();
+      context.beginPath();
+      target.forEach((v, j) => {
+        const length = Math.hypot(v.x - cx, v.y - cy),
+          scale = 1 + 0.75 / Math.max(length, 0.001);
+        const x = cx + (v.x - cx) * scale,
+          y = cy + (v.y - cy) * scale;
+        crop.push({ x: sx + (source[j].x - sx) * scale, y: sy + (source[j].y - sy) * scale });
+        if (j) context.lineTo(x, y);
+        else context.moveTo(x, y);
+      });
+      context.closePath();
+      context.clip();
+      context.setTransform(xx, xy, yx, yy, p.x - xx * a.x - yx * a.y, p.y - xy * a.x - yy * a.y);
+      // Crop to the source region under this expanded triangle. Drawing the
+      // full HD frame for every clip needlessly magnifies rasterisation cost.
+      const left = Math.max(0, Math.floor(Math.min(...crop.map((p) => p.x))) - 1),
+        top = Math.max(0, Math.floor(Math.min(...crop.map((p) => p.y))) - 1),
+        right = Math.min(image.width, Math.ceil(Math.max(...crop.map((p) => p.x))) + 1),
+        bottom = Math.min(image.height, Math.ceil(Math.max(...crop.map((p) => p.y))) + 1);
+      if (right > left && bottom > top)
+        context.drawImage(
+          image,
+          left,
+          top,
+          right - left,
+          bottom - top,
+          left,
+          top,
+          right - left,
+          bottom - top,
+        );
+      context.restore();
+    }
+    const raster = this.raster;
     if (this.texture && this.texture.width === image.width && this.texture.height === image.height)
-      this.texture.copyFrom({ source: image });
+      this.texture.copyFrom({ source: raster });
     else {
-      const texture = new Texture({ context: this.scene.context, source: image });
+      const texture = new Texture({ context: this.scene.context, source: raster });
       if (!this.material)
         this.material = new Material({
           fabric: {
@@ -68,12 +150,13 @@ export class VideoProjection {
             uniforms: { image: Material.DefaultImageId },
             source: `czm_material czm_getMaterial(czm_materialInput materialInput) {
               czm_material material = czm_getDefaultMaterial(materialInput);
-              material.diffuse = texture(image, materialInput.st).rgb;
-              material.alpha = 1.0;
+              vec4 color = texture(image, materialInput.st);
+              material.diffuse = color.rgb;
+              material.alpha = color.a;
               return material;
             }`,
           },
-          translucent: false,
+          translucent: true,
         });
       this.material.uniforms.image = texture;
       // Bind immediately so there is no white/default-texture frame, and the
@@ -84,41 +167,25 @@ export class VideoProjection {
     this.image = image;
   }
   drawMesh() {
-    const positions = new Float64Array(this.mesh.vertices.length * 3),
-      normals = new Float32Array(positions.length),
-      uv = new Float32Array(this.mesh.vertices.length * 2);
-    this.mesh.vertices.forEach((p, i) => {
-      // Keep the mesh just above the sampled surface to avoid z fighting.
-      const world = this.position(p.lat, p.lon, p.altMsl + 0.5),
-        normal = Cartesian3.normalize(world, new Cartesian3());
-      Cartesian3.pack(world, positions, i * 3);
-      Cartesian3.pack(normal, normals, i * 3);
-      uv.set([p.u, p.v], i * 2);
-    });
-    const attribute = (values, componentDatatype, componentsPerAttribute) =>
-      new GeometryAttribute({ values, componentDatatype, componentsPerAttribute });
-    const geometry = new Geometry({
-      attributes: {
-        position: attribute(positions, ComponentDatatype.DOUBLE, 3),
-        normal: attribute(normals, ComponentDatatype.FLOAT, 3),
-        st: attribute(uv, ComponentDatatype.FLOAT, 2),
-      },
-      indices: new Uint16Array(this.mesh.indices),
-      primitiveType: PrimitiveType.TRIANGLES,
-      boundingSphere: BoundingSphere.fromVertices(positions),
+    if (!this.terrainHeightsReady) return;
+    this.removePrimitive();
+    // Drape one geographic raster on the rendered terrain, at its current LOD.
+    const geometry = new RectangleGeometry({
+      rectangle: this.rectangle,
+      vertexFormat: MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
     });
     this.primitive = this.scene.primitives.add(
-      new Primitive({
+      new GroundPrimitive({
         geometryInstances: new GeometryInstance({ geometry }),
         appearance: new MaterialAppearance({
           material: this.material,
           flat: true,
-          translucent: false,
+          translucent: true,
           closed: false,
-          renderState: { polygonOffset: { enabled: true, factor: -1, units: -1 } },
         }),
         asynchronous: false,
         allowPicking: false,
+        classificationType: ClassificationType.TERRAIN,
       }),
     );
   }
@@ -131,6 +198,7 @@ export class VideoProjection {
     this.material = null;
     this.texture = null;
     this.image = null;
+    this.raster = null;
   }
   clear() {
     this.removePrimitive();

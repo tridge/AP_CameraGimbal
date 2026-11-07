@@ -154,7 +154,7 @@ test('projected video follows frame and palette changes, hides stale poses, and 
   await waitIndexed(page);
   await flatTerrain(page);
   await page.locator('#map-project-video').check();
-  await expect(page.locator('#map-projection-note')).toHaveText('Video projected onto terrain.');
+  await expect(page.locator('#map-projection-note')).toContainText('Video projected onto terrain.');
   await page.waitForFunction(() => window.fireViewer.map.videoProjection.primitive?.ready);
   await page.evaluate(() => {
     const p = window.fireViewer.map.videoProjection;
@@ -209,7 +209,7 @@ test('projected video follows frame and palette changes, hides stale poses, and 
   await expect(page.locator('#map-projection-note')).toContainText('pose');
   expect(await page.evaluate(() => !window.fireViewer.map.videoProjection.primitive)).toBe(true);
   await page.locator('#offset').fill('0');
-  await expect(page.locator('#map-projection-note')).toHaveText('Video projected onto terrain.');
+  await expect(page.locator('#map-projection-note')).toContainText('Video projected onto terrain.');
   await openFile(page, fixture('misb.ts'));
   await waitIndexed(page);
   expect(await page.evaluate(() => window.originalProjection.texture.isDestroyed())).toBe(true);
@@ -218,6 +218,70 @@ test('projected video follows frame and palette changes, hides stale poses, and 
       () => window.fireViewer.map.videoProjection.image === window.fireViewer.state.image,
     ),
   ).toBe(true);
+});
+
+test('projection drapes continuously when ray-sampling heights differ from the rendered terrain LOD', async ({
+  page,
+}) => {
+  await start(page);
+  await openFile(page, fixture('thermal.mkv'));
+  await waitIndexed(page);
+  await page.evaluate(() => {
+    const { state, map, pose, elevation } = window.fireViewer;
+    // CPU samples are below the rendered ellipsoid, as can happen between
+    // terrain LODs. A separate flat triangle mesh disappears into the globe.
+    elevation.terrain = {
+      at: (lat, lon) => -40 + 15 * Math.sin(lat * 30000) * Math.cos(lon * 30000),
+      description: 'Different terrain LOD',
+    };
+    const image = new OffscreenCanvas(state.image.width, state.image.height);
+    const c = image.getContext('2d');
+    c.fillStyle = '#ff00ff';
+    c.fillRect(0, 0, image.width, image.height);
+    state.image = image;
+    map.videoProjection.setEnabled(true);
+    map.videoProjection.update(image, pose, elevation);
+    map.viewer.entities.show = false;
+    map.clearTemperatureTrack();
+  });
+  await page.waitForFunction(() => window.fireViewer.map.videoProjection.primitive?.ready);
+  for (const mode of ['2d', '3d']) {
+    await page.locator('#map-' + mode).click();
+    await page.evaluate(() => window.fireViewer.map.focus(-35.3219444, 148.8380556, 2200));
+    const coordinates = [0.2, 0.35, 0.5, 0.65, 0.8].flatMap((u) =>
+      [0.2, 0.35, 0.5, 0.65, 0.8].map((v) => [u, v]),
+    );
+    const colors = await projectedSamples(page, coordinates);
+    for (const color of colors) {
+      expect(color[0], mode + ' red').toBeGreaterThan(235);
+      expect(color[1], mode + ' green').toBeLessThan(20);
+      expect(color[2], mode + ' blue').toBeGreaterThan(235);
+    }
+  }
+});
+
+test('projection yaw stabilisation is adjustable without changing recorded poses or findings', async ({
+  page,
+}) => {
+  await start(page);
+  await openFile(page, fixture('thermal.mkv'));
+  await waitIndexed(page);
+  await flatTerrain(page);
+  await page.locator('#map-project-video').check();
+  const before = await page.evaluate(() =>
+    JSON.stringify(window.fireViewer.state.frames.map((f) => f.telemetry)),
+  );
+  await page.locator('#settings-button').click();
+  await expect(page.locator('#projection-yaw-seconds')).toHaveValue('2');
+  await page.locator('#projection-yaw-seconds').selectOption('0');
+  await page.locator('#apply-settings').click();
+  await expect(page.locator('#settings-dialog')).not.toBeVisible();
+  expect(await page.evaluate(() => window.fireViewer.state.projectionYawSeconds)).toBe(0);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify(window.fireViewer.state.frames.map((f) => f.telemetry)),
+    ),
+  ).toBe(before);
 });
 
 test('local recording projects onto real quantized terrain in both map modes', async ({

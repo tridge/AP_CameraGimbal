@@ -2,6 +2,7 @@ import './ui/style.css';
 import { layout } from './ui/layout.js';
 import { ThermalWorkbench } from './ui/thermal-workbench.js';
 import { VideoViewport } from './ui/video-viewport.js';
+import { projectionPose } from './domain/projection-pose.js';
 import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
 import { FrameDecoder } from './media/native-decoder.js';
@@ -52,6 +53,7 @@ const state = {
   seekGeneration: 0,
   controller: null,
   dirtyPose: true,
+  projectionYawSeconds: 2,
   findings: [],
   peaks: [],
   cursor: null,
@@ -252,6 +254,13 @@ function alignedRecord(frame = state.frame) {
     utc = correctedUtc(seconds, record.utc_us, state.offset, state.anchors);
   const result = poseTimeline.at(utc, record, state.offset === 0 && !state.anchors.length);
   return result ? { ...result, hfov_deg: record.hfov_deg, hfov_source: record.hfov_source } : null;
+}
+function projectedRecord(record = alignedRecord()) {
+  if (state.dirtyPose) {
+    poseTimeline.rebuild(state.frames);
+    state.dirtyPose = false;
+  }
+  return projectionPose(record, poseTimeline, state.projectionYawSeconds);
 }
 function updateVideoTrack() {
   if (!map) return;
@@ -822,7 +831,10 @@ function updateVideoProjection() {
   note.hidden = !map?.videoProjection.enabled;
   if (note.hidden) return;
   try {
-    note.textContent = map.videoProjection.update(state.image, alignedRecord(), elevation);
+    const record = projectedRecord();
+    note.textContent = map.videoProjection.update(state.image, record, elevation);
+    if (record?.projection_yaw_smoothing)
+      note.textContent += ` Yaw stabilisation: ${state.projectionYawSeconds} s (projection only).`;
   } catch (e) {
     map.videoProjection.setEnabled(false);
     $('map-project-video').checked = false;
@@ -964,8 +976,9 @@ function updateTelemetry() {
   let footprint = null;
   if (state.decoded) {
     const { width, height } = state.decoded;
-    footprint = elevation.footprint(pose, width, height);
-    map?.update(pose, footprint, state.frame.pts);
+    const mapPose = map?.videoProjection.enabled ? projectedRecord(pose) : pose;
+    footprint = elevation.footprint(mapPose, width, height);
+    map?.update(mapPose, footprint, state.frame.pts);
   }
   updateVideoProjection();
   $('map-note').textContent =
@@ -1426,7 +1439,7 @@ $('log-time-mode').onchange = () => refreshLog(true);
 $('map-follow').onchange = (e) => map?.setFollow(e.target.checked);
 $('map-project-video').onchange = (e) => {
   map?.videoProjection.setEnabled(e.target.checked);
-  updateVideoProjection();
+  updateTelemetry();
 };
 $('map-center').onclick = () => map?.centerCurrent();
 $('map-zoom-in').onclick = () => map?.zoom(true);
@@ -1452,6 +1465,7 @@ $('settings-button').onclick = () => {
   ])
     $(id).value = state.config[key] ?? '';
   $('fov-override').value = state.fovOverride ?? '';
+  $('projection-yaw-seconds').value = String(state.projectionYawSeconds);
   $('log-diagnostics').textContent = state.visibleLog
     ? JSON.stringify(
         {
@@ -1485,10 +1499,14 @@ $('apply-settings').onclick = async () => {
     const fov = $('fov-override').value === '' ? null : Number($('fov-override').value);
     if (fov !== null && (!finite(fov) || fov <= 0 || fov >= 179))
       throw new Error('FOV must be between 0 and179 degrees.');
+    const projectionYawSeconds = Number($('projection-yaw-seconds').value);
+    if (![0, 1, 2].includes(projectionYawSeconds))
+      throw new Error('Invalid projection yaw smoothing.');
     $('apply-settings').disabled = true;
     const applied = await map?.configure(config);
     if (map && applied === false) return;
     state.config = map ? { ...map.configuration } : config;
+    state.projectionYawSeconds = projectionYawSeconds;
     if (generation === state.generation) state.fovOverride = fov;
     saveReview();
     $('settings-dialog').close();
