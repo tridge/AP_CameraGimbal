@@ -1327,8 +1327,6 @@ async function* tsFrames(source) {
       if (packet[4]) discontinuity = !!(packet[5] & 128);
       off += 1 + packet[4];
     }
-    if (!(control & 1) || off >= 188) continue;
-    const previous = continuity.get(pid);
     if (discontinuity) {
       pending.delete(pid);
       // A video clock discontinuity invalidates all held KLV; a metadata
@@ -1337,7 +1335,12 @@ async function* tsFrames(source) {
       else if (typeof streamTypes.get(pid) === 'number') discardAsynchronous();
       sections.delete(pid);
       continuity.delete(pid);
-    } else if (previous !== undefined && cc === previous)
+    }
+    // Adaptation-only packets can reset the stream without carrying payload.
+    // Process that reset above, but count continuity only for payload packets.
+    if (!(control & 1) || off >= 188) continue;
+    const previous = continuity.get(pid);
+    if (previous !== undefined && cc === previous)
       continue; // Repeated packet.
     else if (previous !== undefined && cc !== (previous + 1) % 16) {
       pending.delete(pid);

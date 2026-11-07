@@ -6,6 +6,7 @@ import {
   start,
   openFile,
   waitIndexed,
+  seekNumber,
   downloadJSON,
   screenshot,
 } from './helpers.js';
@@ -97,4 +98,28 @@ test('video information replaces old metadata and safely displays long filenames
   await expect(detail(page, 'Filename')).toHaveText('misb.ts');
   await expect(detail(page, 'Telemetry type')).toContainText('MISB ST0601 KLV');
   await expect(detail(page, 'Calibrated raw thermal frames')).toHaveText('0 / 20 frames');
+});
+
+test('invalid recorded UTC does not prevent opening video information or exporting metadata', async ({
+  page,
+}, testInfo) => {
+  await start(page);
+  await openFile(page, fixture('rgb.mp4'));
+  await waitIndexed(page);
+  const frameNumber = await page.evaluate(() =>
+    window.fireViewer.state.frames.findIndex((f) => f.telemetry),
+  );
+  expect(frameNumber).toBeGreaterThanOrEqual(0);
+  await seekNumber(page, frameNumber);
+  await page.evaluate(() => {
+    for (const frame of window.fireViewer.state.frames)
+      if (frame.telemetry) frame.telemetry.utc_us = 1e21;
+  });
+  await page.getByRole('button', { name: 'Video information', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Video information', exact: true })).toBeVisible();
+  await expect(detail(page, 'Recorded UTC')).toHaveText('Unavailable');
+  await expect(detail(page, 'Last recorded UTC')).toHaveText('Unavailable');
+  await expect(detail(page, 'Codec')).toHaveText('H.264 / AVC');
+  const exported = await downloadJSON(page, '#download-video-info', testInfo, 'invalid-utc.json');
+  expect(exported.currentFrame.telemetry.utc_us).toBe(1e21);
 });

@@ -392,6 +392,7 @@ function tsFixture({
   metadataEvery = 1,
   metadataCount = Infinity,
   metadataDiscontinuity = -1,
+  adaptationOnly = null,
   metadataFlags = 0xdf,
 } = {}) {
   const pat = section(Uint8Array.of(0, 0, 0, 0, 1, 0xc1, 0, 0, 0, 1, 0xf0, 0));
@@ -446,6 +447,13 @@ function tsFixture({
     return out;
   }
   for (let i = 0; i < repeats; i++) {
+    if (adaptationOnly?.frame === i) {
+      const { pid, discontinuity } = adaptationOnly,
+        packet = new Uint8Array(188).fill(255),
+        cc = ((pid === 257 ? videoCC : metadataCC) - 1) & 15;
+      packet.set([0x47, pid >> 8, pid & 255, 0x20 | cc, 183, discontinuity ? 128 : 0]);
+      packets.push(packet);
+    }
     const time = 2 ** 33 - 6000 + i * 3000;
     let data = pes(
       0xe0,
@@ -754,6 +762,32 @@ test('metadata discontinuities invalidate held asynchronous snapshots', async ()
   assert.equal(source.frames[11].telemetry, null);
   assert.ok(source.frames[14].telemetry);
 });
+
+for (const pid of [257, 258])
+  for (const discontinuity of [false, true])
+    test(`adaptation-only PID ${pid} ${discontinuity ? 'discontinuity clears' : 'packet preserves'} held asynchronous KLV`, async () => {
+      const { source } = await indexAll(
+        new Blob([
+          tsFixture({
+            asynchronous: true,
+            repeats: 20,
+            metadataEvery: 10,
+            adaptationOnly: { frame: 8, pid, discontinuity },
+          }),
+        ]),
+      );
+      const frameAt = (i) =>
+        source.frames.find((f) => f.timestampTicks === 2 ** 33 - 6000 + i * 3000);
+      assert.ok(frameAt(2).telemetry, 'a pose is held before the adaptation packet');
+      assert.ok(frameAt(8));
+      assert.ok(frameAt(9));
+      for (const i of [8, 9]) {
+        if (discontinuity) assert.equal(frameAt(i).telemetry, null, 'old pose is not reused');
+        else assert.ok(frameAt(i).telemetry, 'adaptation-only packets do not increment continuity');
+      }
+      assert.ok(frameAt(10).telemetry, 'fresh metadata restores the pose');
+      if (!discontinuity) assert.equal(source.frames.length, 20);
+    });
 
 test('MP4 edit intervals hide preroll and postroll but retain decode packets, including fragments', async () => {
   const offset = 4096,

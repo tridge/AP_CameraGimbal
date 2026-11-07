@@ -40,10 +40,7 @@ test('shared plot terrain works across viewer origins while local services remai
     validateMapConfiguration({ terrainUrl, amslToEllipsoidMetres: 50 }, base).terrainDatum,
     'amsl',
   );
-  for (const baseURL of [
-    'http://127.0.0.1:4178/video/',
-    'https://plot.ardupilot.org/video/',
-  ]) {
+  for (const baseURL of ['http://127.0.0.1:4178/video/', 'https://plot.ardupilot.org/video/']) {
     assert.equal(
       validateMapConfiguration({ terrainUrl, terrainDatum: 'amsl' }, baseURL).terrainUrl,
       terrainUrl,
