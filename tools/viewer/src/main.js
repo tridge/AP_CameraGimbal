@@ -58,6 +58,7 @@ const state = {
   findings: [],
   peaks: [],
   cursor: null,
+  videoPointerInside: false,
   image: null,
   contrastUnits: null,
   contrastMode: 'auto',
@@ -434,6 +435,7 @@ async function openVideo(file) {
   thermalWorkbench.setFrame(null, null, null, state.generation);
   state.number = 0;
   state.cursor = null;
+  state.videoPointerInside = false;
   state.peaks = [];
   state.image = null;
   videoViewport.reset();
@@ -1076,7 +1078,7 @@ function inspectPixel(point) {
     temp = raw !== null ? celsius(raw, state.frame.thermalMetadata) : null;
   const projection = elevation.project(alignedRecord(), point.x, point.y, d.width, d.height);
   const ground = projection.point;
-  map?.setHover(ground);
+  map?.setHover(state.videoPointerInside ? ground : null);
   const level = ground?.terrain?.terrainLevel;
   const detail = Number.isInteger(level)
     ? ` · terrain L${level}${level < 12 ? ' (coarse)' : ''}`
@@ -1451,6 +1453,7 @@ $('rotation').onchange = (e) => {
 };
 $('video-canvas').onpointermove = (e) => {
   const point = displayPoint(e);
+  state.videoPointerInside = !!point;
   if (point) {
     $('pixel-x').value = point.x;
     $('pixel-y').value = point.y;
@@ -1459,7 +1462,10 @@ $('video-canvas').onpointermove = (e) => {
     paint();
   } else map?.setHover(null);
 };
-$('video-canvas').onpointerleave = () => map?.setHover(null);
+$('video-canvas').onpointerleave = $('video-canvas').onpointercancel = () => {
+  state.videoPointerInside = false;
+  map?.setHover(null);
+};
 for (const id of ['pixel-x', 'pixel-y'])
   $(id).oninput = () => {
     if (!state.decoded) return;
