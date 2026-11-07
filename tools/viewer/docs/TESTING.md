@@ -161,6 +161,10 @@ checks outliers, heading wrap, constant turns, reverse/seek determinism and gaps
 Set `VIEWER_PHOENIX_VIDEO` to the Phoenix RGB MP4 for
 `projection-yaw-real.spec.js`: it checks frames 2185–2345, compares raw and
 displayed yaw changes, and seeks backwards to verify reproducibility.
+`projection-playback.spec.js` injects a slow renderer and checks skipped projection
+frames, matching current image/pose, immediate pause catch-up and cancellation.
+`projection-scheduler.test.js` uses a fake clock and delayed draw completion to
+verify adaptive cadence, latest-frame coalescing, paint ordering and cleanup.
 Set VIEWER_PROJECT_VIDEO to a local recording, VIEWER_PROJECT_FRAME to a frame
 index, and VIEWER_PROJECT_TERRAIN_URL to a quantized-mesh URL to opt into the
 real-terrain case. It captures 2D/3D screenshots and compares rendered pixels
