@@ -109,9 +109,7 @@ export class ReviewMap {
       sceneMode: SceneMode.SCENE2D,
     });
     this.viewer.scene.globe.baseColor = Color.fromCssColorString('#213847');
-    this.videoProjection = new VideoProjection(this.viewer.scene, (...args) =>
-      this.position(...args),
-    );
+    this.videoProjection = new VideoProjection(this.viewer.scene, onTerrainChange);
     this.viewer.scene.backgroundColor = Color.fromCssColorString('#101b24');
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.aircraft = this.viewer.entities.add({

@@ -97,13 +97,23 @@ raw pixels and the projection rotation hypothesis.
 
 Optional video projection samples a bounded 16×16 grid across the raw image
 plane through the same ElevationModel.project calls. Triangles touching missing
-intersections are omitted. A textured Cesium mesh uses the resolved AMSL heights
-and the current map datum in both 2D/3D, with a small surface offset to avoid
-z fighting. The texture comes from the rendered, unrotated image before review
+intersections are omitted. The triangles warp the frame into one geographic
+raster with transparent gaps. A textured GroundPrimitive drapes this raster over
+the actual rendered terrain in both 2D/3D, following its LOD and depth. Separate
+flat triangles no longer disappear beneath hills. The texture comes from the
+rendered, unrotated image before review
 annotations or viewport zoom. Texture storage is reused for successive frames;
 geometry is reused until pose, FOV, image dimensions or terrain change. Terrain
 completion invalidates the current mesh. Disabling, file replacement and viewer
 closure release the projection's GPU resources.
+
+Projection-only yaw stabilisation fits combined aircraft plus gimbal yaw on a
+centred timeline window. A robust local linear fit rejects spikes while retaining
+constant turns without phase lag; a short centred blend avoids inlier-set steps.
+Angles unwrap around the target heading. Cached fits are invalidated when the
+pose timeline is rebuilt. Invalid poses and sampling gaps stop the window. The
+optional stabilised record drives the displayed image and footprint; original
+records, inspection and findings are unchanged.
 
 The map model owns aircraft, track, footprint, hovered ground point, mission,
 fences and findings. Both 2D and 3D share the same entities. Route segments come

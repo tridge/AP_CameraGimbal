@@ -154,6 +154,13 @@ video-projection.spec.js checks the default-off Project video checkbox beside
 both modes, and verifies frame/palette updates, stale-pose hiding and resource
 cleanup. Domain tests cover sloping terrain, raw image edges, partial horizons
 and missing terrain without a flat fallback.
+The terrain-LOD regression puts CPU intersections below the rendered surface and
+requires a continuous projection in both modes. Settings coverage checks the yaw
+stabilisation control without mutating recorded poses. projection-pose.test.js
+checks outliers, heading wrap, constant turns, reverse/seek determinism and gaps.
+Set `VIEWER_PHOENIX_VIDEO` to the Phoenix RGB MP4 for
+`projection-yaw-real.spec.js`: it checks frames 2185–2345, compares raw and
+displayed yaw changes, and seeks backwards to verify reproducibility.
 Set VIEWER_PROJECT_VIDEO to a local recording, VIEWER_PROJECT_FRAME to a frame
 index, and VIEWER_PROJECT_TERRAIN_URL to a quantized-mesh URL to opt into the
 real-terrain case. It captures 2D/3D screenshots and compares rendered pixels
