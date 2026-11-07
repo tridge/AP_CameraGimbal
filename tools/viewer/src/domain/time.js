@@ -3,8 +3,10 @@ export function finite(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 export function utcText(value) {
-  return finite(value) && value > 0
-    ? new Date(value / 1000).toISOString().replace('T', ' ').replace('Z', ' UTC')
+  if (!finite(value) || value <= 0) return 'Unavailable';
+  const date = new Date(value / 1000);
+  return finite(date.getTime())
+    ? date.toISOString().replace('T', ' ').replace('Z', ' UTC')
     : 'Unavailable';
 }
 export function validateTiePoints(points) {

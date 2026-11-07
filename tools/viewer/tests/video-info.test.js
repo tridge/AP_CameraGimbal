@@ -138,3 +138,18 @@ test('metadata JSON preserves binary codec headers, parameter maps and uint64 va
   assert.equal(json.parameters.entries[0][1].hex, '0102');
   assert.equal(json.exact, '18446744073709551615');
 });
+
+test('out-of-range telemetry UTC remains exportable without breaking the information report', () => {
+  const s = state();
+  s.frames.forEach((f) => (f.telemetry.utc_us = 1e21));
+  const report = videoInformation(s);
+  for (const label of [
+    'First recorded UTC',
+    'Last recorded UTC',
+    'Recorded UTC',
+    'Aligned pose UTC',
+  ])
+    assert.equal(field(report, label), 'Unavailable');
+  assert.equal(field(report, 'Frame rate (average)'), '50.000 fps');
+  assert.equal(JSON.parse(metadataJSON(report.raw)).currentFrame.telemetry.utc_us, 1e21);
+});
