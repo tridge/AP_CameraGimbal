@@ -1,9 +1,13 @@
 // $WEBSPLAT_DATA etc. from the environment or WebSplat/local.env (untracked)
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const WEBSPLAT = fileURLToPath(new URL('../../../', import.meta.url));
-export const APP_DIST = `${WEBSPLAT}app/dist`;
+// WEBSPLAT_APP_DIST: serve another build (e.g. one made with vite build --outDir)
+export const APP_DIST = process.env.WEBSPLAT_APP_DIST
+  ? resolve(process.env.WEBSPLAT_APP_DIST)
+  : `${WEBSPLAT}app/dist`;
 
 export function env(name) {
   if (process.env[name]) return process.env[name];

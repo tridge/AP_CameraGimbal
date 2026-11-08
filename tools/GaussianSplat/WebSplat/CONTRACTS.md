@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.3 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.3.1 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -244,6 +244,23 @@ COLMAP; rigs/frames files optional) under `model/<name>/`, plus `model/model.jso
  "options":{…train.py scene options…}}
 ```
 
+Written by the `prepare` stage as `prepare/gen-<g>/{dataset.json, targets.f16, points.f32,
+ceiling.f32}` (`app/src/stages/prepare/`; clarifications, v1.3.1):
+- `images[]` also carry `image_id` (model image id); `frame` is the position in the stage 2
+  `frames` list (the row of `thermal.u16`). `viewmat` values are float32 (train.py's tensor).
+- `skipped` also has `budget` (cold views dropped by `max_images`) and `pose_offset_limit_m`.
+- `targets`: `{"file":"targets.f16","dtype":"f16","shape":[n,H,W]}`; `points`: also `dtype`, `shape`.
+- `training`: train.py's settings for the configured options: `options` (train.py training option
+  values), `v_hot`, `lr` (as above), `adam_eps`, `means_lr_gamma` (`0.01 ** (1/iterations)` per
+  step), `strategy` (gsplat 1.5.3 `DefaultStrategy` fields with train.py's overrides:
+  `refine_stop_iter = iterations // 2`, `reset_every` 3000, `absgrad`, `grow_grad2d`,
+  `refine_every`), `scene_scale` (`10 * max_scale`), and fixed initialisation constants.
+- `stats`: registered, hot, test, points in bounds, points valued by projection.
+- Point order is `points3D.bin` file order (train.py's is pycolmap's hash-map order); a point's
+  value does not depend on the order. The model has points at identical positions.
+- `hotspot` is computed in float64 from the float32 viewmats (train.py inverts them in float32):
+  within 1e-5 m of train.py's.
+
 Defaults (train.py): `max_images` 500, `hot_delta` 10 C, `min_elevation` 20 deg, `min_obs` 30,
 `max_pose_offset` 20 m, `holdout` 20, `hot_holdout` 8, `k` 8 C, `t0`/`t1` automatic, `radius` 150 m,
 `height_margin` 15 m, `ceiling_cell` 5 m, `ceiling_margin` 5 m. Steps, in this order:
@@ -417,6 +434,9 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
   import from `tools/viewer/src` (allowed by `app/vite.config.js`).
 
 ## Change log
+
+- v1.3.1 (2026-11-08): 5b as written by the prepare stage (additive: `image_id`, `skipped.budget`,
+  `training`, dtype/shape records, `stats`, point order, hot spot precision).
 
 - v1.3 (2026-11-08): native point-valuing fallback documented; mixed-version slots refused;
   transactions copy-on-write.

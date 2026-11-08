@@ -2,7 +2,8 @@
 // confirm the proposal, run to the end; records per-stage timings, GPU memory and console.
 // After select: features (3), match + verify (4) and map (5); the model is checked against the
 // native reference with G2's tolerances (test/g2/compare_models.py) and the verified geometry
-// against the reference database (>= 90% of its pairs and inliers).
+// against the reference database (>= 90% of its pairs and inliers). Scene preparation (5b): the
+// dataset against train.py's own scene loading on the run's model (test/stage5b).
 // usage: node thermal.mjs [--machine laptop|win11] [--mkv PATH] [--port 8790] [--cdp URL] [--reference]
 //   --stop-map: Stop during map round 1 and resume from its checkpoint
 //   --select-mode single|redecode|cache (default single)
@@ -380,6 +381,77 @@ try {
         .map(([k]) => k)
         .join(', ')}`,
     );
+  }
+  // stage 5b: copy the dataset out of OPFS (chunked: CDP strings are limited) and compare it with
+  // train.py's own scene loading on this run's model (test/stage5b)
+  const prep = await page.evaluate(() => window.websplat.job().stages.prepare?.outputs ?? null);
+  const prepFiles = ['dataset.json', 'points.f32', 'ceiling.f32', 'targets.f16'];
+  check(
+    'prepare published its outputs',
+    prep && prepFiles.every((n) => prep[n]),
+    prep ? prepFiles.filter((n) => !prep[n]).join(',') : 'no outputs',
+  );
+  if (prep && prepFiles.every((n) => prep[n]) && !missing.length) {
+    mkdirSync(`${out}/prepare`, { recursive: true });
+    const CHUNK = 8 << 20;
+    for (const n of prepFiles) {
+      const parts = [];
+      for (let off = 0; off < prep[n].bytes; off += CHUNK) {
+        const b64 = await page.evaluate(
+          async ([p, off, len]) => {
+            let d = await (await navigator.storage.getDirectory()).getDirectoryHandle('websplat');
+            const ps = p.split('/');
+            for (const x of ps.slice(0, -1)) d = await d.getDirectoryHandle(x);
+            const f = await (await d.getFileHandle(ps.at(-1))).getFile();
+            const u = new Uint8Array(await f.slice(off, off + len).arrayBuffer());
+            let s = '';
+            for (let i = 0; i < u.length; i += 0x8000)
+              s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+            return btoa(s);
+          },
+          [prep[n].path, off, CHUNK],
+        );
+        parts.push(Buffer.from(b64, 'base64'));
+      }
+      writeFileSync(`${out}/prepare/${n}`, Buffer.concat(parts));
+    }
+    const s5 = `${WEBSPLAT}test/stage5b`;
+    const dump = spawnSync(
+      py,
+      [`${s5}/dump_scene.py`, `${data}/ref/work`, `${out}/map/final`, `${out}/prepare-native`],
+      { encoding: 'utf8' },
+    );
+    check(
+      'train.py scene loading on this model (dump_scene.py)',
+      dump.status === 0,
+      dump.stderr.slice(-300),
+    );
+    if (dump.status === 0) {
+      const c = spawnSync(
+        py,
+        [
+          `${s5}/compare_dataset.py`,
+          `${out}/prepare-native`,
+          `${out}/prepare`,
+          ...(a.reference ? ['--frozen'] : []),
+          '--json',
+          `${out}/dataset_vs_native.json`,
+        ],
+        { encoding: 'utf8' },
+      );
+      const fails = c.stdout.split('\n').filter((l) => l.startsWith('FAIL'));
+      let info = {};
+      try {
+        info = JSON.parse(readFileSync(`${out}/dataset_vs_native.json`, 'utf8')).info;
+      } catch {}
+      check(
+        'dataset identical to train.py scene loading (views, holdouts, scale, targets, points, settings)',
+        c.status === 0,
+        fails.length
+          ? fails.slice(0, 4).join(' | ')
+          : `${c.stdout.trim().split('\n').at(-1)}; ${JSON.stringify(info)}`,
+      );
+    }
   }
   await gpu.stop();
   const errors = consoleLog.filter(
