@@ -1,5 +1,8 @@
 // Copies the viewer's pinned FFmpeg core (FFV1 decoding) to public/vendor/ffmpeg/<version>/,
 // the URL the ingest and select stages load it from. The app pins the same version.
+// Also the built splat viewer (tools/GaussianSplat/viewer/dist) to public/vendor/splat-viewer/,
+// the result view's iframe.
+import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -19,3 +22,14 @@ for (const f of ['ffmpeg-core.js', 'ffmpeg-core.wasm']) {
   await cp(resolve(root, `node_modules/@ffmpeg/core/dist/umd/${f}`), resolve(dest, f));
 }
 console.log(`prepared FFmpeg core ${version}`);
+
+const splatViewer = resolve(root, '../../viewer/dist');
+if (existsSync(resolve(splatViewer, 'viewer.js'))) {
+  await cp(splatViewer, resolve(root, 'public/vendor/splat-viewer'), {
+    recursive: true,
+    filter: (f) => !f.endsWith('.gz'),
+  });
+  console.log('prepared the splat viewer');
+} else {
+  console.warn('splat viewer not built (cd tools/GaussianSplat/viewer && npm ci && npm run build)');
+}
