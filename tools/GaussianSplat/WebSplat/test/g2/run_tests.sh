@@ -32,6 +32,9 @@ echo "== stop points (Node callbacks)"
 node test_cancel.mjs "$D/ref/work/frames.json" "$N/features.bin" "$D/stage4/native/native_raw.bin" \
   "$D/stage4/native/geometry.bin"
 
+echo "== mapping resume from every round checkpoint (Node)"
+node test_resume.mjs "$D/ref/work/frames.json" "$N/features.bin" "$D/stage4/native/geometry.bin" | tail -4
+
 echo "== 1. verification of the native raw matches (Node)"
 node run_node.mjs verify "$N/features.bin" "$D/stage4/native/native_raw.bin" "$N/camera.json" "$O/verify_native.bin" --seed 0
 $PY compare_geometry.py "$N/verify_seed0/geometry.bin" "$O/verify_native.bin" --identical --allow 5 \

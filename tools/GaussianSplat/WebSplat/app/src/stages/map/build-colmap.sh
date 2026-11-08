@@ -16,6 +16,10 @@ fork=${COLMAP_FORK:-$WEBSPLAT_DATA/colmap-wasm-fork}
 export COLMAP_WASM_DIR=${COLMAP_WASM_DIR:-$WEBSPLAT_DATA/g2/cw}
 export TMPDIR=$WEBSPLAT_DATA/g2/tmp COLMAP_WASM_SYSTEM_TOOLCHAIN=1 BOOST_INC=${BOOST_INC:-/usr/include}
 export JOBS=${JOBS:-8}
+# -msimd128 (WASM_SIMD=0 for the scalar build): same outputs, 3-4% faster verification and mapping
+export WASM_SIMD=${WASM_SIMD-1}
+[ "$WASM_SIMD" = 0 ] && unset WASM_SIMD
+build=$COLMAP_WASM_DIR/build${WASM_SIMD:+-simd}
 mkdir -p "$TMPDIR"
 patches=("$here"/colmap-wasm-patches/*.patch)
 
@@ -38,14 +42,15 @@ have=$(for c in $(git -C "$fork" rev-list --reverse "$COMMIT..HEAD"); do
 
 bash "$fork/native/fetch.sh"
 bash "$fork/native/build.sh"
-cmake --build "$COLMAP_WASM_DIR/build/colmap" -j "$JOBS" --target colmap_websplat
-cp "$COLMAP_WASM_DIR"/build/colmap/websplat-colmap.{mjs,wasm} "$here/wasm/"
+cmake --build "$build/colmap" -j "$JOBS" --target colmap_websplat
+cp "$build"/colmap/websplat-colmap.{mjs,wasm} "$here/wasm/"
 cp "$fork/THIRD_PARTY_NOTICES.md" "$here/wasm/THIRD_PARTY_NOTICES.md"
 cp "$fork/LICENSE" "$here/wasm/LICENSE-colmap-wasm.txt"
 cp "$COLMAP_WASM_DIR/src/colmap/COPYING.txt" "$here/wasm/LICENSE-COLMAP.txt"
 {
   echo "fork: $(git -C "$fork" rev-parse HEAD) = $COMMIT + ${n} patches"
   echo "patch-ids: $(echo $want)"
+  echo "simd: ${WASM_SIMD:+-msimd128}"
   echo "emcc: $(emcc --version | head -1)"
   echo "cmake: $(cmake --version | head -1)"
   echo "ninja: $(ninja --version)"

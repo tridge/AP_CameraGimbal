@@ -60,7 +60,7 @@ async function handle(msg) {
     const t = performance.now();
     const features = { keypoints: msg.keypoints, counts: msg.counts, offsets: msg.offsets };
     let lastPost = 0;
-    const res = priorMap(c, msg.camera, msg.frames, features, msg.geometry, {
+    const res = await priorMap(c, msg.camera, msg.frames, features, msg.geometry, {
       ...msg.opts,
       onProgress: (phase, done, total, round) => {
         const now = performance.now();

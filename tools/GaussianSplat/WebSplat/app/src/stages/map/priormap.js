@@ -58,13 +58,24 @@ export function telemetryPose(frame) {
   return [...q, ...t];
 }
 
+// state after round n for a checkpoint: {round, rounds, poses (7 per image, cam_from_world
+// qw qx qy qz tx ty tz), params (camera), prng (COLMAP's PRNG, which carries over rounds)}; priorMap(..., {start: state}) resumes after it
+function mapState(cw, round, rounds, n) {
+  const M = cw.M;
+  const all = cw.f64(M._ws_m_state(), M._ws_m_state_size());
+  const prng = M.UTF8ToString(M._ws_prng_get());
+  return { round, rounds: [...rounds], poses: all.slice(0, 7 * n), params: all.slice(7 * n), prng };
+}
+
 // camera: cameraFromFrames(); frames: frames.json frames; features: decodeFeatures();
 // geometry: decodeGeometry() entries (frame indices). opts.onProgress(phase, done, total,
-// round) may return truthy to stop (throws AbortError); opts.onRound(stats) after each round.
+// round) may return truthy to stop (throws AbortError); opts.onRound(stats, getState) after each
+// round (awaited; getState() gives the checkpoint state); opts.start resumes from such a state.
 // Returns {rounds, files: {'cameras.bin', 'images.bin', 'points3D.bin', 'rigs.bin',
 // 'frames.bin'}} (COLMAP binary model, image ids 1..N in frames order).
-export function priorMap(cw, camera, frames, features, geometry, opts = {}) {
+export async function priorMap(cw, camera, frames, features, geometry, opts = {}) {
   const o = { ...PRIOR_MAP_DEFAULTS, ...opts };
+  const start = o.start ?? null; // a checkpoint state (mapState) to resume from
   const M = cw.M;
   // the telemetry model's camera is printed '%.9g' (sparse/telemetry/cameras.txt); the database
   // keeps the reader's values
@@ -85,7 +96,9 @@ export function priorMap(cw, camera, frames, features, geometry, opts = {}) {
     const s2 = o.priorSigma * o.priorSigma;
     const cov = new Float64Array([s2, 0, 0, 0, s2, 0, 0, 0, s2]);
     frames.forEach((f, k) => {
-      const pose = new Float64Array(telemetryPose(f));
+      const pose = start
+        ? start.poses.subarray(7 * k, 7 * k + 7)
+        : new Float64Array(telemetryPose(f));
       const pos = new Float64Array(f.position);
       const kp = imageKeypoints(features, k);
       cw.check(
@@ -102,9 +115,18 @@ export function priorMap(cw, camera, frames, features, geometry, opts = {}) {
         'ws_m_geometry',
       );
     }
-    cw.check(M._ws_m_prepare(), 'ws_m_prepare');
-    const rounds = [];
-    for (let n = 0; n < o.thresholds.length; n++) {
+    if (start) {
+      cw.check(
+        cw.with([start.params], (p) => M._ws_m_prepare(17, p)),
+        'ws_m_prepare',
+      );
+      cw.check(
+        cw.with([start.prng], (p) => M._ws_prng_set(p)),
+        'ws_prng_set',
+      );
+    } else cw.check(M._ws_m_prepare(9, 0), 'ws_m_prepare');
+    const rounds = start ? [...start.rounds] : [];
+    for (let n = start ? start.round + 1 : 0; n < o.thresholds.length; n++) {
       round = n;
       const rc = cw.check(M._ws_m_round(o.thresholds[n], n, o.maxIterations), 'ws_m_round');
       if (rc === 1) throw stopped();
@@ -125,7 +147,8 @@ export function priorMap(cw, camera, frames, features, geometry, opts = {}) {
         ba_final_cost: s[11],
       };
       rounds.push(stats);
-      if (o.onRound) o.onRound(stats);
+      // may be async (e.g. writing a checkpoint); the next round waits for it
+      if (o.onRound) await o.onRound(stats, () => mapState(cw, n, rounds, frames.length));
     }
     cw.check(M._ws_m_export(), 'ws_m_export');
     const names = ['cameras.bin', 'images.bin', 'points3D.bin', 'rigs.bin', 'frames.bin'];

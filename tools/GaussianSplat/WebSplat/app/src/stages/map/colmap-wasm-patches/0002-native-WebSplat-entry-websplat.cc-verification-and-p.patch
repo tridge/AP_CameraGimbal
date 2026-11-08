@@ -1,7 +1,7 @@
 From a34dd14e75b9f14b2f89dabd89daeb66d564d547 Mon Sep 17 00:00:00 2001
 From: Andrew Tridgell <andrew@tridgell.net>
 Date: Sun, 8 Nov 2026 19:27:53 +1100
-Subject: [PATCH 2/2] native: WebSplat entry (websplat.cc): verification and
+Subject: [PATCH 2/4] native: WebSplat entry (websplat.cc): verification and
  prior mapping through memory
 
 - ws_v_*: two-view verification per pair with an explicit camera, COLMAP's

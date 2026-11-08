@@ -4,6 +4,7 @@
 //        geometry; skips verification)  workers=N  mode=verify|map|both  legacy=0|1  tag=T
 import { decodeFeatures } from '../../app/src/stages/map/features.js';
 import { verifyInPool, mapInWorker } from '../../app/src/stages/map/pool.js';
+import { siftInPool } from '../../app/src/stages/features/pool.js';
 import { cameraFromFrames, modelJson } from '../../app/src/stages/map/priormap.js';
 import {
   decodeMatches,
@@ -213,6 +214,16 @@ async function stopTests() {
   ]);
   result.checks['worker load failure'] = { settled: r !== 'pending', error: err?.message };
   log(`stop worker load failure: ${r === 'pending' ? 'PENDING' : err?.message}`);
+  // SIFT pool: nested workers that fail to load while the pool awaits a (slow) image read
+  let serr = null;
+  const slow = () => new Promise((res) => setTimeout(() => res(new Uint8Array(640 * 512)), 300));
+  const sr = await Promise.race([
+    siftInPool(bad, 5, slow, 640, 512, { workers: 2 }).catch((e) => (serr = e)),
+    new Promise((res) => setTimeout(() => res('pending'), 10000)),
+  ]);
+  result.checks['sift worker load failure'] = { settled: sr !== 'pending', error: serr?.message };
+  log(`stop sift worker load failure: ${sr === 'pending' ? 'PENDING' : serr?.message}`);
+  ok &= sr !== 'pending' && !!serr;
   ok &= r !== 'pending' && !!err;
 
   result.pass = !!ok;

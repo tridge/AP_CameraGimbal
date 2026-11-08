@@ -87,7 +87,7 @@ if (cmd === 'verify') {
   const camera = camPath ? JSON.parse(readFileSync(camPath, 'utf8')) : cameraFromFrames(info);
   const t1 = performance.now();
   const phases = {};
-  const res = priorMap(cw, camera, info.frames, features, geometry, {
+  const res = await priorMap(cw, camera, info.frames, features, geometry, {
     onProgress: (phase, done, total, round) => {
       const key = `${round}:${phase}`;
       phases[key] = phases[key] ?? performance.now();
