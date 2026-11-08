@@ -44,6 +44,10 @@ Key features of the firmware:
 - `web/` contains the shared administration and live-view service.
 - `packaging/` and `tools/` contain camera-specific installation and package
   builders.
+- `tools/GaussianSplat/` builds 3D Gaussian splats and georeferenced thermal maps from the
+  cameras' recordings, with a static browser viewer; examples at
+  https://uav.tridgell.net/Splats/ (see
+  [`tools/GaussianSplat/README.md`](tools/GaussianSplat/README.md)).
 - `sitl/` contains the host simulator used for local development and CI.
 - `tests/` contains end-to-end ArduPilot integration tests.
 - `lua/` contains the legacy ArduPilot SIYI control script.
