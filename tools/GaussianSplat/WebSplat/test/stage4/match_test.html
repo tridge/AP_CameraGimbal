@@ -1,0 +1,465 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>stage 4 matcher test</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script type="module">
+      // Query: mode=full|edge  power=high-performance|low-power  pairs=N (first N reference pairs)
+      //        pool=MiB batch=N upload=1 (POST the container back to the harness)
+      import { createDevice, matchPairs, MATCH_WGSL } from '/app/src/stages/match/matcher.js';
+      import { quantizeDescriptors, f16BitsToF32 } from '/app/src/stages/match/quantize.js';
+      import { decodeMatches } from '/app/src/stages/match/format.js';
+      import { selectPairs } from '/app/src/stages/match/pairs.js';
+
+      const q = new URLSearchParams(location.search);
+      const log = (s) => {
+        document.getElementById('log').textContent += s + '\n';
+        console.log(s);
+      };
+      const opts = { powerPreference: q.get('power') || 'high-performance' };
+      if (q.get('pool')) opts.poolBytes = +q.get('pool') * 2 ** 20;
+      if (q.get('batch')) opts.batchPairs = +q.get('batch');
+      if (q.get('depth')) opts.depth = +q.get('depth');
+      const bin = async (u) => new Uint8Array(await (await fetch(u)).arrayBuffer());
+
+      function compare(got, want) {
+        const w = new Map(want.map((e) => [e.i * 65536 + e.j, e]));
+        let missing = 0,
+          extra = 0,
+          pairsDiff = 0,
+          absent = 0,
+          nGot = 0,
+          nWant = 0;
+        const examples = [];
+        for (const g of got) {
+          const e = w.get(g.i * 65536 + g.j);
+          nGot += g.matches.length / 2;
+          if (!e) {
+            if (g.status === 0) absent++;
+            continue;
+          }
+          w.delete(g.i * 65536 + g.j);
+          nWant += e.matches.length / 2;
+          const ws = new Set();
+          for (let k = 0; k < e.matches.length; k += 2)
+            ws.add(e.matches[k] * 65536 + e.matches[k + 1]);
+          const gs = new Set();
+          for (let k = 0; k < g.matches.length; k += 2)
+            gs.add(g.matches[k] * 65536 + g.matches[k + 1]);
+          let d = 0;
+          for (const x of gs)
+            if (!ws.has(x)) {
+              extra++;
+              d++;
+              if (examples.length < 20) examples.push(['extra', g.i, g.j, x >>> 16, x & 0xffff]);
+            }
+          for (const x of ws)
+            if (!gs.has(x)) {
+              missing++;
+              d++;
+              if (examples.length < 20) examples.push(['missing', g.i, g.j, x >>> 16, x & 0xffff]);
+            }
+          if (d) pairsDiff++;
+        }
+        return {
+          pairs: got.length,
+          nativePairsNotProduced: w.size,
+          producedNotNative: absent,
+          matches: nGot,
+          nativeMatches: nWant,
+          missing,
+          extra,
+          pairsDiff,
+          examples,
+        };
+      }
+
+      async function full() {
+        const index = await (await fetch('/native/index.json')).json();
+        const counts = new Uint32Array(index.counts);
+        // sfm.py's raw matches (native_rematch.py), before COLMAP verification empties small pairs
+        const want = decodeMatches(await bin('/native/native_raw.bin'));
+        const frames = await (await fetch('/ref/frames.json')).json();
+        const descriptors = await bin('/native/descriptors.u8');
+        const npairs = +(q.get('pairs') || 0);
+        const worker = new Worker('/app/src/stages/match/worker.js', { type: 'module' });
+        const msg = {
+          type: 'run',
+          id: 'full',
+          frames: frames.frames,
+          target: frames.target_enu,
+          counts,
+          descriptors,
+          matchOptions: opts,
+        };
+        if (npairs)
+          msg.pairs = selectPairs(frames.frames, frames.target_enu).pairs.slice(0, 2 * npairs);
+        const t0 = performance.now();
+        let tPairs = 0;
+        const result = await new Promise((resolve, reject) => {
+          worker.onerror = (e) => reject(new Error('worker: ' + e.message));
+          worker.onmessage = ({ data: m }) => {
+            if (m.type === 'pairs') tPairs = performance.now() - t0;
+            else if (m.type === 'progress') {
+              if (m.done % 512 < 32) log(`progress ${m.done}/${m.total} ${m.matches} matches`);
+            } else if (m.type === 'done' && m.id === 'full') resolve(m);
+            else if (m.type === 'error')
+              reject(new Error(`${m.name}: ${m.message} (done ${m.done})`));
+          };
+          worker.postMessage(msg, [descriptors.buffer]);
+        });
+        worker.terminate();
+        const ms = performance.now() - t0;
+        const got = decodeMatches(result.container);
+        const sel = new Set(got.map((g) => g.i * 65536 + g.j));
+        const wantSub = want.filter((e) => sel.has(e.i * 65536 + e.j));
+        const cmp = compare(got, wantSub);
+        if (!npairs) cmp.nativePairsNotProduced = want.length - wantSub.length;
+        // quick check; the float-tolerance acceptance is compare_matches.py on the uploaded container
+        cmp.ambiguousPairDecisions = result.ambiguous ? result.ambiguous.length : null;
+        cmp.pass =
+          cmp.missing + cmp.extra <= 1e-4 * cmp.nativeMatches &&
+          cmp.nativePairsNotProduced === 0 &&
+          cmp.producedNotNative === 0 &&
+          !cmp.ambiguousPairDecisions;
+        if (q.get('upload'))
+          await fetch('/upload?name=' + (q.get('tag') || 'browser'), {
+            method: 'POST',
+            body: result.container,
+          });
+        const s = result.stats;
+        return {
+          adapter: result.adapter,
+          pairSelectMs: +tPairs.toFixed(1),
+          totalMs: Math.round(ms),
+          matchMs: Math.round(s.ms),
+          msPerPair: +(s.ms / s.pairs).toFixed(2),
+          pairsPerS: +((s.pairs / s.ms) * 1000).toFixed(1),
+          uploads: s.uploads,
+          uploadMs: Math.round(s.uploadMs),
+          finishMs: Math.round(s.finishMs),
+          poolSlots: s.poolSlots,
+          batches: s.batches,
+          cmp,
+        };
+      }
+
+      // CPU reference of the same rule (sequential f32 sums; exact for the small-integer test data)
+      function cpuMatch(a, na, b, nb, ratio = 0.8) {
+        const f = Math.fround,
+          h = (k, x) => f16BitsToF32(k === 0 ? x & 0xffff : x >>> 16);
+        const val = (A, r, k) => h(k & 1, A[r * 64 + (k >> 1)]);
+        const sim = [];
+        for (let i = 0; i < na; i++) {
+          sim.push([]);
+          for (let j = 0; j < nb; j++) {
+            let s = 0;
+            for (let k = 0; k < 128; k++) s = f(s + f(val(a, i, k) * val(b, j, k)));
+            const buf = new Float32Array([s]);
+            sim[i].push(f16BitsToF32(toH(buf[0])));
+          }
+        }
+        const colArg = [];
+        for (let j = 0; j < nb; j++) {
+          let best = 0;
+          for (let i = 1; i < na; i++) if (sim[i][j] > sim[best][j]) best = i;
+          colArg.push(best);
+        }
+        const out = [];
+        for (let i = 0; i < na; i++) {
+          const row = sim[i].map((v, j) => [v, j]).sort((x, y) => y[0] - x[0] || x[1] - y[1]);
+          const d = (s) => f(Math.sqrt(Math.max(f(2 - 2 * s), 0)));
+          if (d(row[0][0]) < f(f(ratio) * d(row[1][0])) && colArg[row[0][1]] === i)
+            out.push(i, row[0][1]);
+        }
+        return out;
+      }
+      import { f32ToF16Bits as toH } from '/app/src/stages/match/quantize.js';
+
+      async function edge() {
+        const { device } = await createDevice(opts);
+        const res = [];
+        const rng = (() => {
+          let x = 7;
+          return () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648;
+        })();
+        // frames: 0 random 150; 1 = copies of 0's rows with duplicates and permutation; 2: 1 desc; 3: none; 4: 70 random; 5: 64 all-equal rows
+        const mk = (n, fn) => {
+          const d = new Uint8Array(n * 128);
+          for (let r = 0; r < n; r++) for (let k = 0; k < 128; k++) d[r * 128 + k] = fn(r, k);
+          return d;
+        };
+        const d0 = mk(150, () => (rng() * 60) | 0);
+        const d1 = mk(130, (r, k) => d0[((r * 7) % 150) * 128 + k]); // 7 coprime with 150: distinct rows
+        for (let k = 0; k < 128; k++) {
+          d1[5 * 128 + k] = d1[6 * 128 + k];
+          d1[20 * 128 + k] = d0[3 * 128 + k];
+        } // forward tie + extra copy
+        const d4 = mk(70, (r, k) => (r < 10 ? d0[r * 2 * 128 + k] : (rng() * 60) | 0));
+        const d5 = mk(64, (r, k) => (k * 3) % 40);
+        const d6 = mk(66, (r, k) => d0[(r % 33) * 4 * 128 + k]); // every row twice: column ties
+        const frames = [d0, d1, mk(1, () => 9), new Uint8Array(0), d4, d5, d6];
+        const counts = new Uint32Array(frames.map((d) => d.length / 128));
+        const pairs = new Uint32Array([
+          0, 1, 0, 2, 2, 3, 0, 3, 0, 4, 1, 4, 4, 5, 0, 5, 0, 6, 6, 1, 1, 0,
+        ]);
+        const { results } = await matchPairs(
+          device,
+          pairs,
+          counts,
+          (k) => ({ n: counts[k], data: frames[k] }),
+          { batchPairs: 3 },
+        );
+        let ok = true;
+        results.forEach((r, p) => {
+          const i = pairs[2 * p],
+            j = pairs[2 * p + 1];
+          const skip = counts[i] < 2 || counts[j] < 2;
+          const want = skip
+            ? []
+            : cpuMatch(
+                quantizeDescriptors(frames[i], counts[i]),
+                counts[i],
+                quantizeDescriptors(frames[j], counts[j]),
+                counts[j],
+              );
+          const same =
+            r.status === (skip ? 1 : 0) &&
+            r.matches.length === want.length &&
+            want.every((x, k) => r.matches[k] === x);
+          ok &&= same;
+          res.push(
+            `${i}-${j}: ${r.status ? 'skipped' : r.matches.length / 2 + ' matches'} ${same ? 'ok' : 'MISMATCH want ' + want.length / 2}`,
+          );
+        });
+        // cancellation after the first batch
+        const ac = new AbortController();
+        const many = new Uint32Array(Array.from({ length: 40 }, (_, k) => [0, 1]).flat());
+        let cancelled = null;
+        try {
+          await matchPairs(device, many, counts, (k) => ({ n: counts[k], data: frames[k] }), {
+            batchPairs: 4,
+            depth: 1,
+            signal: ac.signal,
+            onBatch: () => ac.abort(),
+          });
+        } catch (e) {
+          cancelled = { name: e.name, done: e.done };
+        }
+        const cancelOk =
+          cancelled && cancelled.name === 'AbortError' && cancelled.done > 0 && cancelled.done < 40;
+        res.push(`cancel: ${JSON.stringify(cancelled)} ${cancelOk ? 'ok' : 'FAIL'}`);
+        // device loss mid-run
+        let lostErr = null;
+        try {
+          await matchPairs(device, many, counts, (k) => ({ n: counts[k], data: frames[k] }), {
+            batchPairs: 4,
+            depth: 1,
+            onBatch: () => device.destroy(),
+          });
+        } catch (e) {
+          lostErr = { name: e.name, done: e.done, message: e.message };
+        }
+        const lostOk = lostErr && lostErr.name === 'DeviceLost';
+        res.push(`device lost: ${JSON.stringify(lostErr)} ${lostOk ? 'ok' : 'FAIL'}`);
+        const src = (k) => ({ n: counts[k], data: frames[k] });
+        const checks = [ok, cancelOk, lostOk];
+        const add = (pass, what) => {
+          checks.push(pass);
+          res.push(`${what} ${pass ? 'ok' : 'FAIL'}`);
+        };
+
+        // count buffers a matchPairs call creates and destroys
+        const tracked = (dev) => {
+          const t = { created: 0, destroyed: 0 };
+          const orig = dev.createBuffer.bind(dev);
+          dev.createBuffer = (d) => {
+            const b = orig(d);
+            t.created++;
+            const od = b.destroy.bind(b);
+            b.destroy = () => {
+              t.destroyed++;
+              od();
+            };
+            return b;
+          };
+          return t;
+        };
+        // pipeline failure: classified, every buffer destroyed, error scopes balanced, device usable
+        {
+          const { device: dev } = await createDevice(opts);
+          const t = tracked(dev);
+          let err = null;
+          try {
+            await matchPairs(dev, pairs, counts, src, {
+              wgsl: '@compute @workgroup_size(1) fn main() { broken }',
+            });
+          } catch (e) {
+            err = e.name;
+          }
+          const after = { ...t };
+          dev.pushErrorScope('validation');
+          const stale = await dev.popErrorScope();
+          const again = await matchPairs(dev, pairs.subarray(0, 2), counts, src);
+          add(
+            err === 'Shader' &&
+              after.created > 0 &&
+              after.created === after.destroyed &&
+              stale === null &&
+              again.results[0].matches.length > 0,
+            `shader failure: ${err}, buffers ${after.created} created / ${after.destroyed} destroyed, scopes balanced, device reusable`,
+          );
+          dev.destroy();
+        }
+        // device lost before setup
+        {
+          const { device: dev } = await createDevice(opts);
+          const t = tracked(dev);
+          dev.destroy();
+          await dev.lost;
+          let err = null;
+          try {
+            await matchPairs(dev, pairs, counts, src);
+          } catch (e) {
+            err = e.name;
+          }
+          add(
+            err === 'DeviceLost' && t.created === t.destroyed,
+            `device lost during setup: ${err}, buffers ${t.created}/${t.destroyed}`,
+          );
+        }
+        // kernel lint: WGSL function-scope vars must be initialised explicitly (see probe below)
+        const uninit = MATCH_WGSL.split('\n').filter((l) => /^\s+var\s+\w+\s*:[^=]*;/.test(l));
+        add(
+          uninit.length === 0,
+          `kernel declares no uninitialised function-scope var (${uninit.length})`,
+        );
+        // loop-var probe: a var without initializer inside a loop must restart at zero (WGSL);
+        // Chrome on Linux/Vulkan gets this wrong (notes/stage4.md); reported, not failed
+        const probe = await (async () => {
+          const { device: dev } = await createDevice(opts);
+          const code = `@group(0) @binding(0) var<storage, read_write> O: array<f32>;
+@compute @workgroup_size(1) fn main() {
+  var total = 0.0;
+  for (var t = 0u; t < 3u; t++) { var acc: array<vec4f, 4>; for (var k = 0u; k < 2u; k++) { acc[0] += vec4f(1.0); } total += acc[0].x; }
+  O[0] = total;
+}`;
+          const b = dev.createBuffer({
+            size: 16,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+          });
+          const r = dev.createBuffer({
+            size: 16,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+          });
+          const pl = dev.createComputePipeline({
+            layout: 'auto',
+            compute: { module: dev.createShaderModule({ code }), entryPoint: 'main' },
+          });
+          const e = dev.createCommandEncoder(),
+            c = e.beginComputePass();
+          c.setPipeline(pl);
+          c.setBindGroup(
+            0,
+            dev.createBindGroup({
+              layout: pl.getBindGroupLayout(0),
+              entries: [{ binding: 0, resource: { buffer: b } }],
+            }),
+          );
+          c.dispatchWorkgroups(1);
+          c.end();
+          e.copyBufferToBuffer(b, 0, r, 0, 16);
+          dev.queue.submit([e.finish()]);
+          await r.mapAsync(GPUMapMode.READ);
+          const v = new Float32Array(r.getMappedRange())[0];
+          dev.destroy();
+          return v;
+        })();
+        res.push(
+          `loop-var probe: ${probe} (${probe === 6 ? 'correct' : 'BUG: var not re-zeroed in loops; matcher unaffected'})`,
+        );
+        checks.push(probe === 6 || probe === 12);
+
+        // worker: cancellation and overlapping runs through real messages
+        const all = new Uint8Array(frames.reduce((a, d) => a + d.length, 0));
+        frames.reduce((o, d) => {
+          all.set(d, o);
+          return o + d.length;
+        }, 0);
+        const runWorker = (script) =>
+          new Promise((resolve) => {
+            const w = new Worker('/app/src/stages/match/worker.js', { type: 'module' });
+            const seen = [];
+            const t = setTimeout(() => {
+              w.terminate();
+              resolve(seen);
+            }, 60000);
+            w.onmessage = ({ data: m }) => {
+              seen.push({ type: m.type, id: m.id, name: m.name, done: m.done });
+              script(w, m, () => {
+                clearTimeout(t);
+                w.terminate();
+                resolve(seen);
+              });
+            };
+            script(w, null, null);
+          });
+        const run = (w, id, n) =>
+          w.postMessage({
+            type: 'run',
+            id,
+            pairs: many.slice(0, 2 * n),
+            counts,
+            descriptors: all.slice(),
+            matchOptions: { ...opts, batchPairs: 2, depth: 1 },
+          });
+        const cancelSeen = await runWorker((w, m, end) => {
+          if (!m) return run(w, 'c1', 40);
+          if (m.type === 'progress') w.postMessage({ type: 'cancel', id: 'c1' });
+          if (m.type === 'error' || m.type === 'done') end();
+        });
+        const ce = cancelSeen.find((x) => x.type === 'error');
+        add(
+          ce &&
+            ce.id === 'c1' &&
+            ce.name === 'AbortError' &&
+            ce.done > 0 &&
+            ce.done < 40 &&
+            !cancelSeen.some((x) => x.type === 'done'),
+          `worker cancel: ${JSON.stringify(ce)}`,
+        );
+        let finished = 0;
+        const busySeen = await runWorker((w, m, end) => {
+          if (!m) {
+            run(w, 'r1', 6);
+            run(w, 'r2', 6);
+            return;
+          }
+          if (m.type === 'done' || m.type === 'error') if (++finished === 2) end();
+        });
+        const busy = busySeen.find((x) => x.type === 'error');
+        const doneMsg = busySeen.find((x) => x.type === 'done');
+        add(
+          busy && busy.id === 'r2' && busy.name === 'Busy' && doneMsg && doneMsg.id === 'r1',
+          `worker overlapping run: r2 ${busy && busy.name}, r1 ${doneMsg ? 'done' : 'not done'}`,
+        );
+        return { pass: checks.every(Boolean), loopVarBug: probe !== 6, res };
+      }
+
+      window.result = null;
+      (q.get('mode') === 'edge' ? edge() : full())
+        .then((r) => {
+          window.result = r;
+          log(JSON.stringify(r, null, 1));
+        })
+        .catch((e) => {
+          window.result = { error: e.name + ': ' + e.message };
+          log('error ' + e.message);
+        });
+    </script>
+  </body>
+</html>
