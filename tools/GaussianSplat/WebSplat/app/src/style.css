@@ -1,0 +1,106 @@
+:root {
+  color-scheme: light dark;
+  font:
+    14px/1.4 system-ui,
+    sans-serif;
+}
+body {
+  max-width: 980px;
+  margin: 1em auto;
+  padding: 0 1em;
+}
+h1 {
+  font-size: 1.4em;
+  margin: 0 0 0.5em;
+}
+section {
+  margin: 0.8em 0;
+}
+.panel {
+  border: 1px solid #8884;
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+}
+.error {
+  border-color: #d33;
+  background: #d331;
+}
+.warn {
+  border-color: #c90;
+  background: #c901;
+}
+.hint {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+td {
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid #8883;
+  vertical-align: top;
+}
+td.title {
+  width: 22%;
+  font-weight: 600;
+}
+td.state {
+  width: 14%;
+}
+td.bar progress {
+  width: 100%;
+}
+td.bar .units {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+td.elapsed,
+td.eta {
+  width: 12%;
+  text-align: right;
+  white-space: nowrap;
+}
+tr[data-state='running'] td.state,
+tr[data-state='checkpointing'] td.state {
+  color: #28a;
+  font-weight: 600;
+}
+tr[data-state='done'] td.state {
+  color: #393;
+}
+tr[data-state='failed'] td.state {
+  color: #d33;
+  font-weight: 600;
+}
+tr[data-state='interrupted'] td.state,
+tr[data-state='paused'] td.state {
+  color: #c90;
+}
+#overall {
+  font-size: 1.1em;
+}
+#log {
+  max-height: 12em;
+  overflow: auto;
+  font:
+    12px ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+}
+button {
+  font: inherit;
+  padding: 0.3em 0.9em;
+  margin-right: 0.4em;
+}
+[hidden] {
+  display: none !important;
+}
+#proposal-form label {
+  display: inline-block;
+  margin: 0.3em 1em 0.3em 0;
+}
+#proposal-form input[type='number'] {
+  width: 9em;
+}
