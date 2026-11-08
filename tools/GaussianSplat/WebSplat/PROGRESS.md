@@ -8,14 +8,16 @@ Plan: PLAN.md. Reviews: REVIEW-*.md. Newest entries at the top of each section.
 |---|---|---|
 | plan | v2 done | v1 reviewed by codex (REVIEW-plan.md), v2 written 2026-11-08 |
 | 0 reference, contracts, skeleton, harness | accepted (codex round 3), committed | reference reproduced byte-identical; CONTRACTS.md v1.3; dummy pipeline 30/30 checks on laptop NVIDIA, Intel and win11; crash-safe manifest and checkpoints; notes/stage0.md, REVIEW-stage0.md |
-| G1 thermal training in Brush (gate) | passed with one variance miss, codex review running | Brush + CubeCL forks: float targets, hot-weighted L1, frozen holdouts, apcg_splat PLY; win11 Chrome 7.7 min all pass; laptop Chrome 13.5 min (no canvas), criterion 3 fails on one high-variance view; laptop native ~12 min all pass; peak GPU 1.8-2.0 GB; notes/g1.md |
+| G1 thermal training in Brush (gate) | round 1 fixes done; repeat policy passes on both machines (laptop 5/5 valid, criterion 3 4/5; win11 5/5 valid, criterion 2 4/5); codex round 2 running | Brush + CubeCL forks: float targets, hot-weighted L1, frozen holdouts, apcg_splat PLY; win11 Chrome 7.7 min all pass; laptop Chrome 13.5 min (no canvas), criterion 3 fails on one high-variance view; laptop native ~12 min all pass; peak GPU 1.8-2.0 GB; notes/g1.md |
 | G2 telemetry-seeded mapping in wasm (gate) | passed, accepted (codex round 3), committed | colmap-wasm fork: verification matches native seed 0 on 2698 pairs (E not reproduced in 32 pairs, equal-consensus solutions); mapping 0.020 m / 0.009 deg median from native geometry, 0.132 m / 0.047 deg from browser matching of native features; Node, laptop and win11 Chrome byte-identical; verification 70 s laptop / 36 s win11, mapping 74 s / 70 s; notes/g2.md, REVIEW-g2.md |
 | 1-2 ingest, frame selection | accepted (codex round 3), committed | all acceptance checks pass vs native (raw pixels, poses, CLAHE pixel-identical, option variants, blank/incomplete telemetry, storage faults); run through the page on laptop and win11; notes/stage12.md, REVIEW-stage12.md |
-| 3 features | agent working | SIFT in the colmap-wasm fork; closes G2's browser-feature acceptance |
+| 3 features + 3-5 integration | accepted (codex round 3), committed | fork SIFT exact vs native CPU SIFT (201/201 counts, keypoints within 0.01 px); browser chain features -> WebGPU match -> verify -> map: 106%/110% of native verified pairs/inliers, 0.250 m / 0.081 deg median (closes G2); features, match, map run as page stages with per-round map checkpoints (resume byte-identical) and Stop; pipeline to sparse model 207 s laptop / 175 s win11; notes/stage3.md |
 | 4 pairs and matching | accepted (codex round 3), committed | pairs identical; matches agree with native within the fp16 grid (35 of 510,656 at decision boundaries, all feasible within 0.51 ulp); 27.5 s laptop NVIDIA, 7.9 s win11, 317 s laptop Intel; verification waits for G2; notes/stage4.md, REVIEW-stage4.md |
-| 5 mapping, 5b scene preparation | waiting | |
+| 5 mapping | integrated with stage 3 (above) | |
+| 5b scene preparation | accepted (codex round 3), committed | `prepare` stage after map: train.py's scene loading bit-exact vs train.py's own (dump_scene.py) on the native and the browser model and 6 option variants: same views/frozen holdouts, identical undistorted Celsius and f16 targets, scale, bounds, ceiling, initial points, lr/densification settings, hot spot within 1e-5 m; in the page 8.1 s laptop / 3.9 s win11; Brush hand-off proposals in notes/stage5b.md |
 | 6 training | waiting | after G1 |
-| 7a export round trip, 7 result | waiting | |
+| 7a export round trip | accepted (codex round 3), committed | tiny known model (10 Gaussians, SH3): PLY, SPZ, meta.json byte-identical to native; quaternion, opacity, scale, SH, axes checked against gsplat renders with negative controls; SPZ error <= 0.56 quantisation steps; viewer embedded via postMessage, readouts within 0.42 C; run13 exports in 4.9 s; open: viewer antialiasing lowers hot peaks; notes/stage7a.md |
+| 7 result | waiting | |
 | 8 integration, recovery, release | waiting | |
 
 ## Shared data (not in git)
@@ -48,6 +50,8 @@ iterations, as a training-speed reference:
   3 min. Large RGB sets are out of scope for release 1.
 
 ## Decisions
+
+- 2026-11-08: training targets are float16 as train.py trains on (stage 5b output); stage 6 builds Brush's init.ply from 5b's points (kNN scales, random quaternions). G1's float32-based PNG transport is a gate-only path.
 
 ## Open issues
 

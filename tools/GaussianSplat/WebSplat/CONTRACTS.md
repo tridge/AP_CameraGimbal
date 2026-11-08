@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.3.1 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.4 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -321,7 +321,14 @@ Defaults (train.py): `max_images` 500, `hot_delta` 10 C, `min_elevation` 20 deg,
   `comment apcg_splat {"kind":"thermal","up":[0,0,1],"target":[E,N,U],
   "temperature_scale":{…},"origin":{…}}`. Greyscale: value = `SH_C0 * f_dc + 0.5` (all three
   channels equal), decoded with the scale's inverse `t0 + k * expm1(v * log1p((t1-t0)/k))`.
-- SPZ + `meta.json` as `export_web.py` (stage 7a defines details).
+- Downloads as `export_web.py` (stage 7a, `app/src/stages/export/`): `splat.ply` in its `--ply`
+  form (SH channels replaced by their mean; header info `kind, gaussians, sh_degree, title,
+  description, camera{position,target,fov_deg}, up, target, origin, rasterize_mode, temperature_scale,
+  hotspot, colormap, display_range_c`, Python `json.dumps` text; `rasterize_mode` "classic": gsplat
+  classic, as trained), `splat.spz` = Spark `transcodeSpz` of that PLY (`maxSh` 3, SPZ v3, 12
+  fractional bits, antialiased flag cleared for classic, gzip with a fixed header), `meta.json` = the same info plus
+  `downloads{ply,spz}` (bytes), `json.dumps(indent=1)`. Start camera: `export_web.start_camera` from
+  the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
 
 ## Job manifest (`websplat.manifest` v1)
 
@@ -435,6 +442,7 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
 
 ## Change log
 
+- v1.4 (2026-11-08): stage 7a export details (splat PLY, SPZ, meta.json).
 - v1.3.1 (2026-11-08): 5b as written by the prepare stage (additive: `image_id`, `skipped.budget`,
   `training`, dtype/shape records, `stats`, point order, hot spot precision).
 
