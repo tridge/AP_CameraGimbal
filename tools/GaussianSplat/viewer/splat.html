@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gaussian splat</title>
+    <link rel="stylesheet" href="@ROOT@viewer/viewer.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="panel">
+      <a href="@ROOT@">All splats</a>
+      <h1 id="title"></h1>
+      <p id="description"></p>
+      <div id="thermal-controls" hidden>
+        <label
+          >Colormap
+          <select id="cmap"></select
+        ></label>
+        <label><input id="auto" type="checkbox" checked /> Auto range</label>
+        <label>Low <input id="lo" type="number" step="0.5" /> °C</label>
+        <label>High <input id="hi" type="number" step="0.5" /> °C</label>
+        <p id="stats"></p>
+        <p id="hover"></p>
+        <p class="note">
+          Apparent temperature from blended values, not calibrated surface temperature. The
+          compressed splat reads up to a few °C low at the hottest points.
+        </p>
+      </div>
+      <button id="reset" type="button">Reset view</button>
+      <p class="note">Drag to orbit, right-drag to pan, scroll to zoom. Rendered on your device.</p>
+    </div>
+    <p id="status" hidden></p>
+    <script>
+      window.SPLAT = { meta: 'meta.json', splat: 'splat.spz', colormaps: '@ROOT@colormaps.json' };
+    </script>
+    <script type="module" src="@ROOT@viewer/viewer.js"></script>
+  </body>
+</html>

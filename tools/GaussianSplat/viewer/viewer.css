@@ -1,0 +1,61 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: #eee;
+  font:
+    14px system-ui,
+    sans-serif;
+  overflow: hidden;
+}
+#canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+}
+#panel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 280px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.85);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+#panel h1 {
+  font-size: 16px;
+  margin: 6px 0;
+}
+#panel label {
+  display: block;
+  margin: 4px 0;
+}
+#panel input[type='number'] {
+  width: 70px;
+}
+#panel a {
+  color: #8cf;
+}
+#description,
+.note {
+  color: #bbb;
+  font-size: 12px;
+}
+#status {
+  position: absolute;
+  top: 50%;
+  width: 100%;
+  text-align: center;
+  font-size: 18px;
+}
+@media (max-width: 600px) {
+  #panel {
+    width: auto;
+    right: 10px;
+    max-height: 40vh;
+  }
+}
