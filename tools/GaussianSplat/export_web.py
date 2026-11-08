@@ -3,11 +3,13 @@
 
   (cd viewer && npm ci && npm run build)   # once: the viewer and the SPZ encoder
   export_web.py SPLATDIR SITE DATE/FLIGHT/RUN [--title TITLE]
+  export_web.py SPLATDIR --ply OUT.ply [--title TITLE]
 
 SPLATDIR holds splat.pt and scale.json (train.py or train_rgb.py) and optionally
 description.txt. Writes SITE/DATE/FLIGHT/RUN/{splat.spz, meta.json, index.html}, copies the
-viewer to SITE/viewer/ and rewrites SITE/index.html and SITE/colormaps.json. SITE is plain
-static files for any web server.
+viewer to SITE/viewer/ and rewrites SITE/index.html. SITE is plain static files for any web
+server. --ply instead writes one PLY carrying the same metadata in its header, for opening in
+the viewer's open-a-file page (viewer/dist/index.html, e.g. plot.ardupilot.org/splat/).
 
 Thermal splats are written in greyscale: every colour channel holds the scaled temperature, and
 the viewer decodes the blended value and applies the colormap per pixel, as view_splat.py does.
@@ -53,7 +55,7 @@ def start_camera(ckpt, target):
     return dict(position=pos.tolist(), target=target.tolist(), fov_deg=fov)
 
 
-def write_ply(path, params, sh):
+def write_ply(path, params, sh, info=None):
     from plyfile import PlyData, PlyElement
     n = len(params['means'])
     sh = sh.numpy()
@@ -69,7 +71,8 @@ def write_ply(path, params, sh):
     el = np.empty(n, dtype=[(a, 'f4') for a in names])
     for i, a in enumerate(names):
         el[a] = data[:, i]
-    PlyData([PlyElement.describe(el, 'vertex')]).write(str(path))
+    comments = ['apcg_splat ' + json.dumps(info, separators=(',', ':'))] if info else []
+    PlyData([PlyElement.describe(el, 'vertex')], comments=comments).write(str(path))
 
 
 def write_index(site):
@@ -89,7 +92,8 @@ def write_index(site):
 li { margin: 1em 0; } .kind { color: #666; font-size: 13px; } p { margin: 0.3em 0; color: #333; }</style>
 </head><body><h1>Gaussian splats</h1>
 <p>3D Gaussian splats from UAV thermal and RGB video. They render in your browser using your own
-GPU; the larger ones need a desktop or a recent phone.</p>
+GPU; the larger ones need a desktop or a recent phone.
+<a href="viewer/">Open your own splat file</a> (read on your device, never uploaded).</p>
 <ul>
 %s
 </ul></body></html>
@@ -99,16 +103,22 @@ GPU; the larger ones need a desktop or a recent phone.</p>
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('splat', type=Path, help='directory with splat.pt and scale.json')
-    ap.add_argument('site', type=Path, help='site directory')
-    ap.add_argument('path', help='DATE/FLIGHT/RUN within the site')
+    ap.add_argument('site', type=Path, nargs='?', help='site directory')
+    ap.add_argument('path', nargs='?', help='DATE/FLIGHT/RUN within the site')
+    ap.add_argument('--ply', type=Path, help='write one PLY with the metadata in its header instead')
     ap.add_argument('--title', help='page title (default: from PATH)')
     args = ap.parse_args()
-    parts = Path(args.path).parts
-    if len(parts) != 3 or any(p in ('.', '..') for p in parts):
-        fatal('PATH must be DATE/FLIGHT/RUN')
-    if not (WEB / 'dist' / 'viewer.js').exists():
-        fatal('build the viewer first: cd %s && npm ci && npm run build' % WEB)
-    args.out = args.site / args.path
+    if args.ply:
+        parts = args.splat.resolve().parts[-3:]
+    else:
+        if not args.site or not args.path:
+            fatal('give SITE and DATE/FLIGHT/RUN, or --ply OUT.ply')
+        parts = Path(args.path).parts
+        if len(parts) != 3 or any(p in ('.', '..') for p in parts):
+            fatal('PATH must be DATE/FLIGHT/RUN')
+        if not (WEB / 'dist' / 'viewer.js').exists():
+            fatal('build the viewer first: cd %s && npm ci && npm run build' % WEB)
+        args.out = args.site / args.path
 
     setup_cuda_env()  # splat_model uses gsplat
     import torch
@@ -127,32 +137,33 @@ def main():
             sh0, shN = bake_lobe_into_sh({k: v.to(dev) for k, v in p.items()}, ckpt['sh_degree'])
         sh = torch.cat([sh0, shN], 1).cpu()
         sh = sh.mean(2, keepdim=True).expand(-1, -1, 3).contiguous()  # view_splat.py averages the channels
-    args.out.mkdir(parents=True, exist_ok=True)
-    write_ply(args.out / 'splat.ply', p, sh)
 
     target = np.array(meta['hotspot']['enu'] if meta.get('hotspot') else meta.get('target_enu', [0, 0, 0]))
     desc = args.splat / 'description.txt'
     info = dict(kind='rgb' if rgb else 'thermal', gaussians=len(p['means']), sh_degree=ckpt['sh_degree'],
                 title=args.title or ' '.join(parts),
                 description=desc.read_text().strip() if desc.exists() else '',
-                camera=start_camera(ckpt, target), up=[0, 0, 1], origin=meta.get('origin'))
+                camera=start_camera(ckpt, target), up=[0, 0, 1], target=target.tolist(),
+                origin=meta.get('origin'))
     if not rgb:
         ts = meta['temperature_scale']
         if ts.get('kind', 'log1p') != 'log1p':
             fatal('unsupported temperature scale %s' % ts.get('kind'))
         info.update(temperature_scale=ts, hotspot=meta.get('hotspot'), colormap='ironbow',
                     display_range_c=[math.floor(ts['t0_c']), math.ceil(ts['t1_c'])])
+    if args.ply:
+        write_ply(args.ply, p, sh, info)
+        print('wrote %s: %d %s Gaussians' % (args.ply, info['gaussians'], info['kind']))
+        return
+    args.out.mkdir(parents=True, exist_ok=True)
+    write_ply(args.out / 'splat.ply', p, sh)
     (args.out / 'meta.json').write_text(json.dumps(info, indent=1))
 
     subprocess.run(['node', str(WEB / 'ply2spz.mjs'), str(args.out / 'splat.ply'), str(args.out / 'splat.spz')],
                    check=True, cwd=WEB)
     (args.out / 'splat.ply').unlink()
     (args.out / 'index.html').write_text((WEB / 'splat.html').read_text().replace('@ROOT@', '../../../'))
-    from colormaps import NAMES, colormap_lut
-    (args.site / 'colormaps.json').write_text(json.dumps(
-        {n: np.round(np.asarray(colormap_lut(n), dtype=float), 4).tolist() for n in NAMES}))
     shutil.copytree(WEB / 'dist', args.site / 'viewer', dirs_exist_ok=True)
-    shutil.copy(WEB / 'viewer.css', args.site / 'viewer' / 'viewer.css')
     write_index(args.site)
     print('wrote %s: %d %s Gaussians, SH degree %d' % (args.out, info['gaussians'], info['kind'], ckpt['sh_degree']))
 

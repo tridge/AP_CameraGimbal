@@ -1,0 +1,14 @@
+# Include inside ONLY the plot.ardupilot.org HTTPS server block, like plot-video.nginx.
+# Static files only: splats are opened from the visitor's own disk or a ?url= link.
+location = /splat {
+    return 301 /splat/$is_args$args;
+}
+location ^~ /splat/ {
+    alias /data/sites/logviewer/splat/current/;
+    index index.html;
+    autoindex off;
+    gzip_static on;
+    gzip_vary on;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}

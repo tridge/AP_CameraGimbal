@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gaussian splat viewer</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="open-panel" class="open-panel" hidden>
+      <h1>Gaussian splat viewer</h1>
+      <p>
+        Open a 3D Gaussian splat (.ply, .spz, .splat, .ksplat or .sog) to view it in your browser.
+        The file is read on this device and never uploaded; rendering uses your own GPU.
+      </p>
+      <label class="button"
+        >Choose splat file <input id="file" type="file" accept=".ply,.spz,.splat,.ksplat,.sog"
+      /></label>
+      <p class="note">
+        Or drop a file onto this page. Thermal splats from ArduPilot's GaussianSplat tools show
+        temperatures; other splats show in colour. A file on a web server that allows cross-origin
+        requests can be linked as <code>?url=https://…/splat.spz</code>.
+      </p>
+    </div>
+    <div id="panel" hidden>
+      <h1 id="title"></h1>
+      <p id="description"></p>
+      <label hidden
+        >Up axis
+        <select id="up">
+          <option value="-y">−Y (most 3DGS tools)</option>
+          <option value="y">+Y</option>
+          <option value="z">+Z</option>
+        </select></label
+      >
+      <div id="thermal-controls" hidden>
+        <label
+          >Colormap
+          <select id="cmap"></select
+        ></label>
+        <label><input id="auto" type="checkbox" checked /> Auto range</label>
+        <label>Low <input id="lo" type="number" step="0.5" /> °C</label>
+        <label>High <input id="hi" type="number" step="0.5" /> °C</label>
+        <p id="stats"></p>
+        <p id="hover"></p>
+        <p class="note">
+          Apparent temperature from blended values, not calibrated surface temperature.
+        </p>
+      </div>
+      <button id="reset" type="button">Reset view</button>
+      <label class="button small"
+        >Open another <input id="file2" type="file" accept=".ply,.spz,.splat,.ksplat,.sog"
+      /></label>
+      <p class="note">Drag to orbit, right-drag to pan, scroll to zoom. Rendered on your device.</p>
+    </div>
+    <p class="credits"><a href="LICENSES.txt">Spark and three.js licences</a></p>
+    <p id="status" hidden></p>
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>

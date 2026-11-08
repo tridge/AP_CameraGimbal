@@ -305,8 +305,9 @@ def init_params(scene, args, device):
     return torch.nn.ParameterDict({k: torch.nn.Parameter(v) for k, v in p.items()})
 
 
-def save_ply(path, params, sh0, shN):
-    """Standard 3DGS PLY."""
+def save_ply(path, params, sh0, shN, info=None):
+    """Standard 3DGS PLY. info goes in a header comment for the browser viewer (viewer/): kind,
+    up axis, orbit target and, for thermal splats, the temperature scale."""
     from plyfile import PlyData, PlyElement
     means = params['means'].detach().cpu().numpy()
     sh0 = sh0.detach().cpu().numpy()[:, 0, :]
@@ -321,7 +322,8 @@ def save_ply(path, params, sh0, shN):
     el = np.empty(len(means), dtype=[(a, 'f4') for a in attrs])
     for i, a in enumerate(attrs):
         el[a] = data[:, i]
-    PlyData([PlyElement.describe(el, 'vertex')]).write(str(path))
+    comments = ['apcg_splat ' + json.dumps(info, separators=(',', ':'))] if info else []
+    PlyData([PlyElement.describe(el, 'vertex')], comments=comments).write(str(path))
 
 
 def colormap_sh(sh0, shN, cmap_name):
@@ -654,7 +656,9 @@ def main():
               % (min(hot_g), np.median(hot_g), max(hot_g)))
     with torch.no_grad():
         sh0, shN = bake_lobe_into_sh(params, args.sh_degree)
-    save_ply(out / 'splat.ply', params, sh0, shN)
+    save_ply(out / 'splat.ply', params, sh0, shN, info=dict(
+        kind='thermal', up=[0, 0, 1], target=(hotspot or {}).get('enu', scene['info']['target_enu']),
+        temperature_scale=scene['scale'].todict(), origin=scene['info']['origin']))
     save_ply(out / 'splat_color.ply', params, *colormap_sh(sh0, shN, args.colormap))
     print('wrote %s (%d gaussians) in %.0f s' % (out, len(params['means']), time.time() - t_start))
 
