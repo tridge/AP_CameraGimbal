@@ -7,7 +7,8 @@
 
 SPLATDIR holds splat.pt and scale.json (train.py or train_rgb.py) and optionally
 description.txt. Writes SITE/DATE/FLIGHT/RUN/{splat.spz, splat.ply, meta.json, index.html}
-(splat.ply is a download carrying the metadata in its header), copies the
+(splat.ply is a download carrying the metadata in its header), copies the source video given
+with --video to SITE/videos/ (shared by splats made from the same recording), copies the
 viewer to SITE/viewer/ and rewrites SITE/index.html. SITE is plain static files for any web
 server. --ply instead writes one PLY carrying the same metadata in its header, for opening in
 the viewer's open-a-file page (viewer/dist/index.html, e.g. plot.ardupilot.org/splat/).
@@ -86,6 +87,10 @@ def write_index(site):
         ply = info.get('downloads', {}).get('ply')
         dl = ' &middot; <a href="%s/splat.ply" download>PLY</a> <span class="kind">%.0f MB</span>' % (
             html.escape(rel), ply / 1e6) if ply else ''
+        video = info.get('video')
+        if video:
+            dl += ' &middot; <a href="videos/%s" download>video</a> <span class="kind">%.0f MB</span>' % (
+                html.escape(video['name']), video['bytes'] / 1e6)
         rows.append('<li><a href="%s/">%s</a> <span class="kind">%s, %s Gaussians</span>%s<p>%s</p></li>' % (
             html.escape(rel), html.escape(info['title']), info['kind'], format(info['gaussians'], ','), dl,
             html.escape(info.get('description', ''))))
@@ -102,6 +107,8 @@ The PLY downloads are standard 3DGS PLY files; thermal ones hold the scaled temp
 colour channel, with the temperature scale and start view in a <code>comment apcg_splat</code>
 header line, and open with temperatures in the viewer here or at
 <a href="https://plot.ardupilot.org/splat/">plot.ardupilot.org/splat</a>.
+The videos are the recordings each splat was made from, with the telemetry embedded (thermal
+MKV with per-frame camera telemetry, or MPEG-TS with MISB ST 0601 KLV).
 Made with the <a href="https://github.com/ArduPilot/AP_CameraGimbal/tree/master/tools/GaussianSplat">AP_CameraGimbal
 GaussianSplat tools</a>.</p>
 <ul>
@@ -117,6 +124,8 @@ def main():
     ap.add_argument('path', nargs='?', help='DATE/FLIGHT/RUN within the site')
     ap.add_argument('--ply', type=Path, help='write one PLY with the metadata in its header instead')
     ap.add_argument('--title', help='page title (default: from PATH)')
+    ap.add_argument('--video', type=Path, help='source video with embedded telemetry, offered as a download')
+    ap.add_argument('--video-name', help='file name for the video download (default: its own name)')
     args = ap.parse_args()
     if args.ply:
         parts = args.splat.resolve().parts[-3:]
@@ -170,6 +179,15 @@ def main():
     subprocess.run(['node', str(WEB / 'ply2spz.mjs'), str(args.out / 'splat.ply'), str(args.out / 'splat.spz')],
                    check=True, cwd=WEB)
     info['downloads'] = {k: (args.out / ('splat.' + k)).stat().st_size for k in ('ply', 'spz')}
+    if args.video:
+        name = args.video_name or args.video.name
+        if '/' in name or name.startswith('.'):
+            fatal('bad video name %s' % name)
+        dst = args.site / 'videos' / name
+        dst.parent.mkdir(exist_ok=True)
+        if not dst.exists() or dst.stat().st_size != args.video.stat().st_size:
+            shutil.copyfile(args.video, dst)
+        info['video'] = dict(name=name, bytes=dst.stat().st_size)
     (args.out / 'meta.json').write_text(json.dumps(info, indent=1))
     (args.out / 'index.html').write_text((WEB / 'splat.html').read_text().replace('@ROOT@', '../../../'))
     shutil.copytree(WEB / 'dist', args.site / 'viewer', dirs_exist_ok=True)

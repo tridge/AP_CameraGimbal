@@ -147,7 +147,8 @@ fitted to them and an up-axis choice.
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
     (cd tools/GaussianSplat/viewer && npm ci && npm run build)
-    $PY tools/GaussianSplat/export_web.py SPLATDIR SITE DATE/FLIGHT/RUN --title "TITLE"
+    $PY tools/GaussianSplat/export_web.py SPLATDIR SITE DATE/FLIGHT/RUN --title "TITLE" \
+        --video RECORDING.mkv --video-name DATE_FLIGHT_thermal.mkv
 
 `SPLATDIR` is a `train.py` or `train_rgb.py` output (`splat.pt`, `scale.json`, optionally
 `description.txt`). `export_web.py` writes:
@@ -158,6 +159,7 @@ Build the viewer once (needs Node.js 20.19 or later), then add splats to a site 
     SITE/DATE/FLIGHT/RUN/meta.json      # kind, temperature scale, start view, description
     SITE/DATE/FLIGHT/RUN/splat.spz      # compressed splat, loaded by the page
     SITE/DATE/FLIGHT/RUN/splat.ply      # download: 3DGS PLY with the metadata in its header
+    SITE/videos/NAME                    # download: the source recording with embedded telemetry
 
 Thermal splats are written in greyscale with the emission lobe projected onto the spherical
 harmonics; the viewer decodes the blended value to degrees C per pixel. SPZ compression makes
