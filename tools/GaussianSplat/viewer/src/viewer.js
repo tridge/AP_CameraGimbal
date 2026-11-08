@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
 
 // render size caps (pixels): integrated GPUs struggle at full HiDPI resolution
 const MAX_PIXELS = 2.0e6;
@@ -16,6 +17,17 @@ const UP_AXES = { z: [0, 0, 1], y: [0, 1, 0], '-y': [0, -1, 0] };
 
 const cfg = window.SPLAT;
 const $ = (id) => document.getElementById(id);
+
+for (const img of document.querySelectorAll('img.project-icon')) img.src = projectIconUrl;
+const favicon = document.createElement('link');
+favicon.rel = 'icon';
+favicon.type = 'image/svg+xml';
+favicon.href = projectIconUrl;
+document.head.append(favicon);
+
+function megabytes(bytes) {
+  return `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
+}
 
 function setStatus(text) {
   $('status').textContent = text;
@@ -303,6 +315,11 @@ async function main() {
     document.title = title;
     $('title').textContent = title;
     $('description').textContent = meta.description || '';
+    if ($('download')) {
+      const ply = meta.downloads?.ply;
+      $('download').hidden = !ply;
+      if (ply) $('download').textContent = `Download PLY (${megabytes(ply)})`;
+    }
     $('thermal-controls').hidden = !thermal;
     // thermal values must reach the target unconverted: Spark linearises colours for a linear target
     THREE.ColorManagement.workingColorSpace = thermal

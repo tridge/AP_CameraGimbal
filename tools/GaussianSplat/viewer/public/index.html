@@ -8,6 +8,12 @@
   </head>
   <body>
     <canvas id="canvas"></canvas>
+    <a
+      class="project"
+      href="https://github.com/ArduPilot/AP_CameraGimbal"
+      title="AP_CameraGimbal on GitHub"
+      ><img class="project-icon" alt="" width="32" height="32" /><span>AP_CameraGimbal</span></a
+    >
     <div id="open-panel" class="open-panel" hidden>
       <h1>Gaussian splat viewer</h1>
       <p>
@@ -21,6 +27,29 @@
         Or drop a file onto this page. Thermal splats from ArduPilot's GaussianSplat tools show
         temperatures; other splats show in colour. A file on a web server that allows cross-origin
         requests can be linked as <code>?url=https://…/splat.spz</code>.
+      </p>
+      <h2>Samples</h2>
+      <ul class="samples">
+        <li>
+          <a href="?url=samples/log80-run13.spz&amp;meta=samples/log80-run13.json"
+            >Thermal: night orbit of a fire under forest canopy</a
+          >
+          <span class="note">11 MB</span>
+        </li>
+        <li>
+          <a href="?url=samples/randy-run2.spz&amp;meta=samples/randy-run2.json"
+            >RGB: a house seen from a multicopter</a
+          >
+          <span class="note">35 MB</span>
+        </li>
+      </ul>
+      <p class="note">
+        Splats are made with the
+        <a href="https://github.com/ArduPilot/AP_CameraGimbal/tree/master/tools/GaussianSplat"
+          >GaussianSplat tools</a
+        >
+        in AP_CameraGimbal; more at
+        <a href="https://uav.tridgell.net/Splats/">uav.tridgell.net/Splats</a>.
       </p>
     </div>
     <div id="panel" hidden>

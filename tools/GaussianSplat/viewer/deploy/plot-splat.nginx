@@ -3,6 +3,13 @@
 location = /splat {
     return 301 /splat/$is_args$args;
 }
+# Sample splats, kept outside the releases so each release stays small.
+location ^~ /splat/samples/ {
+    alias /data/sites/logviewer/splat/samples/;
+    autoindex off;
+    add_header Cache-Control "public, max-age=3600" always;
+    add_header X-Content-Type-Options nosniff always;
+}
 location ^~ /splat/ {
     alias /data/sites/logviewer/splat/current/;
     index index.html;

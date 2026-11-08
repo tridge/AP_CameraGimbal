@@ -6,7 +6,8 @@
   export_web.py SPLATDIR --ply OUT.ply [--title TITLE]
 
 SPLATDIR holds splat.pt and scale.json (train.py or train_rgb.py) and optionally
-description.txt. Writes SITE/DATE/FLIGHT/RUN/{splat.spz, meta.json, index.html}, copies the
+description.txt. Writes SITE/DATE/FLIGHT/RUN/{splat.spz, splat.ply, meta.json, index.html}
+(splat.ply is a download carrying the metadata in its header), copies the
 viewer to SITE/viewer/ and rewrites SITE/index.html. SITE is plain static files for any web
 server. --ply instead writes one PLY carrying the same metadata in its header, for opening in
 the viewer's open-a-file page (viewer/dist/index.html, e.g. plot.ardupilot.org/splat/).
@@ -82,8 +83,11 @@ def write_index(site):
     for m in sorted(site.glob('*/*/*/meta.json'), key=order, reverse=True):
         info = json.loads(m.read_text())
         rel = m.parent.relative_to(site).as_posix()
-        rows.append('<li><a href="%s/">%s</a> <span class="kind">%s, %s Gaussians</span><p>%s</p></li>' % (
-            html.escape(rel), html.escape(info['title']), info['kind'], format(info['gaussians'], ','),
+        ply = info.get('downloads', {}).get('ply')
+        dl = ' &middot; <a href="%s/splat.ply" download>PLY</a> <span class="kind">%.0f MB</span>' % (
+            html.escape(rel), ply / 1e6) if ply else ''
+        rows.append('<li><a href="%s/">%s</a> <span class="kind">%s, %s Gaussians</span>%s<p>%s</p></li>' % (
+            html.escape(rel), html.escape(info['title']), info['kind'], format(info['gaussians'], ','), dl,
             html.escape(info.get('description', ''))))
     (site / 'index.html').write_text("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -93,7 +97,13 @@ li { margin: 1em 0; } .kind { color: #666; font-size: 13px; } p { margin: 0.3em 
 </head><body><h1>Gaussian splats</h1>
 <p>3D Gaussian splats from UAV thermal and RGB video. They render in your browser using your own
 GPU; the larger ones need a desktop or a recent phone.
-<a href="viewer/">Open your own splat file</a> (read on your device, never uploaded).</p>
+<a href="viewer/">Open your own splat file</a> (read on your device, never uploaded).
+The PLY downloads are standard 3DGS PLY files; thermal ones hold the scaled temperature in every
+colour channel, with the temperature scale and start view in a <code>comment apcg_splat</code>
+header line, and open with temperatures in the viewer here or at
+<a href="https://plot.ardupilot.org/splat/">plot.ardupilot.org/splat</a>.
+Made with the <a href="https://github.com/ArduPilot/AP_CameraGimbal/tree/master/tools/GaussianSplat">AP_CameraGimbal
+GaussianSplat tools</a>.</p>
 <ul>
 %s
 </ul></body></html>
@@ -156,12 +166,11 @@ def main():
         print('wrote %s: %d %s Gaussians' % (args.ply, info['gaussians'], info['kind']))
         return
     args.out.mkdir(parents=True, exist_ok=True)
-    write_ply(args.out / 'splat.ply', p, sh)
-    (args.out / 'meta.json').write_text(json.dumps(info, indent=1))
-
+    write_ply(args.out / 'splat.ply', p, sh, info)  # also the download
     subprocess.run(['node', str(WEB / 'ply2spz.mjs'), str(args.out / 'splat.ply'), str(args.out / 'splat.spz')],
                    check=True, cwd=WEB)
-    (args.out / 'splat.ply').unlink()
+    info['downloads'] = {k: (args.out / ('splat.' + k)).stat().st_size for k in ('ply', 'spz')}
+    (args.out / 'meta.json').write_text(json.dumps(info, indent=1))
     (args.out / 'index.html').write_text((WEB / 'splat.html').read_text().replace('@ROOT@', '../../../'))
     shutil.copytree(WEB / 'dist', args.site / 'viewer', dirs_exist_ok=True)
     write_index(args.site)
