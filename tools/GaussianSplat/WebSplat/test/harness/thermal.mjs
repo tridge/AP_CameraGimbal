@@ -1,10 +1,16 @@
 // The real stages registered so far on the canonical input, through the page: choose the MKV,
 // confirm the proposal, run to the end; records per-stage timings, GPU memory and console.
+// After select: features (3), match + verify (4) and map (5); the model is checked against the
+// native reference with G2's tolerances (test/g2/compare_models.py) and the verified geometry
+// against the reference database (>= 90% of its pairs and inliers).
 // usage: node thermal.mjs [--machine laptop|win11] [--mkv PATH] [--port 8790] [--cdp URL] [--reference]
+//   --stop-map: Stop during map round 1 and resume from its checkpoint
 //   --select-mode single|redecode|cache (default single)
 //   --reference: use the reference extraction's target (CONTRACTS.md stage 2) instead of the proposal
+//   --profile NAME: Chrome profile directory name under $WEBSPLAT_DATA/harness/profiles
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { APP_DIST, args, env } from './lib/env.mjs';
+import { spawnSync } from 'node:child_process';
+import { APP_DIST, WEBSPLAT, args, env } from './lib/env.mjs';
 import { capture, connectCdp, launchLocal } from './lib/browser.mjs';
 import { GpuSampler } from './lib/gpumem.mjs';
 import { serve } from './lib/serve.mjs';
@@ -15,7 +21,7 @@ const port = +(a.port ?? 8790);
 const adapter = a.adapter ?? 'high-performance';
 const data = env('WEBSPLAT_DATA');
 const mkv = a.mkv ?? `${data}/input/orbit.mkv`;
-const out = `${data}/harness/runs/thermal-${machine}-${a['select-mode'] ?? 'single'}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+const out = `${data}/harness/runs/thermal-${machine}-${a['select-mode'] ?? 'single'}${a['stop-map'] ? '-stopmap' : ''}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
 mkdirSync(out, { recursive: true });
 const base = `http://127.0.0.1:${port}`;
 const say = (s) => console.log(`${new Date().toISOString().slice(11, 19)} ${s}`);
@@ -27,12 +33,14 @@ const check = (name, ok, detail = '') => {
 };
 
 const server = await serve(APP_DIST, port);
-const profile = `${data}/harness/profiles/thermal-${machine}-${adapter}`;
+// --profile NAME: a separate Chrome profile (another harness run may hold the default one)
+const profile = `${data}/harness/profiles/${a.profile ?? `thermal-${machine}-${adapter}`}`;
 const gpu = new GpuSampler({
   sshHost: machine === 'win11' ? 'win11' : null,
   match: machine === 'win11' ? 'chrome.exe' : profile,
 });
 let browser;
+let ticker = null; // progress lines; cleared in finally so an error or timeout cannot keep the process alive
 try {
   browser =
     machine === 'win11'
@@ -40,6 +48,11 @@ try {
       : await launchLocal({ profile, adapter });
   const page = await browser.context.newPage();
   capture(page, consoleLog, 'tab1');
+  page.on(
+    'console',
+    (m) => m.type() === 'error' && say(`console.error: ${m.text().slice(0, 300)}`),
+  );
+  page.on('pageerror', (e) => say(`pageerror: ${e.message}`));
   await gpu.start();
   await page.goto(`${base}/__blank`);
   await page.evaluate(async () => {
@@ -89,14 +102,68 @@ try {
     await page.fill('[name=lon]', '148.9065438');
   }
   await page.click('#proposal-form button[type=submit]');
+  // a progress line every 15 s (stage states, progress, phase)
+  ticker = setInterval(async () => {
+    try {
+      const x = await page.evaluate(() => window.websplat.snapshot());
+      say(
+        x.stages
+          .map(
+            (t) =>
+              `${t.id}:${t.state}${t.phase ? '/' + t.phase : ''}` +
+              (t.progress ? ` ${+(+t.progress.done).toFixed(2)}/${t.progress.total ?? '?'}` : '') +
+              (t.error ? ` ERROR ${t.error.message}` : ''),
+          )
+          .join(' | ') + (x.needs ? ` needs ${x.needs}` : ''),
+      );
+    } catch {}
+  }, 15000);
+  if (a['stop-map']) {
+    // Stop inside map round 1 (after round 0's checkpoint), then start again: map must pause
+    // within the 3 s Stop contract and resume after round 0 (result.resumedAfter === 0)
+    await page.waitForFunction(
+      () => {
+        const m = window.websplat.snapshot().stages.find((x) => x.id === 'map');
+        return m.state === 'running' && (m.progress?.done ?? 0) >= 1.3;
+      },
+      null,
+      { timeout: 3600000, polling: 200 },
+    );
+    const tStop = Date.now();
+    await page.click('#stop');
+    await page.waitForFunction(() => !window.websplat.snapshot().running, null, {
+      timeout: 30000,
+      polling: 100,
+    });
+    const stopMs = Date.now() - tStop;
+    const m = (await page.evaluate(() => window.websplat.snapshot())).stages.find(
+      (x) => x.id === 'map',
+    );
+    check(
+      'Stop pauses map within 3.5 s',
+      m.state === 'paused' && stopMs <= 3500,
+      `${m.state} after ${stopMs} ms`,
+    );
+    check(
+      'map kept its round checkpoint',
+      m.checkpoint?.generation != null,
+      JSON.stringify(m.checkpoint),
+    );
+    await page.evaluate(() => window.websplat.start());
+  }
   await page.waitForFunction(
     () => {
       const s = window.websplat.snapshot();
-      return !s.running && s.stages.every((x) => ['done', 'failed'].includes(x.state));
+      return (
+        !s.running &&
+        (s.stages.every((x) => x.state === 'done') || s.stages.some((x) => x.state === 'failed'))
+      );
     },
     null,
-    { timeout: 600000, polling: 500 },
+    { timeout: 3600000, polling: 1000 },
   );
+  clearInterval(ticker);
+  ticker = null;
   const s = await page.evaluate(() => window.websplat.snapshot());
   const tEnd = Date.now();
   for (const st of s.stages) check(`${st.id} done`, st.state === 'done', st.error?.message ?? '');
@@ -221,6 +288,99 @@ try {
       `${cBad.length} differ`,
     );
   }
+  // stages 3-5: fetch the model and geometry from OPFS, compare natively
+  const files = await page.evaluate(async () => {
+    const m = window.websplat.job();
+    const open = async (p) => {
+      let d = await (await navigator.storage.getDirectory()).getDirectoryHandle('websplat');
+      const parts = p.split('/');
+      for (const x of parts.slice(0, -1)) d = await d.getDirectoryHandle(x);
+      return (await d.getFileHandle(parts.at(-1))).getFile();
+    };
+    const b64 = async (f) => {
+      const u = new Uint8Array(await f.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < u.length; i += 0x8000)
+        s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+      return btoa(s);
+    };
+    const want = {
+      map: [
+        'final/cameras.bin',
+        'final/images.bin',
+        'final/points3D.bin',
+        'final/rigs.bin',
+        'final/frames.bin',
+        'model.json',
+      ],
+      match: ['geometry.bin', 'geometry.json', 'matches.json', 'pairs.json'],
+      features: ['features.json'],
+    };
+    const out = {};
+    for (const [stage, names] of Object.entries(want)) {
+      const outs = m.stages[stage]?.outputs ?? {};
+      for (const n of names)
+        out[`${stage}/${n}`] = outs[n] ? await b64(await open(outs[n].path)) : null;
+    }
+    return out;
+  });
+  const missing = Object.entries(files)
+    .filter(([, v]) => v == null)
+    .map(([k]) => k);
+  check('features, match and map published their outputs', missing.length === 0, missing.join(','));
+  for (const [k, v] of Object.entries(files)) {
+    if (v == null) continue;
+    mkdirSync(`${out}/${k.split('/').slice(0, -1).join('/')}`, { recursive: true });
+    writeFileSync(`${out}/${k}`, Buffer.from(v, 'base64'));
+  }
+  const py = `${WEBSPLAT}../.venv/bin/python`;
+  const runPy = (script, argv) => {
+    const r = spawnSync(py, [`${WEBSPLAT}test/g2/${script}`, ...argv], { encoding: 'utf8' });
+    return { ok: r.status === 0, out: r.stdout + r.stderr };
+  };
+  if (a['stop-map']) {
+    const r = await page.evaluate(() => window.websplat.job().stages.map.result);
+    check('map resumed after round 0', r?.resumedAfter === 0, `resumedAfter ${r?.resumedAfter}`);
+  }
+  if (!missing.length) {
+    const fj = JSON.parse(readFileSync(`${out}/features/features.json`, 'utf8'));
+    check(
+      'features: 201 images with SIFT keypoints',
+      fj.images === 201 && fj.counts.every((c) => c > 1000),
+      `${fj.keypoints} keypoints`,
+    );
+    const g = runPy('compare_geometry.py', [
+      `${data}/stage4/native/geometry.bin`,
+      `${out}/match/geometry.bin`,
+      '--min-ratio',
+      '0.9',
+      '--json',
+      `${out}/geometry_vs_ref.json`,
+    ]);
+    const gj = JSON.parse(readFileSync(`${out}/geometry_vs_ref.json`, 'utf8'));
+    check(
+      'verified pairs and inliers >= 90% of the native database',
+      g.ok,
+      `pairs ${gj.b.verified}/${gj.a.verified}, inliers ${gj.b.inliers}/${gj.a.inliers}`,
+    );
+    const mr = runPy('compare_models.py', [
+      `${data}/ref/work/colmap/sparse/final`,
+      `${out}/map/final`,
+      '--json',
+      `${out}/model_vs_ref.json`,
+    ]);
+    const mj = JSON.parse(readFileSync(`${out}/model_vs_ref.json`, 'utf8'));
+    check(
+      'model within G2 tolerances of the native reference',
+      mr.ok,
+      `position median ${mj.position_m.median.toFixed(3)} m p95 ${mj.position_m.p95.toFixed(3)} m, rotation median ${mj.rotation_deg.median.toFixed(3)} deg p95 ${mj.rotation_deg.p95.toFixed(3)} deg, ${mj.points.model} points, reprojection ${mj.reproj_px.model.toFixed(3)} px; ${Object.entries(
+        mj.checks,
+      )
+        .filter(([, v]) => !v)
+        .map(([k]) => k)
+        .join(', ')}`,
+    );
+  }
   await gpu.stop();
   const errors = consoleLog.filter(
     (m) => ['error', 'pageerror', 'crash'].includes(m.type) || m.type === 'http',
@@ -251,6 +411,12 @@ try {
         adapter,
         proposed,
         timings,
+        results: Object.fromEntries(s.stages.map((x) => [x.id, x.timings])),
+        stageResults: await page.evaluate(() =>
+          Object.fromEntries(
+            Object.entries(window.websplat.job().stages).map(([k, v]) => [k, v.result]),
+          ),
+        ),
         gpu: g,
         checks,
         console: consoleLog,
@@ -269,7 +435,10 @@ try {
   );
   process.exitCode = 2;
 } finally {
+  if (ticker) clearInterval(ticker);
   await gpu.stop().catch(() => {});
   await browser?.close().catch(() => {});
   server.close();
 }
+// nothing (sampler, server sockets) may keep a failed run alive
+process.exit(process.exitCode ?? 0);

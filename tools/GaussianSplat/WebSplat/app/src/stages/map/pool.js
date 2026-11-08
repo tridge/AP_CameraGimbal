@@ -7,12 +7,13 @@ let nextId = 1;
 // a keypoint view into the whole WSFT buffer would clone the descriptors too
 const own = (a) => (a.byteOffset === 0 && a.byteLength === a.buffer.byteLength ? a : a.slice());
 
-const abortError = (what) => Object.assign(new Error(`${what} stopped`), { name: 'AbortError' });
+export const abortError = (what) =>
+  Object.assign(new Error(`${what} stopped`), { name: 'AbortError' });
 
 // Sends msg and settles on the first reply with msg.id for which onMessage (if given) returns
 // truthy, on an application error, on a worker 'error'/'messageerror' event, on abort, or when
 // postMessage or onMessage throws. Handlers are removed when the call settles.
-function call(worker, msg, { onMessage, signal, what } = {}) {
+export function call(worker, msg, { onMessage, signal, what } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(abortError(what));

@@ -18,6 +18,11 @@ function progressText(s) {
   if (!p) return '';
   let t = fmtUnits(s.unit, p.done ?? 0, p.total);
   if (p.extra?.gaussians != null) t += `, ${fmtCount(p.extra.gaussians)} Gaussians`;
+  // map: the work inside the current round (stages/map/map.stage.worker.js extra)
+  if (s.state === 'running' && p.extra?.phase === 'ba' && p.extra.total)
+    t += `, bundle adjustment iteration ${p.extra.done} of at most ${p.extra.total}`;
+  if (s.state === 'running' && p.extra?.phase === 'triangulate' && p.extra.total)
+    t += `, triangulating image ${p.extra.done} of ${p.extra.total}`;
   if (p.extra?.iterations != null && s.state === 'running')
     t += `, ${p.extra.iterations} iterations (open-ended)`;
   return t;

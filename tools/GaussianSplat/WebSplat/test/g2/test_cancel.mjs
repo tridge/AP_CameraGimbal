@@ -44,13 +44,14 @@ for (const [phase, at] of [
   ['ba', 3],
 ]) {
   const seen = [];
-  e = stopAt(() =>
-    priorMap(cw, camera, info.frames, features, geometry, {
-      onProgress: (p, done, total, round) => {
-        seen.push(p);
-        return round === 0 && p === phase && done >= at;
-      },
-    }),
+  e = await priorMap(cw, camera, info.frames, features, geometry, {
+    onProgress: (p, done, total, round) => {
+      seen.push(p);
+      return round === 0 && p === phase && done >= at;
+    },
+  }).then(
+    () => null,
+    (x) => x,
   );
   assert.equal(e?.name, 'AbortError', `stop in ${phase}`);
   assert.equal(e.round, 0);
