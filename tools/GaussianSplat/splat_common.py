@@ -122,6 +122,50 @@ class LocalFrame:
         return lat, lon, self.alt + enu[2]
 
 
+# SRTM1 tiles from ArduPilot's terrain server, in MAVProxy's tile cache
+SRTM_URL = 'https://terrain.ardupilot.org/SRTM1/'
+SRTM_CACHE = Path(os.environ.get('SRTM_CACHE', Path.home() / '.tilecache' / 'SRTM1'))
+_srtm_tiles = {}
+
+
+def _srtm_tile(lat_i, lon_i):
+    name = '%s%02d%s%03d.hgt' % ('N' if lat_i >= 0 else 'S', abs(lat_i), 'E' if lon_i >= 0 else 'W', abs(lon_i))
+    if name not in _srtm_tiles:
+        import shutil
+        import urllib.request
+        import zipfile
+        path = SRTM_CACHE / (name + '.zip')
+        if not path.exists():
+            SRTM_CACHE.mkdir(parents=True, exist_ok=True)
+            part = path.with_name(path.name + '.part')
+            with urllib.request.urlopen(SRTM_URL + name + '.zip', timeout=60) as r, part.open('wb') as f:
+                shutil.copyfileobj(r, f)
+            part.replace(path)
+        with zipfile.ZipFile(path) as z:
+            data = z.read(next(n for n in z.namelist() if n.endswith('.hgt')))
+        n = math.isqrt(len(data) // 2)
+        _srtm_tiles[name] = np.frombuffer(data, '>i2').reshape(n, n)
+    return _srtm_tiles[name]
+
+
+def terrain_height(lat, lon):
+    """SRTM ground height (m AMSL), bilinear; None if the tile can't be had or the point is a void."""
+    lat_i, lon_i = math.floor(lat), math.floor(lon)
+    try:
+        a = _srtm_tile(lat_i, lon_i)
+    except Exception as e:
+        print('terrain height unavailable: %s' % e)
+        return None
+    n = a.shape[0] - 1
+    y, x = (lat_i + 1 - lat) * n, (lon - lon_i) * n  # row 0 is the north edge
+    y0, x0 = min(int(y), n - 1), min(int(x), n - 1)
+    fy, fx = y - y0, x - x0
+    q = a[y0:y0 + 2, x0:x0 + 2].astype(float)
+    if (q < -1000).any():
+        return None
+    return float(q[0, 0] * (1 - fx) * (1 - fy) + q[0, 1] * fx * (1 - fy) + q[1, 0] * (1 - fx) * fy + q[1, 1] * fx * fy)
+
+
 def camera_rotation(telemetry):
     """World(ENU)-from-camera rotation from APCG telemetry (gimbal roll/pitch level, yaw vehicle-relative)."""
     g = telemetry.get('gimbal_attitude') or {}

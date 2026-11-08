@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from splat_common import (LocalFrame, camera_rotation, decode_frames, fatal, intrinsics,
-                          raw_to_celsius, read_mkv_metadata, triangulate_rays)
+                          raw_to_celsius, read_mkv_metadata, terrain_height, triangulate_rays)
 
 
 def rotate(image, degrees):
@@ -83,7 +83,9 @@ def main():
     ap.add_argument('--lat', type=float, required=True, help='target latitude')
     ap.add_argument('--lon', type=float, required=True, help='target longitude')
     ap.add_argument('--target-alt', type=float, default=None,
-                    help='target height above takeoff (m); default: locate hotspot, else 0')
+                    help='target height above takeoff (m); default: locate hotspot, else terrain height')
+    ap.add_argument('--no-terrain', action='store_true',
+                    help='without a hotspot, put the target at takeoff height instead of the SRTM terrain height')
     ap.add_argument('--no-locate-hotspot', action='store_true',
                     help='do not move the target to the triangulated hottest point')
     ap.add_argument('--hotspot-min-c', type=float, default=60.0,
@@ -128,7 +130,18 @@ def main():
         fatal('no frames carry position telemetry')
     home_alt = float(np.median(homes))
     local = LocalFrame(args.lat, args.lon, home_alt)
-    target = np.array([0.0, 0.0, args.target_alt or 0.0])
+    home_pos = min((m['telemetry']['position'] for m in metas if m.get('telemetry') and m['telemetry'].get('position')
+                    and m['telemetry']['position'].get('alt_relative_m') is not None),
+                   key=lambda p: abs(p['alt_relative_m']))
+
+    def ground_up(lat, lon):
+        """Terrain height above takeoff; SRTM at both ends cancels its offset from GPS altitude."""
+        if args.no_terrain:
+            return 0.0
+        t, h = terrain_height(lat, lon), terrain_height(home_pos['lat_e7'] / 1e7, home_pos['lon_e7'] / 1e7)
+        return 0.0 if t is None or h is None else t - h
+
+    target = np.array([0.0, 0.0, ground_up(args.lat, args.lon) if args.target_alt is None else args.target_alt])
     end = len(metas) - 1 if args.end is None else min(args.end, len(metas) - 1)
     if not args.no_locate_hotspot:
         X, n, err = locate_hotspot(args.mkv, metas, local, K, rotation, args.hotspot_min_c, args.start, end)
@@ -139,6 +152,10 @@ def main():
             print('hotspot from %d frames at ENU %s m (median ray error %.0f px)' % (n, X.round(1), err))
             if args.target_alt is not None:
                 X[2] = args.target_alt
+            else:
+                g = ground_up(*local.to_geodetic(X)[:2])
+                if abs(X[2] - g) > 50:
+                    print('hotspot is %.0f m from the terrain height; check it' % (X[2] - g))
             if np.linalg.norm(X[:2]) < 300:
                 target = X
             else:

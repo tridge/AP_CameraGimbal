@@ -4,7 +4,7 @@
 For recordings made by the camera's own recorder (or tools/video_to_ts.py): each frame is
 paired with the KLV cell of the same PTS, giving sensor position, platform attitude, sensor
 relative angles and field of view. Frames are written in a local ENU frame about the mean
-position with the ground at takeoff height, ready for sfm.py and train_rgb.py:
+position, with the target where the view axes meet the SRTM terrain, ready for sfm.py and train_rgb.py:
 
   extract_ts_frames.py RECORDING.ts WORKDIR [--fps 3]
 """
@@ -17,7 +17,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from splat_common import R_BODY_CAM, R_ENU_NED, LocalFrame, fatal, intrinsics, rot_x, rot_y, rot_z  # noqa: E402
+from splat_common import (R_BODY_CAM, R_ENU_NED, LocalFrame, fatal, intrinsics, rot_x, rot_y, rot_z,  # noqa: E402
+                          terrain_height)
 
 UAS_KEY = bytes.fromhex('060e2b34020b01010e01030101000000')
 
@@ -77,6 +78,7 @@ def main():
     ap.add_argument('--skip-start', type=float, default=0.0, help='seconds dropped at the start (e.g. on the ground)')
     ap.add_argument('--skip-end', type=float, default=0.0, help='seconds dropped at the end')
     ap.add_argument('--min-height', type=float, default=5.0, help='drop frames lower than this above the start (m)')
+    ap.add_argument('--no-terrain', action='store_true', help='take the ground to be at takeoff height')
     args = ap.parse_args()
 
     import av
@@ -137,13 +139,24 @@ def main():
                            position=local.to_enu(k['lat'], k['lon'], k['alt']).tolist(),
                            rotation=rot.tolist() if rot is not None else None))
     # target: where the view axes meet the ground, robustly
+    home = None if args.no_terrain else terrain_height(first['lat'], first['lon'])
+
+    def ground_up(p):
+        # SRTM at both ends cancels its offset from GPS altitude
+        t = None if home is None else terrain_height(*local.to_geodetic(p)[:2])
+        return 0.0 if t is None else t - home
+
     hits = []
     for f in frames:
         if f['rotation'] is None:
             continue
         c_, a = np.array(f['position']), np.array(f['rotation'])[:, 2]
         if a[2] < -0.2:
-            hits.append(c_ + a * (-c_[2] / a[2]))
+            g = ground_up(c_)
+            for _ in range(3):  # follow the terrain along the ray
+                hit = c_ + a * ((g - c_[2]) / a[2])
+                g = ground_up(hit)
+            hits.append(c_ + a * ((g - c_[2]) / a[2]))
     target = np.median(hits, axis=0) if hits else np.array([0.0, 0.0, 0.0])
     info = dict(source=str(args.ts.resolve()), kind='rgb', width=int(round(2 * K[0, 2])), height=int(round(2 * K[1, 2])),
                 hfov_deg=float(2 * math.degrees(math.atan(K[0, 2] / K[0, 0]))), K=K.tolist(),
