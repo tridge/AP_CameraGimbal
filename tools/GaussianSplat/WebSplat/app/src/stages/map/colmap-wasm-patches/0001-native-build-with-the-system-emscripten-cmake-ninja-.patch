@@ -1,0 +1,69 @@
+From 2d6645d796d3c2ee63e480f7944564cf5f1eab3b Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 18:21:51 +1100
+Subject: [PATCH 1/2] native: build with the system emscripten/cmake/ninja
+ (COLMAP_WASM_SYSTEM_TOOLCHAIN=1), parallel jobs
+
+---
+ native/build.sh | 11 +++++++----
+ native/fetch.sh | 10 ++++++----
+ 2 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/native/build.sh b/native/build.sh
+index 9b58442..aebf501 100755
+--- a/native/build.sh
++++ b/native/build.sh
+@@ -5,8 +5,11 @@
+ set -e
+ R=${COLMAP_WASM_DIR:?set COLMAP_WASM_DIR}; H=$(cd "$(dirname "$0")" && pwd); S=$R/src; P=$R/prefix; B=$R/build
+ BOOST_INC=${BOOST_INC:-/opt/homebrew/include}
+-export EMSDK_PYTHON=${PYTHON:-python3} EMSDK_QUIET=1; source $R/emsdk/emsdk_env.sh
+-export PATH=$R/venv/bin:$PATH
++if [ -z "$COLMAP_WASM_SYSTEM_TOOLCHAIN" ]; then
++  export EMSDK_PYTHON=${PYTHON:-python3} EMSDK_QUIET=1; source $R/emsdk/emsdk_env.sh
++  export PATH=$R/venv/bin:$PATH
++fi
++JOBS=${JOBS:-8}
+ mkdir -p $B $P/lib $P/include $R/inc; ln -sfn $BOOST_INC/boost $R/inc/boost
+ FLAGS="-O3 -fexceptions"
+ common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_PREFIX_PATH=$P -DCMAKE_FIND_ROOT_PATH=$P
+@@ -14,7 +17,7 @@ common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_PR
+         -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+ dep() { local name=$1 src=$2; shift 2; [ -f $B/$name.done ] && return
+   echo "== $name"; emcmake cmake -S $src -B $B/$name "${common[@]}" "$@" > $B/$name.log 2>&1
+-  cmake --build $B/$name --target install >> $B/$name.log 2>&1; touch $B/$name.done; }
++  cmake --build $B/$name -j $JOBS --target install >> $B/$name.log 2>&1; touch $B/$name.done; }
+ dep eigen $S/eigen-3.4.0 -DEIGEN_BUILD_DOC=OFF -DEIGEN_BUILD_PKGCONFIG=OFF
+ dep glog $S/glog-0.7.1 -DWITH_GFLAGS=OFF -DWITH_GTEST=OFF -DWITH_UNWIND=none -DWITH_PKGCONFIG=OFF
+ dep ceres $S/ceres-solver-2.2.0 -DMINIGLOG=OFF -DGFLAGS=OFF -DSUITESPARSE=OFF -DLAPACK=OFF -DEIGENSPARSE=ON -DUSE_CUDA=OFF \
+@@ -29,5 +32,5 @@ sed -e 's/${COLMAP_VERSION}/4.2.1/; s/${GIT_COMMIT_ID}/4.2.1/; s/${GIT_COMMIT_DA
+ emcmake cmake -S $H/entry -B $B/colmap -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$P -DCMAKE_FIND_ROOT_PATH=$P \
+   "-DCMAKE_CXX_FLAGS=$FLAGS" "-DCMAKE_C_FLAGS=$FLAGS" -DCOLMAP_SRC=$S/colmap -DPREFIX=$P -DBOOST_INC=$R/inc -DVERSION_CC=$B/version.cc \
+   -DEigen3_DIR=$P/share/eigen3/cmake -Dglog_DIR=$P/lib/cmake/glog -DCeres_DIR=$P/lib/cmake/Ceres -DPoseLib_DIR=$P/lib/cmake/PoseLib > $B/colmap.log 2>&1
+-cmake --build $B/colmap >> $B/colmap.log 2>&1 || { grep -E "error" $B/colmap.log | head -20; exit 1; }
++cmake --build $B/colmap -j $JOBS >> $B/colmap.log 2>&1 || { grep -E "error" $B/colmap.log | head -20; exit 1; }
+ ls -la $B/colmap/colmap.wasm
+diff --git a/native/fetch.sh b/native/fetch.sh
+index bcd8f69..8ef1382 100755
+--- a/native/fetch.sh
++++ b/native/fetch.sh
+@@ -27,10 +27,12 @@ checkout() {
+   fi
+ }
+ 
+-[ -x venv/bin/cmake ] || { $PY -m venv venv && venv/bin/pip install -q cmake==4.4.4 ninja==1.13.2; }
+-
+-checkout https://github.com/emscripten-core/emsdk.git emsdk $EMSDK_COMMIT
+-(cd emsdk && EMSDK_PYTHON=$PY ./emsdk install $EMSDK_VERSION && EMSDK_PYTHON=$PY ./emsdk activate $EMSDK_VERSION) > /dev/null
++# COLMAP_WASM_SYSTEM_TOOLCHAIN=1: use emcc/cmake/ninja from PATH (no emsdk, no venv)
++if [ -z "$COLMAP_WASM_SYSTEM_TOOLCHAIN" ]; then
++  [ -x venv/bin/cmake ] || { $PY -m venv venv && venv/bin/pip install -q cmake==4.4.4 ninja==1.13.2; }
++  checkout https://github.com/emscripten-core/emsdk.git emsdk $EMSDK_COMMIT
++  (cd emsdk && EMSDK_PYTHON=$PY ./emsdk install $EMSDK_VERSION && EMSDK_PYTHON=$PY ./emsdk activate $EMSDK_VERSION) > /dev/null
++fi
+ 
+ cd src
+ 
+-- 
+2.53.0
+
