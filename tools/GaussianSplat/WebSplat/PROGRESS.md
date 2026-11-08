@@ -8,10 +8,10 @@ Plan: PLAN.md. Reviews: REVIEW-*.md. Newest entries at the top of each section.
 |---|---|---|
 | plan | v2 done | v1 reviewed by codex (REVIEW-plan.md), v2 written 2026-11-08 |
 | 0 reference, contracts, skeleton, harness | accepted (codex round 3), committed | reference reproduced byte-identical; CONTRACTS.md v1.3; dummy pipeline 30/30 checks on laptop NVIDIA, Intel and win11; crash-safe manifest and checkpoints; notes/stage0.md, REVIEW-stage0.md |
-| G1 thermal training in Brush (gate) | agent working | started 2026-11-08 |
-| G2 telemetry-seeded mapping in wasm (gate) | agent working | started 2026-11-08 with the system emscripten 3.1.69 |
+| G1 thermal training in Brush (gate) | passed with one variance miss, codex review running | Brush + CubeCL forks: float targets, hot-weighted L1, frozen holdouts, apcg_splat PLY; win11 Chrome 7.7 min all pass; laptop Chrome 13.5 min (no canvas), criterion 3 fails on one high-variance view; laptop native ~12 min all pass; peak GPU 1.8-2.0 GB; notes/g1.md |
+| G2 telemetry-seeded mapping in wasm (gate) | passed, accepted (codex round 3), committed | colmap-wasm fork: verification matches native seed 0 on 2698 pairs (E not reproduced in 32 pairs, equal-consensus solutions); mapping 0.020 m / 0.009 deg median from native geometry, 0.132 m / 0.047 deg from browser matching of native features; Node, laptop and win11 Chrome byte-identical; verification 70 s laptop / 36 s win11, mapping 74 s / 70 s; notes/g2.md, REVIEW-g2.md |
 | 1-2 ingest, frame selection | accepted (codex round 3), committed | all acceptance checks pass vs native (raw pixels, poses, CLAHE pixel-identical, option variants, blank/incomplete telemetry, storage faults); run through the page on laptop and win11; notes/stage12.md, REVIEW-stage12.md |
-| 3 features | waiting | needs G2's colmap-wasm fork |
+| 3 features | agent working | SIFT in the colmap-wasm fork; closes G2's browser-feature acceptance |
 | 4 pairs and matching | accepted (codex round 3), committed | pairs identical; matches agree with native within the fp16 grid (35 of 510,656 at decision boundaries, all feasible within 0.51 ulp); 27.5 s laptop NVIDIA, 7.9 s win11, 317 s laptop Intel; verification waits for G2; notes/stage4.md, REVIEW-stage4.md |
 | 5 mapping, 5b scene preparation | waiting | |
 | 6 training | waiting | after G1 |
@@ -63,11 +63,8 @@ iterations, as a training-speed reference:
 - Emscripten: the system package (emcc 3.1.69, /usr/bin) is installed and used; there is no
   emsdk checkout, so colmap-wasm's build script is adapted to the system toolchain.
 
-- WebGPU on the laptop's NVIDIA GPU in Chrome 155 (driver 595.99, Vulkan) is not usable for
-  Brush yet: with a 1600x1000 viewport, VK_ERROR_OUT_OF_DEVICE_MEMORY on an empty 8 GB GPU;
-  at 1280x720, Dawn rejects a texture allocation ("Requested allocation size (3768320) is
-  smaller than the image requires (3932160)"), after which every pipeline is invalid and
-  nothing trains. Looks like a Dawn/NVIDIA-driver bug (row pitch or alignment). The Intel GPU
-  works in Chrome but is slow. To investigate in stage 0/G1: a minimal WebGPU reproduction,
-  Dawn toggles, Chrome Canary, other driver versions; release 1 may need the Intel GPU or a
-  workaround on this laptop.
+- Laptop NVIDIA in Chrome (Vulkan): presenting a WebGPU canvas fails (Dawn's Vulkan memory import)
+  and repeated failures lose the device; compute and texture readback work. WebSplat trains
+  without a canvas and previews by readback; repro in test/g1/probe/. Stock Brush's "every
+  pipeline invalid" was separate: generated WGSL used subgroup builtins without
+  `enable subgroups;` (the worker adds it).
