@@ -211,12 +211,13 @@ def main():
     metrics = dict(images=len(images), heldout=len(test), width=W, height=H, gaussians=len(params['means']),
                    heldout_psnr_db=float(np.mean(psnr)) if psnr else None, seconds=time.time() - t0)
     (out / 'metrics.json').write_text(json.dumps(metrics, indent=1))
-    save_ply(out / 'splat.ply', params, params['sh0'], params['shN'])
+    frames_info = json.loads((args.workdir / 'frames.json').read_text())
+    save_ply(out / 'splat.ply', params, params['sh0'], params['shN'], info=dict(
+        kind='rgb', up=[0, 0, 1], target=frames_info.get('target_enu', centre.tolist()), origin=frames_info.get('origin')))
     # checkpoint for view_splat.py / splat_site.py
     torch.save(dict(params={k: v.detach().cpu() for k, v in params.items()}, sh_degree=args.sh_degree,
                     viewmats=viewmats.cpu(), K=Kt[0].cpu(), width=W, height=H, names=[im.name for im in images],
                     test=sorted(images[i].name for i in test)), out / 'splat.pt')
-    frames_info = json.loads((args.workdir / 'frames.json').read_text())
     (out / 'scale.json').write_text(json.dumps(dict(kind='rgb', target_enu=frames_info.get('target_enu', centre.tolist()),
                                                     origin=frames_info.get('origin'), gaussians=len(params['means']),
                                                     heldout_psnr_db=metrics['heldout_psnr_db']), indent=1))

@@ -135,6 +135,15 @@ auto or fixed range, temperature under the pointer) and RGB splats in true colou
 only when the view changes, and caps the render size (lower while orbiting) so integrated
 GPUs cope. Live example: https://uav.tridgell.net/Splats/
 
+The build (`viewer/dist/`) is also a stand-alone viewer page, `index.html`, that opens a splat
+file from the visitor's disk (button or drag and drop; the file is never uploaded) or from
+`?url=https://…` (the server must allow cross-origin requests; `&meta=META.json` adds
+metadata). It reads `.ply`, `.spz`, `.splat`, `.ksplat` and `.sog`. PLY files from `train.py`,
+`train_rgb.py` and `export_web.py --ply` carry their metadata (kind, up axis, orbit target,
+temperature scale, start view) in a `comment apcg_splat {json}` header line that other PLY
+readers ignore, so a thermal splat is a single file; other splats open in colour with a view
+fitted to them and an up-axis choice.
+
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
     (cd tools/GaussianSplat/viewer && npm ci && npm run build)
@@ -144,8 +153,7 @@ Build the viewer once (needs Node.js 20.19 or later), then add splats to a site 
 `description.txt`). `export_web.py` writes:
 
     SITE/index.html                     # list of all splats in SITE, regenerated each time
-    SITE/colormaps.json
-    SITE/viewer/viewer.js, viewer.css   # copied from viewer/dist
+    SITE/viewer/                        # copied from viewer/dist, incl. the open-a-file page
     SITE/DATE/FLIGHT/RUN/index.html     # viewer page
     SITE/DATE/FLIGHT/RUN/meta.json      # kind, temperature scale, start view, description
     SITE/DATE/FLIGHT/RUN/splat.spz      # compressed splat
@@ -163,15 +171,45 @@ available in the browser.
     rsync -a --chmod=D755,F644 SITE/ HOST:public_html/Splats/
 
 Adding a splat rewrites `SITE/index.html`; leave out rsync's `--delete` to keep splats that are
-only on the server. No server-side code or GPU is involved. The server should send
+only on the server. To let `?url=` links on other sites (e.g. plot.ardupilot.org/splat) open the
+splats, send `Access-Control-Allow-Origin: *` for the site, e.g. an Apache `.htaccess` with
+`Header always set Access-Control-Allow-Origin "*"`. No server-side code or GPU is involved. The server should send
 `viewer.js` as `text/javascript` (modules are refused otherwise); `.spz` needs no particular
 type. `viewer.js` is 3.4 MB, mostly Spark's WebAssembly, so enable compression for it if the
 server does not already, e.g. for Apache:
 
     AddOutputFilterByType DEFLATE text/javascript application/json
 
-or for nginx `gzip on; gzip_types text/javascript application/json;`. Visitors download the
-viewer once (it is cached) plus each splat they open.
+or for nginx `gzip on; gzip_types text/javascript application/json;` (the build also writes
+`.gz` copies for `gzip_static`). Visitors download the viewer once (it is cached) plus each
+splat they open.
+
+`export_web.py SPLATDIR --ply OUT.ply` writes a single self-describing PLY from any `splat.pt`,
+for sharing or opening in the stand-alone page. `viewer/public/colormaps.json` is generated
+from `colormaps.py` (`colormaps.py --json viewer/public/colormaps.json`); regenerate it after
+changing the colormaps.
+
+### plot.ardupilot.org/splat
+
+The stand-alone page is installed at https://plot.ardupilot.org/splat/, like
+plot.ardupilot.org/video (see `tools/viewer/docs/DEPLOYMENT.md`): static files only, with no
+upload service or server process.
+
+- Build: `cd tools/GaussianSplat/viewer && npm ci && npm run build`. All asset paths are
+  relative, so no base path is needed.
+- Upload all of `dist/` as a new release, `/data/sites/logviewer/splat/releases/<release>/`
+  (755 directories, 644 files), check a SHA256 manifest, then switch
+  `/data/sites/logviewer/splat/current` to it atomically (temporary symlink and `mv -T`). No
+  nginx reload is needed for updates; roll back by switching `current` back.
+- Once, as root: copy `deploy/plot-splat.nginx` to `/etc/nginx/snippets/plot-splat.conf`, add
+  `include snippets/plot-splat.conf;` inside the plot.ardupilot.org HTTPS server block next to
+  the video include, run `nginx -t`, then `systemctl reload nginx`. Create the first release
+  and `current` before reloading.
+- Check: `/splat/` shows the open-a-file page, `viewer.js` is served as JavaScript with gzip,
+  and a local `.ply` and a `?url=` link both open.
+
+Spark and three.js are MIT licensed; the build writes their notices to `LICENSES.txt`, linked
+from the page.
 
 ## Poses from the RGB camera
 

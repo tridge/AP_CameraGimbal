@@ -30,9 +30,14 @@
       <button id="reset" type="button">Reset view</button>
       <p class="note">Drag to orbit, right-drag to pan, scroll to zoom. Rendered on your device.</p>
     </div>
+    <p class="credits"><a href="@ROOT@viewer/LICENSES.txt">Spark and three.js licences</a></p>
     <p id="status" hidden></p>
     <script>
-      window.SPLAT = { meta: 'meta.json', splat: 'splat.spz', colormaps: '@ROOT@colormaps.json' };
+      window.SPLAT = {
+        meta: 'meta.json',
+        splat: 'splat.spz',
+        colormaps: '@ROOT@viewer/colormaps.json',
+      };
     </script>
     <script type="module" src="@ROOT@viewer/viewer.js"></script>
   </body>

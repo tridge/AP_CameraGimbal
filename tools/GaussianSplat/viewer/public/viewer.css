@@ -59,3 +59,48 @@ body {
     max-height: 40vh;
   }
 }
+.open-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, 90vw);
+  background: rgba(20, 20, 20, 0.92);
+  padding: 20px 24px;
+  border-radius: 8px;
+}
+.open-panel h1 {
+  font-size: 20px;
+  margin-top: 0;
+}
+.button {
+  display: inline-block;
+  background: #2a6db0;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.button.small {
+  padding: 4px 10px;
+  font-size: 13px;
+  margin-left: 6px;
+}
+.button input[type='file'] {
+  display: none;
+}
+code {
+  background: #333;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.credits {
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  font-size: 11px;
+  margin: 0;
+}
+.credits a {
+  color: #888;
+}

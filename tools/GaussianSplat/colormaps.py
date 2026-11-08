@@ -22,3 +22,17 @@ def colormap_lut(name):
     x = np.linspace(0, 1, 256)
     pos = [s[0] for s in stops]
     return np.stack([np.interp(x, pos, [s[1][c] / 255 for s in stops]) for c in range(3)], axis=1)
+
+
+def lut_json():
+    """All colormaps as JSON for the browser viewer (viewer/public/colormaps.json)."""
+    import json
+    return json.dumps({n: np.round(colormap_lut(n), 4).tolist() for n in NAMES})
+
+
+if __name__ == '__main__':
+    import sys
+    if sys.argv[1:2] != ['--json'] or len(sys.argv) != 3:
+        sys.exit('usage: colormaps.py --json OUT.json')
+    with open(sys.argv[2], 'w') as f:
+        f.write(lut_json())
