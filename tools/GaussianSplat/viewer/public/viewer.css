@@ -136,3 +136,8 @@ code {
 #panel a {
   color: #8cf;
 }
+#download,
+#video {
+  display: block;
+  margin: 6px 0;
+}

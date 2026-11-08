@@ -320,6 +320,14 @@ async function main() {
       $('download').hidden = !ply;
       if (ply) $('download').textContent = `Download PLY (${megabytes(ply)})`;
     }
+    if ($('video')) {
+      const v = meta.video;
+      $('video').hidden = !v;
+      if (v) {
+        $('video').href = `../../../videos/${encodeURIComponent(v.name)}`;
+        $('video').textContent = `Download source video (${megabytes(v.bytes)})`;
+      }
+    }
     $('thermal-controls').hidden = !thermal;
     // thermal values must reach the target unconverted: Spark linearises colours for a linear target
     THREE.ColorManagement.workingColorSpace = thermal
