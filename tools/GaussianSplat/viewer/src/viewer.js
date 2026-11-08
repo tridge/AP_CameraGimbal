@@ -1,7 +1,9 @@
 // Static Gaussian splat viewer: renders on the visitor's GPU with Spark (three.js).
 //
 // Site pages (export_web.py) set window.SPLAT = {meta, splat, colormaps}. Without it the page is
-// the open-a-file viewer: a local file (never uploaded), or ?url=FILE[&meta=META.json].
+// the open-a-file viewer: a local file (never uploaded), or ?url=FILE[&meta=META.json], or (in a
+// same-origin iframe, ?embed=1) bytes posted by the parent page.
+// meta.rasterize_mode 'classic' selects gsplat classic rendering (no mip opacity compensation).
 // Thermal splats hold the scaled temperature in every channel; it is blended over black into a
 // half-float target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
 import * as THREE from 'three';
@@ -80,7 +82,7 @@ async function getJson(url) {
 // metadata written by train.py, train_rgb.py and export_web.py: "comment apcg_splat {json}"
 function plyMeta(bytes) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 1 << 20)));
-  const end = head.indexOf('end_header');
+  const end = head.search(/\nend_header\r?\n/); // the line, not the text inside a comment
   if (!head.startsWith('ply') || end < 0) return null;
   for (const line of head.slice(0, end).split('\n')) {
     if (line.startsWith('comment apcg_splat ')) {
@@ -334,6 +336,11 @@ async function main() {
       ? THREE.SRGBColorSpace
       : THREE.LinearSRGBColorSpace;
     renderer.setClearColor(0x000000, thermal ? 0 : 1);
+    // gsplat 'classic' training (train.py, train_rgb.py): the 0.3 px^2 blur without Spark's opacity
+    // compensation; splats that do not say so keep Spark's antialiased default
+    const classic = meta.rasterize_mode === 'classic';
+    spark.preBlurAmount = classic ? 0.3 : 0;
+    spark.blurAmount = classic ? 0 : 0.3;
 
     if (mesh) {
       holder.remove(mesh);
@@ -417,7 +424,7 @@ async function main() {
 
   renderer.setAnimationLoop(() => {
     controls.update(); // damping keeps emitting change events after release
-    if (!mesh) return;
+    if (!mesh || (thermal && !post)) return; // thermal set-up awaits the colormaps
     const isMoving = performance.now() - lastMove < 200;
     if (thermal && (isMoving ? moving : full) !== target) {
       target = isMoving ? moving : full;
@@ -471,8 +478,25 @@ async function main() {
     const f = e.dataTransfer.files[0];
     if (f) openFile(f).catch(fail);
   });
+  // embedding: a same-origin parent posts {type: 'apcg-splat-open', bytes, name, meta}
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.source !== window.parent) return;
+    if (e.data?.type !== 'apcg-splat-open') return;
+    const { bytes, name = 'splat.ply', meta = null } = e.data;
+    const reply = (error) =>
+      window.parent.postMessage({ type: 'apcg-splat-opened', name, error }, location.origin);
+    openBytes(new Uint8Array(bytes), name, meta).then(
+      () => reply(),
+      (err) => (fail(err), reply(err.message)),
+    );
+  });
   const params = new URLSearchParams(location.search);
-  if (params.get('url')) {
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'apcg-splat-ready' }, location.origin);
+  }
+  if (params.get('embed')) {
+    // the parent page opens the splat
+  } else if (params.get('url')) {
     const u = new URL(params.get('url'), location.href);
     if (!['https:', 'http:'].includes(u.protocol)) throw new Error('url must be http or https');
     const m = params.get('meta') ? await getJson(new URL(params.get('meta'), location.href)) : null;
