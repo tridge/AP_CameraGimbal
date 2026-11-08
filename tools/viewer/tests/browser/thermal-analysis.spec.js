@@ -361,3 +361,65 @@ test('playing at an indexing boundary clears processed display and cancels pendi
   await page.evaluate(() => window.restoreAnalysisWorker());
   await page.locator('#play').click();
 });
+
+test('apply to every frame processes each stepped and played frame before showing it', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('rl');
+  await page.locator('#analysis-iterations').fill('4');
+  await page.locator('#analysis-follow').check();
+  const current = () =>
+    page.waitForFunction(
+      () => {
+        const v = window.fireViewer,
+          a = v.thermalAnalysis;
+        return (
+          !v.state.decoding &&
+          !a.busy &&
+          a.plane &&
+          a.result.settings.method === 'rl' &&
+          JSON.parse(a.identity)[4] === v.state.frame.id
+        );
+      },
+      null,
+      { timeout: 45_000 },
+    );
+  await current();
+  await page.locator('#next').click();
+  await current();
+  await page.locator('#previous').click();
+  await current();
+  // During playback every presented frame must carry its own processed plane.
+  const seen = await page.evaluate(async () => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis,
+      ids = [];
+    let stale = 0;
+    v.state.number = 0;
+    const done = new Promise((resolve) => {
+      const check = () => {
+        if (!v.state.decoding && v.state.frame) {
+          if (!a.busy && a.plane) {
+            if (JSON.parse(a.identity)[4] !== v.state.frame.id) stale++;
+            if (ids.at(-1) !== v.state.frame.id) ids.push(v.state.frame.id);
+          }
+        }
+        if (!v.state.playing) resolve();
+        else requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
+    document.querySelector('#play').click();
+    await done;
+    return { ids: ids.length, stale };
+  });
+  expect(seen.stale).toBe(0);
+  expect(seen.ids).toBeGreaterThan(3);
+  await expect(page.locator('#analysis-display-badge')).toBeVisible();
+  await page.locator('#analysis-follow').uncheck();
+  await page.locator('#next').click();
+  await page.waitForFunction(() => !window.fireViewer.state.decoding);
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+});
