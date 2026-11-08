@@ -53,7 +53,8 @@ test('bounded settings and invalid input cannot create unbounded work', () => {
     analysisSettings({ method: '__proto__', iterations: Infinity, sigma: 999 }).method,
     'matched',
   );
-  assert.equal(analysisSettings({ iterations: 100 }).iterations, 25);
+  assert.equal(analysisSettings({ iterations: 500 }).iterations, 200);
+  assert.equal(analysisSettings({ damping: 50 }).damping, 10);
   assert.deepEqual(regionOf({ x: -5, y: 8, width: 1e9, height: -1 }, 10, 10), {
     x: 0,
     y: 8,

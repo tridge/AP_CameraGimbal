@@ -640,7 +640,8 @@ async function showFrame(number) {
   }
   state.requestedNumber = number;
   state.requestedFrameId = state.frames[number].id;
-  thermalWorkbench.invalidate('Seeking frame. Original pixels shown.');
+  if (!thermalWorkbench.following)
+    thermalWorkbench.invalidate('Seeking frame. Original pixels shown.');
   const own = state.generation,
     seek = ++state.seekGeneration,
     frame = state.frames[number];
@@ -662,6 +663,11 @@ async function showFrame(number) {
     state.frame = frame;
     state.decoded = decoded;
     thermalWorkbench.setFrame(state.file, frame, decoded, state.generation);
+    if (thermalWorkbench.following) {
+      // Present the frame only with its own processed result, pacing playback to analysis.
+      await thermalWorkbench.ready;
+      if (own !== state.generation || seek !== state.seekGeneration) return;
+    }
     state.renderMs = performance.now() - started;
     state.peaks = [];
     if (decoded.kind === 'gray16' && $('palette').value === 'Original')
@@ -1276,7 +1282,8 @@ async function play() {
     return;
   }
   state.playing = true;
-  thermalWorkbench.invalidate('Playback started. Original pixels shown.');
+  if (!thermalWorkbench.following)
+    thermalWorkbench.invalidate('Playback started. Original pixels shown.');
   thermalWorkbench.activity();
   const playEpoch = ++state.playEpoch;
   $('play').textContent = 'Pause';

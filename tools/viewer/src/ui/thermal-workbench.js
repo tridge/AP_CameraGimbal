@@ -20,10 +20,10 @@ export function thermalWorkbenchLayout() {
         `<option value="${key}"${key === 'matched' ? ' selected' : ''}>${value}</option>`,
     )
     .join('')}</select></label>
-  ${number('sigma', 'PSF σ (px)', 0.5, 4, 0.1, 1)}${number('background', 'Background scale (px)', 2, 16, 0.5, 6)}${number('iterations', 'RL iterations', 1, 25, 1, 8)}${number('damping', 'RL damping (noise σ)', 0, 3, 0.1, 1)}${number('regularization', 'Wiener K adjustment', 0.1, 10, 0.1, 1)}${number('clip', 'CLAHE clip factor', 1, 8, 0.1, 2)}
+  ${number('sigma', 'PSF σ (px)', 0.5, 4, 0.1, 1)}${number('background', 'Background scale (px)', 2, 16, 0.5, 6)}${number('iterations', 'RL iterations', 1, 200, 1, 8)}${number('damping', 'RL damping (noise σ)', 0, 10, 0.1, 1)}${number('regularization', 'Wiener K adjustment', 0.1, 10, 0.1, 1)}${number('clip', 'CLAHE clip factor', 1, 8, 0.1, 2)}
   <label><input id="analysis-destripe" type="checkbox"> Remove row/column offsets</label></div><p id="analysis-method-note" class="note"></p>
   <details class="analysis-region"><summary>Analysis region · raw pixel coordinates</summary><div class="analysis-options">${number('x', 'X', 0, 65535, 1, 0)}${number('y', 'Y', 0, 65535, 1, 0)}${number('width', 'Width', 1, 65536, 1, 640)}${number('height', 'Height', 1, 65536, 1, 512)}<button id="analysis-whole" type="button">Whole frame</button><button id="analysis-cursor" type="button">Around cursor</button></div><p class="note">Region selects statistics and candidates. Filters and noise estimates use the full frame.</p></details>
-  <div class="analysis-actions"><button id="analysis-apply" class="primary" type="button">Apply to paused frame</button><button id="analysis-cancel" type="button" disabled>Cancel</button><button id="analysis-reset" type="button">Reset analysis</button><label>Compare<select id="analysis-view"><option value="raw">Original</option><option value="processed" disabled>Processed result</option></select></label></div></fieldset>
+  <div class="analysis-actions"><button id="analysis-apply" class="primary" type="button">Apply to paused frame</button><button id="analysis-cancel" type="button" disabled>Cancel</button><button id="analysis-reset" type="button">Reset analysis</button><label><input id="analysis-follow" type="checkbox"> Apply to every frame</label><label>Compare<select id="analysis-view"><option value="raw">Original</option><option value="processed" disabled>Processed result</option></select></label></div></fieldset>
   <p id="analysis-status" class="note" role="status">Analysis is off. Original pixels and measured temperatures are preserved.</p>
   <div class="histogram-options"><label>Histogram<select id="analysis-histogram"><option value="raw">Raw samples</option><option value="processed" disabled>Processed values</option></select></label><label><input id="analysis-log" type="checkbox"> Log counts</label><button id="analysis-export" type="button" disabled>Export histogram CSV</button></div>
   <canvas id="analysis-histogram-canvas" width="640" height="160" aria-label="Thermal histogram" role="img"></canvas><p id="analysis-bin" class="note">Hover over the histogram for bin values and counts.</p><p id="analysis-statistics" class="analysis-statistics"></p><p id="analysis-provenance" class="note"></p><button id="analysis-peaks" type="button" disabled>Show analysis candidates</button><p id="analysis-candidate-note" class="note"></p>
@@ -137,6 +137,12 @@ export class ThermalWorkbench {
       this.invalidate('Analysis reset. Original frame shown.');
       this.run(true);
     };
+    this.$('follow').onchange = () => {
+      this.$('availability').textContent = this.availabilityText();
+      if (this.following && !this.playing() && !this.loading() && !this.result?.plane)
+        this.ready = this.run(false);
+    };
+    this.ready = Promise.resolve();
     this.$('view').onchange = () => this.onChange();
     this.$('histogram').onchange = this.$('log').onchange = () => this.drawHistogram();
     this.$('export').onclick = () => this.exportHistogram();
@@ -232,16 +238,32 @@ export class ThermalWorkbench {
       frame?.pts,
       frame?.thermalMetadata?.source_sha256,
     ]);
-    this.invalidate();
     const thermal = decoded?.kind === 'gray16';
+    // Following keeps the previous processed image until this frame's result replaces it.
+    if (!(thermal && this.following)) this.invalidate();
     this.$('controls').disabled = this.$('histogram').disabled = this.$('log').disabled = !thermal;
-    this.$('availability').textContent = thermal
-      ? 'Raw thermal samples available. Processing applies to this paused frame; seeking or playback returns to original.'
-      : 'Raw thermal analysis requires a lossless gray16 recording. RGB and colourized thermal videos contain no detector samples.';
-    if (!thermal) return;
+    this.$('availability').textContent = this.availabilityText();
+    if (!thermal) {
+      this.ready = Promise.resolve();
+      return;
+    }
     this.activity();
     this.writeRegion(previousROI);
-    if (this.root.open && !this.playing()) this.run(true);
+    if (this.following) this.ready = this.run(false, true);
+    else {
+      this.ready = Promise.resolve();
+      if (this.root.open && !this.playing()) this.run(true);
+    }
+  }
+  get following() {
+    return this.root.open && this.$('follow').checked && this.decoded?.kind === 'gray16';
+  }
+  availabilityText() {
+    if (this.decoded?.kind !== 'gray16')
+      return 'Raw thermal analysis requires a lossless gray16 recording. RGB and colourized thermal videos contain no detector samples.';
+    return this.$('follow').checked
+      ? 'Raw thermal samples available. Every displayed frame is processed; playback waits for each result.'
+      : 'Raw thermal samples available. Processing applies to this paused frame; seeking or playback returns to original.';
   }
   invalidate(message = 'Original frame shown. Apply analysis to this paused frame.') {
     const repaint = !!this.plane || this.candidatesShown;
@@ -264,9 +286,9 @@ export class ThermalWorkbench {
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     if (repaint) this.onChange();
   }
-  async run(histogramOnly) {
+  async run(histogramOnly, live = false) {
     if (this.decoded?.kind !== 'gray16') return;
-    if (!histogramOnly && (this.playing() || this.loading())) {
+    if (!histogramOnly && !live && (this.playing() || this.loading())) {
       this.$('status').textContent =
         'Pause playback and wait for the current frame before applying analysis.';
       return;
@@ -280,7 +302,12 @@ export class ThermalWorkbench {
         return;
       }
     }
-    this.invalidate();
+    if (live) {
+      // Cancel any stale request but leave the current image displayed.
+      this.serial++;
+      this.client.cancel();
+      this.candidatesShown = false;
+    } else this.invalidate();
     this.settings = this.readSettings();
     this.writeSettings();
     this.methodNote();
@@ -292,7 +319,9 @@ export class ThermalWorkbench {
     this.$('cancel').disabled = false;
     this.$('status').textContent = histogramOnly
       ? 'Calculating raw histogram…'
-      : 'Analysing paused frame…';
+      : live
+        ? 'Analysing frame…'
+        : 'Analysing paused frame…';
     const start = performance.now();
     try {
       const r = await this.client.run(
