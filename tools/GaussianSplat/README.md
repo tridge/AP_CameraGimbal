@@ -4,6 +4,8 @@ Tools that build a 3D Gaussian splat of a thermal feature from an APCG radiometr
 thermal mkv (as written by `tools/thermal_to_video.py` with `--bin`/`--tlog`
 telemetry), and view it in a browser.
 
+Example splats, rendered in your own browser: https://uav.tridgell.net/Splats/
+
 The pipeline:
 
 1. `extract_frames.py` reads the mkv and its per-frame telemetry, optionally locates
@@ -103,6 +105,7 @@ Notes:
 
 ## Publishing
 
+For public sites use the browser viewer below, which needs no GPU on the server.
 `splat_site.py` serves a directory of splats with an index page and the full interactive
 viewer for each, starting a `view_splat.py` process on the first visit to a splat and
 stopping it once idle:
@@ -122,6 +125,53 @@ websockets, e.g. for Apache 2.4.47 or later:
 
 Each viewer process takes about 600 MB of GPU memory; `--max-running` caps how many run at once,
 `--max-clients` how many visitors one viewer serves.
+
+## Browser viewer
+
+`viewer/` is a static web viewer that renders splats on the visitor's GPU with
+[Spark](https://sparkjs.dev/) (three.js, WebGL2), so the server only serves files. It shows
+thermal splats with the same temperature decoding and colormaps as `view_splat.py` (colormap,
+auto or fixed range, temperature under the pointer) and RGB splats in true colour. It renders
+only when the view changes, and caps the render size (lower while orbiting) so integrated
+GPUs cope. Live example: https://uav.tridgell.net/Splats/
+
+Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
+
+    (cd tools/GaussianSplat/viewer && npm ci && npm run build)
+    $PY tools/GaussianSplat/export_web.py SPLATDIR SITE DATE/FLIGHT/RUN --title "TITLE"
+
+`SPLATDIR` is a `train.py` or `train_rgb.py` output (`splat.pt`, `scale.json`, optionally
+`description.txt`). `export_web.py` writes:
+
+    SITE/index.html                     # list of all splats in SITE, regenerated each time
+    SITE/colormaps.json
+    SITE/viewer/viewer.js, viewer.css   # copied from viewer/dist
+    SITE/DATE/FLIGHT/RUN/index.html     # viewer page
+    SITE/DATE/FLIGHT/RUN/meta.json      # kind, temperature scale, start view, description
+    SITE/DATE/FLIGHT/RUN/splat.spz      # compressed splat
+
+Thermal splats are written in greyscale with the emission lobe projected onto the spherical
+harmonics; the viewer decodes the blended value to degrees C per pixel. SPZ compression makes
+the files about 15 times smaller than `splat.pt` (a 600k Gaussian splat is about 11 MB) at the
+cost of reading the hottest pixels a few degrees low. The per-frame source strength is not
+available in the browser.
+
+### Deploying
+
+`SITE` is plain static files: copy it to any web server, e.g.
+
+    rsync -a --chmod=D755,F644 SITE/ HOST:public_html/Splats/
+
+Adding a splat rewrites `SITE/index.html`; leave out rsync's `--delete` to keep splats that are
+only on the server. No server-side code or GPU is involved. The server should send
+`viewer.js` as `text/javascript` (modules are refused otherwise); `.spz` needs no particular
+type. `viewer.js` is 3.4 MB, mostly Spark's WebAssembly, so enable compression for it if the
+server does not already, e.g. for Apache:
+
+    AddOutputFilterByType DEFLATE text/javascript application/json
+
+or for nginx `gzip on; gzip_types text/javascript application/json;`. Visitors download the
+viewer once (it is cached) plus each splat they open.
 
 ## Poses from the RGB camera
 

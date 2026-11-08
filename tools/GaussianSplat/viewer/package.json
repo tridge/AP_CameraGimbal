@@ -1,0 +1,15 @@
+{
+  "name": "splat-web-viewer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@sparkjsdev/spark": "2.4.0",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.6"
+  }
+}
