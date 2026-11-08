@@ -1,0 +1,88 @@
+From 8cac9891301fb66fb2b0a0f91507b9a464ec656f Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 20:33:59 +1100
+Subject: [PATCH 12/12] brush-js, brush-process: hooks for buffer-lifetime
+ tests; fix _initialize doc
+
+BrushApp.memoryCleanup() runs CubeCL's explicit memory cleanup and
+BrushApp.setTasksPerSubmit(n) (before init) sets how many GPU tasks may be
+queued per submit, so tests can stress when pool buffers are freed. The
+_initialize comment wrongly said wasm-bindgen calls it: the host must.
+---
+ apps/brush-js/src/lib.rs        | 26 ++++++++++++++++++++++----
+ crates/brush-process/src/lib.rs | 11 ++++++++++-
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/apps/brush-js/src/lib.rs b/apps/brush-js/src/lib.rs
+index 4977324..bf68fb1 100644
+--- a/apps/brush-js/src/lib.rs
++++ b/apps/brush-js/src/lib.rs
+@@ -250,6 +250,23 @@ impl BrushApp {
+         }
+     }
+ 
++    /// Queue submits after at most `n` GPU tasks (default 64); call before
++    /// `init`/`initExisting`. Small values stress buffer lifetimes.
++    #[wasm_bindgen(js_name = setTasksPerSubmit)]
++    pub fn set_tasks_per_submit(&self, n: usize) {
++        brush_process::set_tasks_per_submit(n);
++    }
++
++    /// Release every unused GPU memory page now (CubeCL's explicit cleanup). Used by
++    /// stress tests of buffer lifetimes; needs a device from `init`/`initExisting`.
++    #[wasm_bindgen(js_name = memoryCleanup)]
++    pub fn memory_cleanup(&self) {
++        self.device_override
++            .clone()
++            .unwrap_or_else(default_device)
++            .memory_cleanup();
++    }
++
+     /// Initialize Brush with its own internal `GPUDevice`.
+     pub async fn init(&self) -> Result<(), JsValue> {
+         burn_init_setup().await;
+@@ -538,15 +555,16 @@ impl Default for BrushApp {
+     }
+ }
+ 
+-/// Runs the static constructors (CubeCL's `inventory` registrations) once. Without an export
++/// Runs the static constructors (CubeCL's `inventory` registrations). Without an export
+ /// that calls `__wasm_call_ctors`, wasm-ld links "command-style" and re-runs every constructor
+-/// on every export call, which costs most of the CPU time of a training step. wasm-bindgen
+-/// calls `_initialize` once when the module is instantiated.
++/// on every export call, which costs most of the CPU time of a training step. The host must
++/// call `_initialize` exactly once, after instantiating the module and before anything else
++/// (wasm-bindgen's `web` target glue does not call it).
+ #[unsafe(no_mangle)]
+ pub extern "C" fn _initialize() {
+     unsafe extern "C" {
+         fn __wasm_call_ctors();
+     }
+-    // SAFETY: called once by wasm-bindgen's init, before any other export.
++    // SAFETY: the host calls this once, before any other export.
+     unsafe { __wasm_call_ctors() }
+ }
+diff --git a/crates/brush-process/src/lib.rs b/crates/brush-process/src/lib.rs
+index 21ac6cd..e0c9cab 100644
+--- a/crates/brush-process/src/lib.rs
++++ b/crates/brush-process/src/lib.rs
+@@ -27,9 +27,18 @@ use brush_train::train::{BOUND_PERCENTILE, get_splat_bounds};
+ use brush_vfs::SendNotWasm;
+ use tokio_stream::{Stream, StreamExt};
+ 
++/// Tasks per queue submit (CubeCL `tasks_max`); see [`set_tasks_per_submit`].
++static TASKS_PER_SUBMIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(64);
++
++/// Set before the device is initialised. Small values force frequent queue submits, used
++/// to stress GPU buffer lifetime handling.
++pub fn set_tasks_per_submit(n: usize) {
++    TASKS_PER_SUBMIT.store(n.max(1), std::sync::atomic::Ordering::Relaxed);
++}
++
+ fn burn_options() -> RuntimeOptions {
+     RuntimeOptions {
+-        tasks_max: 64,
++        tasks_max: TASKS_PER_SUBMIT.load(std::sync::atomic::Ordering::Relaxed),
+         memory_config: burn_wgpu::MemoryConfiguration::ExclusivePages,
+     }
+ }

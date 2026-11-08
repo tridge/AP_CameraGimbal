@@ -1,0 +1,44 @@
+From f0fd9177ee8aba62cdcddf4465ab6b44a3acefc7 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 18:02:30 +1100
+Subject: [PATCH 07/12] brush-process: no roofline autotune bounds in wasm
+
+CubeCL's roofline bounds measure peak throughput with a blocking read, which
+panics in wasm ("Failed to read tensor data synchronously") at the first
+autotuned reduce. Set the CubeCL autotune level to Full there, which
+registers no bounds.
+---
+ crates/brush-process/src/lib.rs | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/crates/brush-process/src/lib.rs b/crates/brush-process/src/lib.rs
+index 2cac236..21ac6cd 100644
+--- a/crates/brush-process/src/lib.rs
++++ b/crates/brush-process/src/lib.rs
+@@ -34,12 +34,26 @@ fn burn_options() -> RuntimeOptions {
+     }
+ }
+ 
++/// In wasm, CubeCL's roofline autotune bounds measure peak throughput with a
++/// blocking read, which panics there; `Full` autotune registers no bounds.
++fn configure_cubecl() {
++    #[cfg(target_family = "wasm")]
++    {
++        use burn::cubecl::config::{CubeClRuntimeConfig, RuntimeConfig, autotune::AutotuneLevel};
++        let mut config = CubeClRuntimeConfig::default();
++        config.autotune.level = AutotuneLevel::Full;
++        CubeClRuntimeConfig::try_set(config);
++    }
++}
++
+ pub async fn burn_init_setup() -> ProcessDevice {
++    configure_cubecl();
+     burn_wgpu::init_setup_async::<AutoGraphicsApi>(&WgpuDevice::default(), burn_options()).await;
+     default_device()
+ }
+ 
+ pub fn burn_init_device(adapter: Adapter, device: Device, queue: Queue) -> ProcessDevice {
++    configure_cubecl();
+     let setup = burn_wgpu::WgpuSetup {
+         instance: wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()), // unused... need to fix this in Burn.
+         adapter,

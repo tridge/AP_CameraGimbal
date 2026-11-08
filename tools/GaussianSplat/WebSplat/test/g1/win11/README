@@ -1,0 +1,6 @@
+G1 on the win11 machine (ports: DevTools 9353, harness server 8782):
+  for f in start.ps1 stop.ps1; do ssh win11 "cat > /tmp/g1-$f" < $f; done
+  ssh win11 'powershell -NoProfile -ExecutionPolicy Bypass -File $(cygpath -w /tmp/g1-start.ps1)'
+  ssh -f -N -o ExitOnForwardFailure=yes -L 9353:127.0.0.1:9353 -R 8782:127.0.0.1:8782 win11
+  node ../run_browser.mjs --dataset D --pkg P --out O --port 8782 --cdp http://127.0.0.1:9353 --gpu-ssh win11
+  ssh win11 'powershell -NoProfile -ExecutionPolicy Bypass -File $(cygpath -w /tmp/g1-stop.ps1)'

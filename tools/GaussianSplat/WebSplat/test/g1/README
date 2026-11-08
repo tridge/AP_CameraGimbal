@@ -1,0 +1,46 @@
+G1 harness (thermal training in the Brush fork). Results and findings: ../../notes/g1.md.
+
+prepare_g1.py WORKDIR OUT   dataset for Brush from train.py's own scene loading (16-bit scaled
+                            temperature targets, frozen eval_views.txt, init.ply, g1.json, gt.npy,
+                            brush_args.txt); run with tools/GaussianSplat's venv
+run_native.sh DATASET OUT   native brush-cli training with GPU memory sampling (BRUSH=..., ITERS=)
+run_browser.mjs             browser training: serves the page (web/), the worker
+                            (app/src/stages/train/brush-worker.js), the wasm package and the
+                            dataset; drives local headless Chrome (laptop flags) or a remote one
+                            over CDP (win11/README); collects renders, PLY, console counts, GPU
+                            memory; --trace 1 adds GPU buffer accounting, --shaders 1 saves WGSL
+                            exits nonzero unless the run is valid (no GPU/shader error, device loss
+                            or worker exception; exactly the frozen renders and a consistent PLY,
+                            all tied to this attempt's id; OUT must be new or empty; artifacts of
+                            invalid runs are moved to OUT/rejected/)
+repeat.sh N PKG DATASET OUT the repeat policy's runs (N valid, at most 3 invalid replaced)
+repeat_preflight.sh N PKG DATASET OUT HOST   remote series with a per-attempt adapter preflight
+                            (preflight.mjs; failures logged in OUT/ledger.jsonl, not attempts)
+score_repeats.py            scores a machine's complete attempt ledger under the repeat policy
+                            (5 distinct valid runs, at most 3 invalid attempts, fixed thresholds)
+worker_contract_test.mjs    worker failure contract with a mocked brush-js
+                            (node --experimental-vm-modules worker_contract_test.mjs)
+driver_contract_test.mjs DATASET SCRATCH   driver: fresh output dir, per-attempt verdicts, exact
+                            artifact validation (mocked browser)
+lifetime_test.sh PKG ...    GPU buffer lifetime regression test (3 x 3500 iterations must stay valid);
+                            lifetime-negative-control.patch makes the CubeCL fork fail it
+render_ply.py PLY DATASET OUT.npz   held-out renders of any PLY with gsplat, decoded as the viewer
+metrics.py score|compare|export     the one scorer (criteria 1-6 and 9 of notes/g1.md); validates
+                                    view identities, counts, dimensions, finite values; exits
+                                    nonzero on invalid input or a failed criterion
+check_loss.py DUMP DATASET  criteria 7-8 against train.py's loss, from the fork's thermal_loss test
+                            (THERMAL_LOSS_DUMP=DUMP G1_DATASET=DATASET cargo test -p brush-train
+                            --test thermal_loss)
+audit_wgsl.py DIR           loop-local uninitialised var audit of captured WGSL
+profile_worker.mjs PORT S OUT   CPU profile of the worker (run_browser.mjs --debug-port PORT)
+probe/                      minimal WebGPU checks for the laptop (canvas, subgroups, readback)
+
+Worker contract (app/src/stages/train/brush-worker.js): one worker per run, start once, renderEval
+and exportPly after 'done', then dispose; any GPU error, shader error or device loss fails the run.
+
+Building the fork: Brush (pinned 1388f74 + ../../app/src/stages/train/brush-patches/brush/*.patch)
+with a CubeCL checkout next to it (tracel-ai/cubecl at 467522442c7b + brush-patches/cubecl/*.patch,
+as the directory cubecl-fork); then
+  cargo build -p brush-js --target wasm32-unknown-unknown --release
+  wasm-bindgen --target web --out-dir PKG target/wasm32-unknown-unknown/release/brush_js.wasm
+  cargo build --release -p brush-cli

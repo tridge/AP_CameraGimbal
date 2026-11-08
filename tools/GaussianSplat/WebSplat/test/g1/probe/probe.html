@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>WebGPU probe</title></head>
+<body><canvas id="c"></canvas>
+<script type="module">
+// Minimal checks for the laptop WebGPU failures seen with Brush: device with all adapter
+// features (as cubecl requests), compute shaders using f16/subgroups, and canvas presentation.
+const q = new URLSearchParams(location.search);
+const out = [];
+const t0 = performance.now();
+const log = (k, v) => out.push([k, v, Math.round(performance.now() - t0)]);
+window.results = out;
+
+async function scoped(device, label, fn) {
+  device.pushErrorScope('out-of-memory');
+  device.pushErrorScope('validation');
+  device.pushErrorScope('internal');
+  let r;
+  try { r = await fn(); } catch (e) { log(label + ' exception', String(e)); }
+  const errs = [];
+  for (let i = 0; i < 3; i++) {
+    const e = await device.popErrorScope();
+    if (e) errs.push(e.constructor.name + ': ' + e.message.slice(0, 300));
+  }
+  log(label, errs.length ? errs : 'ok' + (r !== undefined ? ' ' + JSON.stringify(r) : ''));
+}
+
+async function compute(device, label, code) {
+  await scoped(device, label, async () => {
+    const m = device.createShaderModule({ code });
+    const info = await m.getCompilationInfo();
+    const msgs = info.messages.filter((x) => x.type === 'error').map((x) => x.message);
+    if (msgs.length) return { compile: msgs.slice(0, 3) };
+    const p = device.createComputePipeline({ layout: 'auto', compute: { module: m, entryPoint: 'main' } });
+    const buf = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const rd = device.createBuffer({ size: 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const bg = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: buf } }] });
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(p); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(1); pass.end();
+    enc.copyBufferToBuffer(buf, 0, rd, 0, 256);
+    device.queue.submit([enc.finish()]);
+    await rd.mapAsync(GPUMapMode.READ);
+    const v = Array.from(new Float32Array(rd.getMappedRange()).slice(0, 4));
+    rd.unmap();
+    return v;
+  });
+}
+
+async function canvasTest(device, w, h) {
+  const c = document.getElementById('c');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('webgpu');
+  const format = q.get('format') || navigator.gpu.getPreferredCanvasFormat();
+  await scoped(device, `canvas ${w}x${h} ${format}`, async () => {
+    ctx.configure({ device, format, alphaMode: q.get('alpha') || 'premultiplied' });
+    for (let f = 0; f < 3; f++) {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
+        loadOp: 'clear', storeOp: 'store', clearValue: [0.2, 0.3, 0.4, 1] }] });
+      pass.end();
+      device.queue.submit([enc.finish()]);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    await device.queue.onSubmittedWorkDone();
+  });
+  ctx.unconfigure();
+}
+
+async function main() {
+  const a = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
+  if (!a) { log('adapter', 'none'); return; }
+  log('adapter', `${a.info.vendor} ${a.info.architecture} ${a.info.description}`);
+  log('features', [...a.features].sort().join(','));
+  log('limits', { maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize,
+    maxComputeWorkgroupStorageSize: a.limits.maxComputeWorkgroupStorageSize, maxStorageBuffersPerShaderStage: a.limits.maxStorageBuffersPerShaderStage });
+  const all = q.get('features') !== 'none';
+  const device = await a.requestDevice({ requiredFeatures: all ? [...a.features] : [],
+    requiredLimits: { maxBufferSize: a.limits.maxBufferSize, maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize } });
+  device.addEventListener('uncapturederror', (e) => log('uncaptured', e.error.message.slice(0, 300)));
+  device.lost.then((i) => log('lost', i.reason + ' ' + i.message));
+  log('device', all ? 'all adapter features' : 'no features');
+
+  await compute(device, 'compute f32', `@group(0) @binding(0) var<storage, read_write> o: array<f32>;
+    @compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { o[i] = f32(i) * 0.5; }`);
+  if (a.features.has('shader-f16'))
+    await compute(device, 'compute f16', `enable f16;
+      @group(0) @binding(0) var<storage, read_write> o: array<f32>;
+      @compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { let h = f16(i) * 0.5h; o[i] = f32(h); }`);
+  if (a.features.has('subgroups'))
+    await compute(device, 'compute subgroups', `enable subgroups;
+      @group(0) @binding(0) var<storage, read_write> o: array<f32>;
+      @compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { o[i] = subgroupAdd(1.0); }`);
+  await compute(device, 'compute atomics', `@group(0) @binding(0) var<storage, read_write> o: array<atomic<u32>>;
+    @compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { atomicAdd(&o[0], 1u); }`);
+  await compute(device, 'compute workgroup mem 16k', `var<workgroup> s: array<f32, 4096>;
+    @group(0) @binding(0) var<storage, read_write> o: array<f32>;
+    @compute @workgroup_size(256) fn main(@builtin(local_invocation_index) i: u32) {
+      for (var k = 0u; k < 16u; k++) { s[i * 16u + k] = f32(k); } workgroupBarrier(); o[i % 64u] = s[4095u - i]; }`);
+  // a large storage buffer, as training needs
+  await scoped(device, 'buffer 512 MiB', async () => {
+    const b = device.createBuffer({ size: 512 << 20, usage: GPUBufferUsage.STORAGE });
+    await device.queue.onSubmittedWorkDone(); b.destroy();
+  });
+  // presentation workaround: render to an ordinary texture and read it back for a 2D canvas
+  for (const [w, h] of [[1280, 720], [1600, 1000], [1920, 1080]]) {
+    await scoped(device, `texture readback ${w}x${h}`, async () => {
+      const t = device.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+      const b = device.createBuffer({ size: w * h * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      const enc = device.createCommandEncoder();
+      enc.beginRenderPass({ colorAttachments: [{ view: t.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [1, 0.5, 0, 1] }] }).end();
+      enc.copyTextureToBuffer({ texture: t }, { buffer: b, bytesPerRow: w * 4 }, [w, h]);
+      device.queue.submit([enc.finish()]);
+      await b.mapAsync(GPUMapMode.READ);
+      const data = new Uint8ClampedArray(b.getMappedRange()).slice();
+      const px = Array.from(data.subarray(0, 4));
+      new OffscreenCanvas(w, h).getContext('2d').putImageData(new ImageData(data, w, h), 0, 0);
+      b.unmap(); t.destroy(); b.destroy();
+      return px;
+    });
+  }
+  for (const s of (q.get('canvas') || '640x480,1280x720,1600x1000').split(',').filter(Boolean)) {
+    const [w, h] = s.split('x').map(Number);
+    await canvasTest(device, w, h);
+  }
+  // compute still works after the canvas tests?
+  await compute(device, 'compute f32 after canvas', `@group(0) @binding(0) var<storage, read_write> o: array<f32>;
+    @compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { o[i] = f32(i) * 0.25; }`);
+}
+main().catch((e) => log('fatal', String(e))).finally(() => { window.done = true; });
+</script></body></html>

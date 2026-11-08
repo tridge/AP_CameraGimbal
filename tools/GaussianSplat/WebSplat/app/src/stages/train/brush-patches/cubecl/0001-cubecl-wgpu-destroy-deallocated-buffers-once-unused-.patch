@@ -1,0 +1,168 @@
+From 6c75b758db95b76b3622b2a615de0a0fe176f298 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 19:13:44 +1100
+Subject: [PATCH] cubecl-wgpu: destroy deallocated buffers once unused (wasm)
+
+wgpu's WebGPU backend drops buffers without GPUBuffer.destroy(), so memory
+the pool deallocates is freed only when the JS garbage collector collects
+the buffer object. With exclusive pages and per-refine cleanups that left
+many GB pending on an 8 GB GPU and allocations failed.
+
+Give every WgpuResource handed out for a pool buffer a clone of the
+buffer's ownership token. A deallocated buffer is queued; after each queue
+submit of the owning stream, queued buffers whose token nothing else holds
+(no task can record with them any more, and all work recorded with them
+has been submitted) are destroyed once the queue's submitted work is done
+(on_submitted_work_done). Prepared tasks keep their resources, so they keep
+the buffer. Other streams pin the allocation itself until their work is
+done.
+---
+ crates/cubecl-wgpu/src/compute/mem_manager.rs |  9 +++
+ crates/cubecl-wgpu/src/compute/storage.rs     | 58 ++++++++++++++++++-
+ crates/cubecl-wgpu/src/compute/stream.rs      |  2 +
+ 3 files changed, 68 insertions(+), 1 deletion(-)
+
+diff --git a/crates/cubecl-wgpu/src/compute/mem_manager.rs b/crates/cubecl-wgpu/src/compute/mem_manager.rs
+index 7bfe9488..b402b3b2 100644
+--- a/crates/cubecl-wgpu/src/compute/mem_manager.rs
++++ b/crates/cubecl-wgpu/src/compute/mem_manager.rs
+@@ -32,6 +32,15 @@ pub struct WgpuMemManager {
+ }
+ 
+ impl WgpuMemManager {
++    /// See [`WgpuStorage::destroy_deallocated`]. The uniforms pool too: the info
++    /// cache's resources hold their buffers' tokens, so cached ones are kept.
++    #[cfg(target_family = "wasm")]
++    pub(crate) fn destroy_deallocated(&mut self, queue: &wgpu::Queue) {
++        self.memory_pool.storage().destroy_deallocated(queue);
++        self.memory_uniforms.storage().destroy_deallocated(queue);
++        self.memory_pool_staging.storage().destroy_deallocated(queue);
++    }
++
+     pub(crate) fn new(
+         device: wgpu::Device,
+         memory_properties: MemoryDeviceProperties,
+diff --git a/crates/cubecl-wgpu/src/compute/storage.rs b/crates/cubecl-wgpu/src/compute/storage.rs
+index 2ab86996..f1b79a5c 100644
+--- a/crates/cubecl-wgpu/src/compute/storage.rs
++++ b/crates/cubecl-wgpu/src/compute/storage.rs
+@@ -13,6 +13,9 @@ const MIN_BUFFER_SIZE: u64 = 32;
+ /// Buffer storage for wgpu.
+ pub struct WgpuStorage {
+     memory: HashMap<StorageId, WgpuMemory>,
++    /// Deallocated buffers waiting for their last resource to go (wasm).
++    #[cfg(target_family = "wasm")]
++    pending_destroy: Vec<(alloc::sync::Arc<()>, wgpu::Buffer)>,
+     device: wgpu::Device,
+     buffer_usages: BufferUsages,
+     mem_alignment: usize,
+@@ -52,6 +55,11 @@ pub struct WgpuResource {
+     ///
+     /// The result considers the offset.
+     pub size: u64,
++    /// Ownership token of the pool buffer this resource views (wasm): the buffer is
++    /// destroyed only once no resource holds it (see [`WgpuStorage::destroy_deallocated`]).
++    #[cfg(target_family = "wasm")]
++    #[new(default)]
++    pub(crate) owner: Option<alloc::sync::Arc<()>>,
+ }
+ 
+ /// The memory that can be allocated for wgpu.
+@@ -64,6 +72,10 @@ pub struct WgpuMemory {
+     /// The buffer host mapping, if host visible.
+     #[new(default)]
+     pub(crate) host_ptr: Option<HostPtr>,
++    /// Shared with every [`WgpuResource`] handed out for this buffer (wasm).
++    #[cfg(target_family = "wasm")]
++    #[new(default)]
++    owner: alloc::sync::Arc<()>,
+ }
+ 
+ impl WgpuResource {
+@@ -91,6 +103,38 @@ impl WgpuResource {
+ 
+ /// Keeps actual wgpu buffer references in a hashmap with ids as key.
+ impl WgpuStorage {
++    /// Called right after each queue submit of the owning stream. A deallocated buffer
++    /// whose ownership token is held by nothing but this list has no resource left:
++    /// no task can record new work with it, and everything recorded with it before
++    /// the resources were dropped has now been submitted (to this stream; other
++    /// streams pin the allocation itself until their work is done). Destroy such
++    /// buffers once the queue's submitted work, including that, has completed.
++    #[cfg(target_family = "wasm")]
++    pub(crate) fn destroy_deallocated(&mut self, queue: &wgpu::Queue) {
++        let mut done = Vec::new();
++        self.pending_destroy.retain(|(owner, buffer)| {
++            let unused = alloc::sync::Arc::strong_count(owner) == 1;
++            if unused {
++                done.push(buffer.clone());
++            }
++            !unused
++        });
++        if !done.is_empty() {
++            queue.on_submitted_work_done(move || {
++                for buffer in done {
++                    buffer.destroy();
++                }
++            });
++        }
++    }
++
++    /// Deallocated buffers still referenced by a resource (diagnostic).
++    #[cfg(target_family = "wasm")]
++    pub(crate) fn pending_destroy_count(&self) -> usize {
++        self.pending_destroy.len()
++    }
++
++
+     /// Create a new storage on the given [device](wgpu::Device).
+     pub fn new(
+         mem_alignment: usize,
+@@ -100,6 +144,8 @@ impl WgpuStorage {
+     ) -> Self {
+         Self {
+             memory: HashMap::new(),
++            #[cfg(target_family = "wasm")]
++            pending_destroy: Vec::new(),
+             device,
+             buffer_usages: usages,
+             mem_alignment,
+@@ -125,6 +171,8 @@ impl ComputeStorage for WgpuStorage {
+             })?;
+         Ok(WgpuResource {
+             host_ptr: memory.host_ptr,
++            #[cfg(target_family = "wasm")]
++            owner: Some(memory.owner.clone()),
+             ..WgpuResource::new(
+                 memory.buffer.clone(),
+                 memory.address,
+@@ -159,7 +207,15 @@ impl ComputeStorage for WgpuStorage {
+ 
+     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
+     fn dealloc(&mut self, id: StorageId) {
+-        self.memory.remove(&id);
++        let memory = self.memory.remove(&id);
++        // wgpu's WebGPU backend drops buffers without destroy(), leaving the memory to
++        // the JS garbage collector; destroy them once nothing uses them instead.
++        #[cfg(target_family = "wasm")]
++        if let Some(memory) = memory {
++            self.pending_destroy.push((memory.owner, memory.buffer));
++        }
++        #[cfg(not(target_family = "wasm"))]
++        drop(memory);
+     }
+ 
+     fn flush(&mut self) {
+diff --git a/crates/cubecl-wgpu/src/compute/stream.rs b/crates/cubecl-wgpu/src/compute/stream.rs
+index 2856f7e6..629eac50 100644
+--- a/crates/cubecl-wgpu/src/compute/stream.rs
++++ b/crates/cubecl-wgpu/src/compute/stream.rs
+@@ -778,6 +778,8 @@ impl WgpuStream {
+ 
+         // This will _first_ fire off all pending write_buffer work.
+         let index = self.queue.submit([tasks_encoder.finish()]);
++        #[cfg(target_family = "wasm")]
++        self.mem_manage.destroy_deallocated(&self.queue);
+ 
+         // Release cross-stream input pins.
+         if !self.shared_bindings.is_empty() {

@@ -1,0 +1,27 @@
+--- a/crates/cubecl-wgpu/src/compute/storage.rs
++++ b/crates/cubecl-wgpu/src/compute/storage.rs
+@@ -111,20 +111,10 @@
+     /// buffers once the queue's submitted work, including that, has completed.
+     #[cfg(target_family = "wasm")]
+     pub(crate) fn destroy_deallocated(&mut self, queue: &wgpu::Queue) {
+-        let mut done = Vec::new();
+-        self.pending_destroy.retain(|(owner, buffer)| {
+-            let unused = alloc::sync::Arc::strong_count(owner) == 1;
+-            if unused {
+-                done.push(buffer.clone());
+-            }
+-            !unused
+-        });
+-        if !done.is_empty() {
+-            queue.on_submitted_work_done(move || {
+-                for buffer in done {
+-                    buffer.destroy();
+-                }
+-            });
++        // STRESS-TEST VARIANT: the first policy, destroy everything deallocated before this submit, now
++        let _ = queue;
++        for (_owner, buffer) in self.pending_destroy.drain(..) {
++            buffer.destroy();
+         }
+     }
+ 

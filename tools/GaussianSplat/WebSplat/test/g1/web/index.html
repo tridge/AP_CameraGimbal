@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>G1 thermal Brush</title></head>
+<body><pre id="log"></pre>
+<script type="module">
+// G1 harness page: copy the dataset into OPFS, train in the Brush worker, then upload the
+// held-out renders and the exported PLY to the harness server.
+const q = new URLSearchParams(location.search);
+const logEl = document.getElementById('log');
+const t0 = performance.now();
+const log = (o) => {
+  const line = JSON.stringify({ t: Math.round(performance.now() - t0), ...o });
+  console.log('G1 ' + line);
+  logEl.textContent += line + '\n';
+};
+// chunked: the driver's CDP connection carries request bodies and fails on very large ones
+async function upload(name, body) {
+  const bytes = body instanceof ArrayBuffer ? new Uint8Array(body) : new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  const chunk = 8 << 20;
+  for (let off = 0; off < bytes.length || off === 0; off += chunk) {
+    const r = await fetch(`/result/${q.get('attempt')}/${name}?offset=${off}`, { method: 'POST', body: bytes.subarray(off, off + chunk) });
+    if (!r.ok) throw new Error(`upload ${name}: HTTP ${r.status}`);
+    if (!bytes.length) break;
+  }
+}
+
+function parseArgs(text) {
+  const out = {};
+  const tok = text.trim().split(/\s+/);
+  for (let i = 0; i < tok.length; i += 2) out[tok[i].replace(/^--/, '')] = Number(tok[i + 1]);
+  return out;
+}
+
+async function copyToOpfs(files, path) {
+  let root = await navigator.storage.getDirectory();
+  for (const p of path.slice(0, -1)) root = await root.getDirectoryHandle(p, { create: true });
+  await root.removeEntry(path.at(-1), { recursive: true }).catch(() => {});
+  const top = await root.getDirectoryHandle(path.at(-1), { create: true });
+  let bytes = 0;
+  for (const f of files) {
+    let dir = top;
+    const parts = f.split('/');
+    for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
+    const data = await (await fetch('/dataset/' + f)).arrayBuffer();
+    const w = await (await dir.getFileHandle(parts.at(-1), { create: true })).createWritable();
+    await w.write(data);
+    await w.close();
+    bytes += data.byteLength;
+  }
+  return bytes;
+}
+
+async function main() {
+  const files = await (await fetch('/manifest')).json();
+  const meta = await (await fetch('/dataset/g1.json')).json();
+  const config = parseArgs(await (await fetch('/dataset/brush_args.txt')).text());
+  if (q.get('iters')) config['total-train-iters'] = Number(q.get('iters'));
+  config['eval-every'] = config['total-train-iters'];
+  const path = ['g1', 'dataset'];
+  const bytes = await copyToOpfs(files, path);
+  log({ stage: 'opfs', files: files.length, bytes });
+
+  // one worker per run (brush-worker.js contract); the run is valid only if the worker,
+  // disposed after the export, reports no GPU error, shader error or device loss
+  const worker = new Worker('/app/stages/train/brush-worker.js', { type: 'module' });
+  const done = new Promise((resolve, reject) => {
+    const abort = (reason) => {
+      worker.postMessage({ type: 'dispose' });
+      setTimeout(() => worker.terminate(), 5000);
+      reject(new Error(reason));
+    };
+    worker.onerror = (e) => { log({ type: 'workererror', message: e.message }); abort(e.message); };
+    worker.onmessage = async (e) => {
+      const m = e.data;
+      if (m.type === 'shader') {
+        await upload(`shaders/${m.label || 'unlabelled'}.wgsl`, new TextEncoder().encode(m.code));
+      } else if (m.type === 'evalRenders') {
+        for (const v of m.views) await upload(`eval/${v.name}.f32`, v.data);
+        log({ stage: 'evalRenders', views: m.views.map((v) => ({ name: v.name, psnr: v.psnr, w: v.width, h: v.height })) });
+        worker.postMessage({ type: 'exportPly', comments: ['apcg_splat ' + JSON.stringify(meta.apcg_splat)] });
+      } else if (m.type === 'ply') {
+        await upload('export.ply', m.bytes);
+        log({ stage: 'ply', bytes: m.bytes.byteLength });
+        worker.postMessage({ type: 'dispose' });
+      } else if (m.type === 'disposed') {
+        m.attempt = q.get('attempt');
+        log(m);
+        // the verdict also goes to the harness server: the driver's CDP link to a remote page
+        // can drop (seen on win11), and the worker's verdict is what decides validity
+        await upload('verdict.json', new TextEncoder().encode(JSON.stringify(m)));
+        if (m.ok) resolve(m);
+        else reject(new Error('run invalid: ' + m.reason));
+      } else if (m.type === 'done') {
+        log(m);
+        worker.postMessage({ type: 'renderEval' });
+      } else if (m.type === 'failed') {
+        log(m);
+        await upload('verdict.json', new TextEncoder().encode(JSON.stringify({ ...m, ok: false, attempt: q.get('attempt') })));
+        abort('run failed: ' + m.reason);
+      } else if (m.type === 'error') {
+        log(m);
+        abort(m.message);
+      } else {
+        log(m);
+      }
+    };
+  });
+  worker.postMessage({ type: 'start', pkg: '/pkg/brush_js.js', dataset: path, config, stepsPerMessage: Number(q.get('steps') || 200),
+    captureShaders: !!q.get('shaders'), traceBuffers: !!q.get('trace'), stressCleanup: !!q.get('stress'),
+    tasksPerSubmit: Number(q.get('tasks') || 0) });
+  log({ stage: 'start', config });
+  const verdict = await done;
+  log({ stage: 'finished' });
+  return verdict;
+}
+window.g1result = null;
+main()
+  .then((v) => { window.g1result = { ok: true, gpuErrors: v.gpuErrors, shaderErrors: v.shaderErrors }; })
+  .catch((e) => {
+    log({ stage: 'fatal', message: String(e?.stack || e) });
+    window.g1result = { ok: false, reason: String(e?.message || e) };
+  })
+  .finally(() => { window.g1done = true; });
+</script></body></html>

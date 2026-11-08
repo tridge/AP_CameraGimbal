@@ -1,0 +1,48 @@
+From 5e1500c3070d95862f48f4ba849a2f5a490e4c29 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 18:02:30 +1100
+Subject: [PATCH 09/12] brush-js: run static constructors once; log in release
+ builds
+
+Without an export calling __wasm_call_ctors, wasm-ld links command-style and
+re-runs every static constructor (CubeCL's inventory registrations) on each
+export call, which took most of a training step's CPU time. Export
+_initialize to run them once; the host calls it after instantiation. Also
+install the console logger (info level) in release builds.
+---
+ apps/brush-js/src/lib.rs | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/apps/brush-js/src/lib.rs b/apps/brush-js/src/lib.rs
+index 8a0de6e..4977324 100644
+--- a/apps/brush-js/src/lib.rs
++++ b/apps/brush-js/src/lib.rs
+@@ -241,9 +241,9 @@ impl BrushApp {
+         // Idempotent: hosts that re-init us (React StrictMode in dev, hot
+         // reloads, etc.) would otherwise hit "logger already set" each time.
+         static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+-        #[cfg(debug_assertions)]
+         LOGGER_INIT.call_once(|| {
+-            wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
++            let level = log::Level::Info;
++            wasm_logger::init(wasm_logger::Config::new(level));
+         });
+         Self {
+             device_override: None,
+@@ -537,3 +537,16 @@ impl Default for BrushApp {
+         Self::new()
+     }
+ }
++
++/// Runs the static constructors (CubeCL's `inventory` registrations) once. Without an export
++/// that calls `__wasm_call_ctors`, wasm-ld links "command-style" and re-runs every constructor
++/// on every export call, which costs most of the CPU time of a training step. wasm-bindgen
++/// calls `_initialize` once when the module is instantiated.
++#[unsafe(no_mangle)]
++pub extern "C" fn _initialize() {
++    unsafe extern "C" {
++        fn __wasm_call_ctors();
++    }
++    // SAFETY: called once by wasm-bindgen's init, before any other export.
++    unsafe { __wasm_call_ctors() }
++}
