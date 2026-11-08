@@ -163,7 +163,7 @@ def main():
                 title=args.title or ' '.join(parts),
                 description=desc.read_text().strip() if desc.exists() else '',
                 camera=start_camera(ckpt, target), up=[0, 0, 1], target=target.tolist(),
-                origin=meta.get('origin'))
+                origin=meta.get('origin'), rasterize_mode='classic')  # train.py, train_rgb.py: gsplat classic
     if not rgb:
         ts = meta['temperature_scale']
         if ts.get('kind', 'log1p') != 'log1p':
