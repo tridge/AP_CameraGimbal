@@ -104,3 +104,35 @@ code {
 .credits a {
   color: #888;
 }
+.project {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ddd;
+  text-decoration: none;
+  font-weight: 600;
+  background: rgba(20, 20, 20, 0.7);
+  padding: 4px 10px 4px 4px;
+  border-radius: 6px;
+}
+.project:hover {
+  color: #fff;
+}
+.open-panel h2 {
+  font-size: 15px;
+  margin: 16px 0 4px;
+}
+.samples {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.samples li {
+  margin: 4px 0;
+}
+.open-panel a,
+#panel a {
+  color: #8cf;
+}

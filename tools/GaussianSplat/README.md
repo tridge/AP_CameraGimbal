@@ -156,7 +156,8 @@ Build the viewer once (needs Node.js 20.19 or later), then add splats to a site 
     SITE/viewer/                        # copied from viewer/dist, incl. the open-a-file page
     SITE/DATE/FLIGHT/RUN/index.html     # viewer page
     SITE/DATE/FLIGHT/RUN/meta.json      # kind, temperature scale, start view, description
-    SITE/DATE/FLIGHT/RUN/splat.spz      # compressed splat
+    SITE/DATE/FLIGHT/RUN/splat.spz      # compressed splat, loaded by the page
+    SITE/DATE/FLIGHT/RUN/splat.ply      # download: 3DGS PLY with the metadata in its header
 
 Thermal splats are written in greyscale with the emission lobe projected onto the spherical
 harmonics; the viewer decodes the blended value to degrees C per pixel. SPZ compression makes
@@ -205,6 +206,10 @@ upload service or server process.
   `include snippets/plot-splat.conf;` inside the plot.ardupilot.org HTTPS server block next to
   the video include, run `nginx -t`, then `systemctl reload nginx`. Create the first release
   and `current` before reloading.
+- Samples: the page links `samples/log80-run13` and `samples/randy-run2` (`.spz` and `.json`,
+  the `splat.spz` and `meta.json` from `export_web.py`). They live in
+  `/data/sites/logviewer/splat/samples/`, outside the releases, served by the snippet's
+  `/splat/samples/` location.
 - Check: `/splat/` shows the open-a-file page, `viewer.js` is served as JavaScript with gzip,
   and a local `.ply` and a `?url=` link both open.
 
