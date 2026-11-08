@@ -62,23 +62,31 @@ export function gaussianKernel(sigma) {
   for (let i = 0; i < k.length; i++) k[i] /= sum;
   return k;
 }
-export function gaussian(data, width, height, sigma) {
+export function gaussian(data, width, height, sigma, out = new Float32Array(data.length)) {
   const k = gaussianKernel(sigma),
-    r = (k.length - 1) / 2;
-  const temp = new Float32Array(data.length),
-    out = new Float32Array(data.length);
-  for (let y = 0; y < height; y++)
+    r = (k.length - 1) / 2,
+    temp = new Float32Array(data.length),
+    row = new Float32Array(width + 2 * r);
+  // Horizontal pass over a reflected, padded copy of each row.
+  for (let y = 0, base = 0; y < height; y++, base += width) {
+    for (let i = -r; i < width + r; i++) row[i + r] = data[base + reflect(i, width)];
     for (let x = 0; x < width; x++) {
       let sum = 0;
-      for (let j = -r; j <= r; j++) sum += k[j + r] * data[y * width + reflect(x + j, width)];
-      temp[y * width + x] = sum;
+      for (let j = 0; j <= 2 * r; j++) sum += k[j] * row[x + j];
+      temp[base + x] = sum;
     }
-  for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) {
-      let sum = 0;
-      for (let j = -r; j <= r; j++) sum += k[j + r] * temp[reflect(y + j, height) * width + x];
-      out[y * width + x] = sum;
+  }
+  // Vertical pass accumulated row by row (double precision) for contiguous access.
+  const acc = new Float64Array(width);
+  for (let y = 0, base = 0; y < height; y++, base += width) {
+    acc.fill(0);
+    for (let j = -r; j <= r; j++) {
+      const w = k[j + r],
+        src = reflect(y + j, height) * width;
+      for (let x = 0; x < width; x++) acc[x] += w * temp[src + x];
     }
+    out.set(acc, base);
+  }
   return out;
 }
 const subtract = (a, b) => Float32Array.from(a, (v, i) => v - b[i]);
@@ -288,20 +296,24 @@ function clahe(data, width, height, clip) {
   return out;
 }
 export function richardsonLucy(data, width, height, sigma, iterations, damping) {
-  const floor = histogram(data, width, height).p01;
+  const floor = histogram(data, width, height).p01,
+    n = data.length;
   const observed = Float32Array.from(data, (v) => Math.max(0, v - floor) + 0.001);
-  let estimate = Float32Array.from(observed);
+  const estimate = Float32Array.from(observed),
+    blur = new Float32Array(n),
+    ratio = new Float32Array(n),
+    back = new Float32Array(n);
   for (let iteration = 0; iteration < iterations; iteration++) {
-    const blur = gaussian(estimate, width, height, sigma);
-    const ratio = Float32Array.from(blur, (v, i) => {
-      const residual = observed[i] - v;
-      return (
+    gaussian(estimate, width, height, sigma, blur);
+    for (let i = 0; i < n; i++) {
+      const v = blur[i],
+        residual = observed[i] - v;
+      ratio[i] =
         Math.max(0.000001, v + Math.sign(residual) * Math.max(0, Math.abs(residual) - damping)) /
-        Math.max(0.000001, v)
-      );
-    });
-    const back = gaussian(ratio, width, height, sigma);
-    estimate = Float32Array.from(estimate, (v, i) => v * back[i]);
+        Math.max(0.000001, v);
+    }
+    gaussian(ratio, width, height, sigma, back);
+    for (let i = 0; i < n; i++) estimate[i] *= back[i];
   }
   return Float32Array.from(estimate, (v) => v + floor - 0.001);
 }
