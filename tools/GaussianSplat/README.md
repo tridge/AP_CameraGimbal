@@ -13,7 +13,10 @@ The pipeline:
    keeps the frames whose telemetry pose puts the target in view. It writes
    contrast-enhanced 8-bit images for feature matching, the raw 16-bit frames for
    training, and `frames.json` with pose priors in a local ENU frame (metres,
-   origin on the target, height above takeoff).
+   origin on the target, height above takeoff). Without a hot spot the target is put
+   on the ground at the SRTM terrain height (tiles from terrain.ardupilot.org, cached in
+   `~/.tilecache/SRTM1` as MAVProxy does); `--target-alt` overrides it and
+   `--no-terrain` uses takeoff height.
 2. `sfm.py` runs GPU SIFT, picks image pairs from the telemetry view geometry
    (similar look direction and range to the target, plus time neighbours), matches
    on the GPU and verifies with COLMAP. Two mappers:

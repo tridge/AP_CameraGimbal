@@ -72,7 +72,7 @@ def main():
                     help='choose frames by telemetry attitude instead of an RGB SfM model')
     ap.add_argument('--camera-from', type=Path, help='COLMAP model with the RADIAL lens calibration (--telemetry)')
     ap.add_argument('--ground-z', type=float, help='ground height in the ENU frame (default: from the SfM points, '
-                    'or 0 = takeoff altitude with --telemetry)')
+                    'or the site centre height with --telemetry)')
     ap.add_argument('--radius', type=float, default=400.0, help='view axis must meet the ground this close (m)')
     ap.add_argument('--boundary-radius', type=float, default=300.0, help='ODM output boundary radius (m)')
     ap.add_argument('--min-pitch', type=float, default=30.0, help='view axis at least this far below horizontal (deg)')
@@ -83,14 +83,14 @@ def main():
     ap.add_argument('--h-accuracy', type=float, default=3.0, help='GPS horizontal accuracy for geo.txt (m)')
     ap.add_argument('--v-accuracy', type=float, default=5.0, help='GPS vertical accuracy for geo.txt (m)')
     args = ap.parse_args()
-    if args.telemetry and args.ground_z is None:
-        args.ground_z = 0.0
 
     pycolmap = import_pycolmap()
     info = json.loads((args.rgb / 'frames.json').read_text())
     frames = {f['name']: f for f in info['frames']}
     if args.centre is None:
         args.centre = np.array(info['target_enu'], dtype=float)
+    if args.telemetry and args.ground_z is None:
+        args.ground_z = float(args.centre[2])  # the extract tools put the target on the terrain
     if args.telemetry:
         # before (or without) RGB SfM: telemetry poses, lens calibration from another model of the same camera
         if not args.camera_from:
