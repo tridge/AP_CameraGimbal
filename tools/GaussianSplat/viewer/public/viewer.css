@@ -141,3 +141,11 @@ code {
   display: block;
   margin: 6px 0;
 }
+/* the hidden attribute wins over the panel's display rules (e.g. the up-axis label) */
+[hidden] {
+  display: none !important;
+}
+#precision {
+  color: #ffb347;
+  font-size: 13px;
+}

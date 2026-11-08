@@ -5,7 +5,7 @@
 // same-origin iframe, ?embed=1) bytes posted by the parent page.
 // meta.rasterize_mode 'classic' selects gsplat classic rendering (no mip opacity compensation).
 // Thermal splats hold the scaled temperature in every channel; it is blended over black into a
-// half-float target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
+// float (or half-float) target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
@@ -113,15 +113,39 @@ async function main() {
   let needSplat = true;
   let needPost = true;
   const scene = new THREE.Scene();
-  const spark = new SparkRenderer({
-    renderer,
-    premultipliedAlpha: true,
-    onDirty: () => {
-      needSplat = true;
-    },
-  });
-  scene.add(spark);
-  const holder = new THREE.Group(); // turns the splat's up axis to +z
+  // Thermal splats render as gsplat does: Spark's extended (float) accumulator (the packed one
+  // clips evaluated values before blending, which takes hot sources far down), gsplat's alpha
+  // threshold (1/255), depth order and (nearly) uncapped footprints. Other splats keep Spark's defaults. Changing kind makes a
+  // new renderer, inserted before the splats.
+  let spark = null;
+  let sparkExt = null;
+  function useSpark(ext) {
+    if (spark && sparkExt === ext) return;
+    if (spark) {
+      scene.remove(spark);
+      spark.dispose();
+    }
+    spark = new SparkRenderer({
+      renderer,
+      premultipliedAlpha: true,
+      // footprints up to 4096 px (Spark caps them at 512, which shrinks broad near Gaussians)
+      ...(ext
+        ? { accumExtSplats: true, minAlpha: 1 / 255, sortRadial: false, maxPixelRadius: 4096 }
+        : {}),
+      onDirty: () => {
+        needSplat = true;
+      },
+    });
+    sparkExt = ext;
+    scene.add(spark);
+    if (holder) {
+      scene.remove(holder);
+      scene.add(holder);
+    }
+  }
+  let holder = null;
+  useSpark(false);
+  holder = new THREE.Group(); // turns the splat's up axis to +z
   scene.add(holder);
 
   const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 20000);
@@ -164,46 +188,87 @@ async function main() {
     }
   }
 
-  function pixelValue(buf, i) {
-    const v = (halfToFloat(buf[i]) + halfToFloat(buf[i + 1]) + halfToFloat(buf[i + 2])) / 3;
-    return Math.min(Math.max(v, 0), 1);
+  // the thermal target: float32 where it can be blended (blending thousands of Gaussians in
+  // half floats drifts by degrees at hot points), else half float
+  let floatTarget = null;
+  let halfLut = null;
+  // RGBA of a target region as floats
+  function readTarget(t, x, y, w, h) {
+    if (floatTarget) {
+      const f = new Float32Array(w * h * 4);
+      renderer.readRenderTargetPixels(t, x, y, w, h, f);
+      return f;
+    }
+    if (!halfLut) {
+      halfLut = new Float32Array(65536);
+      for (let i = 0; i < 65536; i++) halfLut[i] = halfToFloat(i);
+    }
+    const b = new Uint16Array(w * h * 4);
+    renderer.readRenderTargetPixels(t, x, y, w, h, b);
+    const f = new Float32Array(b.length);
+    for (let i = 0; i < b.length; i++) f[i] = halfLut[b[i]];
+    return f;
   }
 
-  // as view_splat.py: auto range is the 1%..99.9% of covered pixels
+  function pixelValue(buf, i) {
+    return Math.min(Math.max((buf[i] + buf[i + 1] + buf[i + 2]) / 3, 0), 1);
+  }
+
+  // as view_splat.py: auto range is the 1%..99.9% of covered pixels (sampled); the peak is the
+  // hottest covered pixel (all of them: a small hot source can fall between samples)
   function autoRange() {
-    const w = full.width;
-    const h = full.height;
-    const buf = new Uint16Array(w * h * 4);
-    renderer.readRenderTargetPixels(full, 0, 0, w, h, buf);
+    const buf = readTarget(full, 0, 0, full.width, full.height);
     const temps = [];
     const step = Math.max(1, Math.floor(buf.length / 4 / 100000));
-    let peak = -Infinity;
-    for (let i = 0; i < buf.length; i += 4 * step) {
-      if (halfToFloat(buf[i + 3]) <= 0.5) continue;
-      const t = toC(pixelValue(buf, i));
-      temps.push(t);
-      if (t > peak) peak = t;
+    let vmax = -Infinity;
+    for (let i = 0, k = 0; i < buf.length; i += 4, k++) {
+      if (buf[i + 3] <= 0.5) continue;
+      const v = (buf[i] + buf[i + 1] + buf[i + 2]) / 3;
+      if (v > vmax) vmax = v;
+      if (k % step === 0) temps.push(toC(Math.min(Math.max(v, 0), 1)));
     }
-    if (!temps.length) return;
+    if (vmax > -Infinity) {
+      const peak = toC(Math.min(Math.max(vmax, 0), 1));
+      ui.stats.textContent = `peak ${floatTarget ? '' : '≈ '}${peak.toFixed(1)} °C in view`;
+    }
+    if (!temps.length) return; // too few covered pixels for a range
     temps.sort((a, b) => a - b);
     const lo = temps[Math.floor(0.01 * (temps.length - 1))];
     const p999 = temps[Math.floor(0.999 * (temps.length - 1))];
     ui.lo.value = lo.toFixed(1);
     ui.hi.value = Math.max(p999, lo + 1).toFixed(1);
     applyRange();
-    ui.stats.textContent = `peak ${peak.toFixed(1)} °C in view`;
   }
 
   function setupThermal() {
     if (post) return;
     const makeTarget = () => {
-      const t = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: true });
+      floatTarget ??=
+        renderer.extensions.has('EXT_color_buffer_float') &&
+        renderer.extensions.has('EXT_float_blend');
+      const type = floatTarget ? THREE.FloatType : THREE.HalfFloatType;
+      const t = new THREE.WebGLRenderTarget(1, 1, { type, depthBuffer: true });
       t.texture.colorSpace = THREE.SRGBColorSpace;
+      // float32 textures filter linearly only with OES_texture_float_linear (else they sample
+      // black); the full-size target maps pixel to pixel, so nearest is the same there
+      if (floatTarget && !renderer.extensions.has('OES_texture_float_linear')) {
+        t.texture.minFilter = t.texture.magFilter = THREE.NearestFilter;
+      }
       return t;
     };
     full = makeTarget();
     moving = makeTarget();
     target = full;
+    if (!floatTarget) {
+      // degraded mode: half floats blending many Gaussians drift by degrees at hot points
+      const p = document.createElement('p');
+      p.id = 'precision';
+      p.className = 'warn';
+      p.textContent =
+        'Reduced temperature precision on this GPU (no float32 blending): temperatures are ' +
+        'approximate and can read several °C off at hot points.';
+      $('thermal-controls').prepend(p);
+    }
     lut = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
     lut.magFilter = lut.minFilter = THREE.LinearFilter;
     post = new THREE.Mesh(
@@ -256,10 +321,11 @@ async function main() {
       const x = Math.floor(((e.clientX - r.left) / r.width) * target.width);
       const y = Math.floor((1 - (e.clientY - r.top) / r.height) * target.height);
       if (x < 0 || y < 0 || x >= target.width || y >= target.height) return;
-      const px = new Uint16Array(4);
-      renderer.readRenderTargetPixels(target, x, y, 1, 1, px);
+      const px = readTarget(target, x, y, 1, 1);
       ui.hover.textContent =
-        halfToFloat(px[3]) > 0.5 ? `${toC(pixelValue(px, 0)).toFixed(1)} °C under pointer` : '';
+        px[3] > 0.5
+          ? `${floatTarget ? '' : '≈ '}${toC(pixelValue(px, 0)).toFixed(1)} °C under pointer`
+          : '';
     });
   }
 
@@ -338,6 +404,7 @@ async function main() {
     renderer.setClearColor(0x000000, thermal ? 0 : 1);
     // gsplat 'classic' training (train.py, train_rgb.py): the 0.3 px^2 blur without Spark's opacity
     // compensation; splats that do not say so keep Spark's antialiased default
+    useSpark(thermal); // before its settings below
     const classic = meta.rasterize_mode === 'classic';
     spark.preBlurAmount = classic ? 0.3 : 0;
     spark.blurAmount = classic ? 0 : 0.3;
@@ -478,17 +545,21 @@ async function main() {
     const f = e.dataTransfer.files[0];
     if (f) openFile(f).catch(fail);
   });
-  // embedding: a same-origin parent posts {type: 'apcg-splat-open', bytes, name, meta}
+  // embedding: a same-origin parent posts {type: 'apcg-splat-open', bytes, name, meta}; bytes
+  // may be a Blob or File (read here, so the parent need not hold the file in memory)
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin || e.source !== window.parent) return;
     if (e.data?.type !== 'apcg-splat-open') return;
     const { bytes, name = 'splat.ply', meta = null } = e.data;
     const reply = (error) =>
       window.parent.postMessage({ type: 'apcg-splat-opened', name, error }, location.origin);
-    openBytes(new Uint8Array(bytes), name, meta).then(
-      () => reply(),
-      (err) => (fail(err), reply(err.message)),
-    );
+    const data = bytes instanceof Blob ? bytes.arrayBuffer() : Promise.resolve(bytes);
+    data
+      .then((b) => openBytes(new Uint8Array(b), name, meta))
+      .then(
+        () => reply(),
+        (err) => (fail(err), reply(err.message)),
+      );
   });
   const params = new URLSearchParams(location.search);
   if (window.parent !== window) {

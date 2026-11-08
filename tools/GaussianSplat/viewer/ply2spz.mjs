@@ -2,8 +2,8 @@
 // Spark sets the SPZ antialiased flag; it is cleared when the PLY's apcg_splat header says
 // rasterize_mode classic (re-gzipped as WebSplat's export does, so both give the same bytes).
 import { readFileSync, writeFileSync } from 'node:fs';
-import { crc32, deflateRawSync, gunzipSync } from 'node:zlib';
 import { transcodeSpz } from '@sparkjsdev/spark';
+import { setAntialiased } from './spz-flags.mjs';
 
 const [, , src, dst] = process.argv;
 if (!src || !dst) {
@@ -21,16 +21,6 @@ const line = head
   .split('\n')
   .find((l) => l.startsWith('comment apcg_splat '));
 const info = line ? JSON.parse(line.slice('comment apcg_splat '.length)) : {};
-if (info.rasterize_mode === 'classic') {
-  const u = gunzipSync(fileBytes);
-  u[14] &= ~1;
-  const body = deflateRawSync(u);
-  const out = Buffer.alloc(10 + body.length + 8);
-  out.set([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]);
-  body.copy(out, 10);
-  out.writeUInt32LE(crc32(u), 10 + body.length);
-  out.writeUInt32LE(u.length >>> 0, 14 + body.length);
-  fileBytes = out;
-}
+if (info.rasterize_mode === 'classic') fileBytes = setAntialiased(fileBytes, false);
 writeFileSync(dst, fileBytes);
 console.log('wrote %s (%d bytes)', dst, fileBytes.length);
