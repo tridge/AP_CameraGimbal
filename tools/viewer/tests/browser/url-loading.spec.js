@@ -259,3 +259,23 @@ test.describe('with the shipped CSP', () => {
     );
   });
 });
+
+test('saved reviews of same-named URL files do not restore each other', async ({ page }) => {
+  const findings = () => page.evaluate(() => window.fireViewer.state.findings.length);
+  await open(page, { url: `${origin}/a/thermal.mkv` });
+  await opened(page, 'thermal.mkv');
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  const keys = await page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith('fire-review:')),
+  );
+  const size = fs.statSync(fixture('thermal.mkv')).size;
+  expect(keys).toEqual([`fire-review:url:${origin}/a/thermal.mkv:thermal.mkv:${size}:0`]);
+  // same name, size and (missing) Last-Modified from another URL
+  await open(page, { url: `${origin}/b/thermal.mkv` });
+  await opened(page, 'thermal.mkv');
+  expect(await findings()).toBe(0);
+  await open(page, { url: `${origin}/a/thermal.mkv` });
+  await opened(page, 'thermal.mkv');
+  expect(await findings()).toBe(1);
+});

@@ -53,6 +53,7 @@ export class ThermalWorkbench {
       onChange,
       onCandidates,
       onOverlayChange = () => {},
+      onPendingChange = () => {},
       pause,
       cursor,
       playing = () => false,
@@ -76,11 +77,12 @@ export class ThermalWorkbench {
     });
     this.settings = analysisSettings(preferences);
     this.result = null;
+    this.resultIdentity = '';
     this.frame = null;
     this.decoded = null;
     this.identity = '';
     this.serial = 0;
-    this.busy = false;
+    this.busy = this.presenting = false;
     this.writeSettings();
     this.methodNote();
     root.addEventListener('toggle', () => {
@@ -147,10 +149,10 @@ export class ThermalWorkbench {
     this.$('histogram').onchange = this.$('log').onchange = () => this.drawHistogram();
     this.$('export').onclick = () => this.exportHistogram();
     this.$('peaks').onclick = () => {
-      if (this.result) {
+      if (this.current) {
         this.candidatesShown = true;
         this.onCandidates(
-          this.result.candidates.map((p) => ({
+          this.current.candidates.map((p) => ({
             ...p,
             contrast: p.score,
             scoreUnit: 'contrast σ',
@@ -172,7 +174,9 @@ export class ThermalWorkbench {
     };
     this.resizeObserver = new ResizeObserver(() => this.drawHistogram());
     this.resizeObserver.observe(this.$('histogram-canvas'));
+    this.onPendingChange = () => {};
     this.setFrame(null, null, null);
+    this.onPendingChange = onPendingChange;
   }
   readSettings() {
     return analysisSettings(
@@ -239,13 +243,15 @@ export class ThermalWorkbench {
       frame?.thermalMetadata?.source_sha256,
     ]);
     const thermal = decoded?.kind === 'gray16';
-    // Following keeps the previous processed image until this frame's result replaces it.
+    // Following keeps the previous processed image until this frame's result replaces it,
+    // but nothing may record that stale result against this frame.
     if (!(thermal && this.following)) this.invalidate();
+    else this.$('export').disabled = this.$('peaks').disabled = true;
     this.$('controls').disabled = this.$('histogram').disabled = this.$('log').disabled = !thermal;
     this.$('availability').textContent = this.availabilityText();
     if (!thermal) {
       this.ready = Promise.resolve();
-      return;
+      return this.onPendingChange();
     }
     this.activity();
     this.writeRegion(previousROI);
@@ -254,6 +260,15 @@ export class ThermalWorkbench {
       this.ready = Promise.resolve();
       if (this.root.open && !this.playing()) this.run(true);
     }
+    this.onPendingChange();
+  }
+  // The result for the current frame, or null while it is pending.
+  get current() {
+    return this.result && this.resultIdentity === this.identity ? this.result : null;
+  }
+  // The display still shows the previous frame until this frame's result arrives.
+  get pending() {
+    return this.presenting || (!!this.result && !this.current);
   }
   get following() {
     return this.root.open && this.$('follow').checked && this.decoded?.kind === 'gray16';
@@ -270,8 +285,9 @@ export class ThermalWorkbench {
     this.candidatesShown = false;
     this.serial++;
     this.client.cancel();
-    this.busy = false;
+    this.busy = this.presenting = false;
     this.result = null;
+    this.resultIdentity = '';
     this.$('view').value = 'raw';
     this.$('view').options[1].disabled = true;
     this.$('histogram').value = 'raw';
@@ -285,6 +301,7 @@ export class ThermalWorkbench {
     const canvas = this.$('histogram-canvas');
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
     if (repaint) this.onChange();
+    this.onPendingChange();
   }
   async run(histogramOnly, live = false) {
     if (this.decoded?.kind !== 'gray16') return;
@@ -298,6 +315,8 @@ export class ThermalWorkbench {
         (input) => !input.closest('label').hidden && !input.validity.valid,
       );
       if (bad) {
+        // Following must not carry the previous frame's result onto this one.
+        if (live) this.invalidate('Correct the highlighted setting. Original frame shown.');
         bad.reportValidity();
         return;
       }
@@ -316,6 +335,7 @@ export class ThermalWorkbench {
       settings = histogramOnly ? { ...this.settings, method: 'raw' } : { ...this.settings },
       roi = this.roi;
     this.busy = true;
+    this.presenting = live;
     this.$('cancel').disabled = false;
     this.$('status').textContent = histogramOnly
       ? 'Calculating raw histogram…'
@@ -334,7 +354,8 @@ export class ThermalWorkbench {
       );
       if (serial !== this.serial || identity !== this.identity) return;
       this.result = r;
-      this.busy = false;
+      this.resultIdentity = identity;
+      this.busy = this.presenting = false;
       this.$('cancel').disabled = true;
       this.$('export').disabled = false;
       this.$('view').options[1].disabled = this.$('histogram').options[1].disabled = !r.plane;
@@ -351,6 +372,7 @@ export class ThermalWorkbench {
         : '';
       this.drawHistogram();
       this.onChange();
+      this.onPendingChange();
     } catch (e) {
       if (serial === this.serial && identity === this.identity && e.name !== 'AbortError')
         this.invalidate(`Analysis failed: ${e.message} Original frame retained.`);
@@ -412,7 +434,7 @@ export class ThermalWorkbench {
       `${h.count.toLocaleString()} samples · Min ${this.valueText(h.min)} · Max ${this.valueText(h.max)} · Mean ${this.valueText(h.mean)}\nP01 ${this.valueText(h.p01)} · Median ${this.valueText(h.median)} · P99 ${this.valueText(h.p99)}${this.$('histogram').value === 'raw' ? ` · ${h.endpoints} samples at 0/65535 (possible clipping)` : ''}`;
   }
   provenance(point = null) {
-    const r = this.result;
+    const r = this.current;
     if (!r?.plane || !this.decoded) return null;
     const index = point ? point.y * this.decoded.width + point.x : -1;
     return {
@@ -453,18 +475,18 @@ export class ThermalWorkbench {
     };
   }
   exportHistogram() {
-    const h = this.currentHistogram();
+    const h = this.current && this.currentHistogram();
     if (!h) return;
     const raw = this.$('histogram').value === 'raw',
       cal = raw ? calibration(this.frame?.thermalMetadata) : null;
     const info = {
       schema: 'apcg.thermal-histogram.v1',
       identity: this.identity,
-      inputSha256: this.result.inputSha256,
+      inputSha256: this.current.inputSha256,
       roi: h.roi,
       count: h.count,
       source: raw ? 'raw' : 'processed',
-      unit: cal ? 'Celsius from original calibration' : raw ? 'raw samples' : this.result.unit,
+      unit: cal ? 'Celsius from original calibration' : raw ? 'raw samples' : this.current.unit,
       binConvention: '[lower,upper), last bin closed',
       analysis: this.provenance(),
     };

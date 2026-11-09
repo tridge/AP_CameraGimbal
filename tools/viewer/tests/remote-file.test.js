@@ -8,6 +8,7 @@ import {
   downloadFile,
   pruneDownloads,
   handOver,
+  reviewKey,
   VIDEO_EXTENSIONS,
 } from '../src/media/remote-file.js';
 
@@ -347,4 +348,17 @@ test('a throwing handover releases the download and keeps the previous copy', as
   assert.deepEqual(released, ['b', 'b', 'a'], 'the previous copy is released on success');
   slot.release();
   assert.deepEqual(released, ['b', 'b', 'a', 'c']);
+});
+
+test('review keys separate same-named URL files and keep local keys unchanged', () => {
+  const file = new File([new Uint8Array(4)], 'clip.mkv', { lastModified: 0 });
+  assert.equal(reviewKey(file), 'fire-review:clip.mkv:4:0');
+  assert.equal(reviewKey(null, 'https://a.example/clip.mkv'), '');
+  const a = reviewKey(file, 'https://a.example/x/clip.mkv'),
+    b = reviewKey(file, 'https://b.example/x/clip.mkv');
+  assert.notEqual(a, b);
+  assert.notEqual(a, reviewKey(file));
+  assert.equal(a, 'fire-review:url:https://a.example/x/clip.mkv:clip.mkv:4:0');
+  assert.equal(reviewKey(file, 'https://a.example/x/clip.mkv#t=3'), a);
+  assert.notEqual(reviewKey(file, 'https://a.example/x/clip.mkv?id=2'), a);
 });

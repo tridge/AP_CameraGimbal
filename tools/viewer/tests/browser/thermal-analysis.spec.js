@@ -423,3 +423,279 @@ test('apply to every frame processes each stepped and played frame before showin
   await page.waitForFunction(() => !window.fireViewer.state.decoding);
   expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
 });
+
+test('apply to every frame never records the previous frame result against the next frame', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  const current = () =>
+    page.waitForFunction(
+      () => {
+        const v = window.fireViewer,
+          a = v.thermalAnalysis;
+        return (
+          !v.state.decoding && !a.busy && a.plane && JSON.parse(a.identity)[4] === v.state.frame.id
+        );
+      },
+      null,
+      { timeout: 45_000 },
+    );
+  await current();
+  // Hold the next frame's analysis so its pending state can be inspected.
+  await page.evaluate(() => {
+    const client = window.fireViewer.thermalAnalysis.client,
+      originalFactory = client.workerFactory,
+      held = [];
+    client.workerFactory = () => {
+      const worker = originalFactory(),
+        post = worker.postMessage.bind(worker);
+      worker.postMessage = (...args) => held.push(() => post(...args));
+      return worker;
+    };
+    window.releaseAnalysis = () => {
+      client.workerFactory = originalFactory;
+      for (const send of held.splice(0)) send();
+    };
+  });
+  const shown = await page.evaluate(() => window.fireViewer.state.frame.id);
+  await page.locator('#next').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return a.busy && a.client.pending && state.decoding;
+  });
+  expect(await page.evaluate(() => window.fireViewer.state.frame.id)).not.toBe(shown);
+  await expect(page.locator('#analysis-export')).toBeDisabled();
+  await expect(page.locator('#analysis-peaks')).toBeDisabled();
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.provenance())).toBeNull();
+  await page.locator('#video-stage').focus();
+  await page.keyboard.press('KeyM');
+  await page.evaluate(() => window.fireViewer.markFinding());
+  expect(await page.evaluate(() => window.fireViewer.state.findings.length)).toBe(0);
+
+  await page.evaluate(() => window.releaseAnalysis());
+  await current();
+  await expect(page.locator('#analysis-export')).toBeEnabled();
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  const match = await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      f = state.findings[0];
+    return {
+      frame: f.frameId === state.frame.id,
+      identity: JSON.parse(f.analysis.identity)[4] === f.frameId,
+      sha: f.analysis.inputSha256 === a.result.inputSha256,
+    };
+  });
+  expect(match).toEqual({ frame: true, identity: true, sha: true });
+
+  // An uncommitted invalid edit drops the processed result rather than carrying it forward.
+  await page.evaluate(() => {
+    document.querySelector('#analysis-sigma').value = '99';
+    const v = window.fireViewer;
+    return v.showFrame(v.state.number + 1);
+  });
+  await page.waitForFunction(() => !window.fireViewer.state.decoding);
+  expect(
+    await page.evaluate(() => {
+      const a = window.fireViewer.thermalAnalysis;
+      return { result: a.result, pending: a.pending, plane: a.plane };
+    }),
+  ).toEqual({ result: null, pending: false, plane: null });
+  await expect(page.locator('#analysis-display-badge')).toBeHidden();
+  await expect(page.locator('#analysis-export')).toBeDisabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('2');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return state.findings[1].frameId === state.frame.id && state.findings[1].analysis;
+    }),
+  ).toBeNull();
+});
+
+test('mark finding recovers after a held follow seek is superseded by a failed decode', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      originalFactory = a.client.workerFactory,
+      held = [];
+    a.client.workerFactory = () => {
+      const worker = originalFactory(),
+        post = worker.postMessage.bind(worker);
+      worker.postMessage = (...args) => held.push(() => post(...args));
+      return worker;
+    };
+    window.releaseAnalysis = () => {
+      a.client.workerFactory = originalFactory;
+      for (const send of held.splice(0)) send();
+    };
+    const decode = state.decoder.decode.bind(state.decoder);
+    window.failNextDecode = () => {
+      state.decoder.decode = async () => {
+        state.decoder.decode = decode;
+        throw new Error('Injected decode failure');
+      };
+    };
+  });
+  await page.locator('#next').click();
+  await page.waitForFunction(() => window.fireViewer.thermalAnalysis.client.pending);
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.evaluate(() => {
+    const v = window.fireViewer;
+    window.failNextDecode();
+    return v.showFrame(v.state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  // The superseded frame is still not presented.
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.evaluate(() => window.releaseAnalysis());
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return !a.pending && !a.busy && !state.decoding;
+  });
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer,
+        f = state.findings[0];
+      return f.frameId === state.frame.id && JSON.parse(f.analysis.identity)[4] === f.frameId;
+    }),
+  ).toBe(true);
+});
+
+test('cancelling a superseded follow analysis draws its frame before marking is enabled', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  // With Compare on Original, cancelling has no processed plane to repaint.
+  await page.locator('#analysis-view').selectOption('raw');
+  await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      originalFactory = a.client.workerFactory;
+    a.client.workerFactory = () => {
+      const worker = originalFactory();
+      worker.postMessage = () => {};
+      return worker;
+    };
+    window.restoreAnalysisWorker = () => (a.client.workerFactory = originalFactory);
+    const decode = state.decoder.decode.bind(state.decoder);
+    window.failNextDecode = () => {
+      state.decoder.decode = async () => {
+        state.decoder.decode = decode;
+        throw new Error('Injected decode failure');
+      };
+    };
+  });
+  const drawn = () =>
+    page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return { frame: state.frame.id, presented: state.presentedFrame?.id };
+    });
+  const first = (await drawn()).presented;
+  await page.locator('#next').click();
+  await page.waitForFunction(() => window.fireViewer.thermalAnalysis.client.pending);
+  await page.evaluate(() => {
+    const v = window.fireViewer;
+    window.failNextDecode();
+    return v.showFrame(v.state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  const held = await drawn();
+  expect(held.presented).toBe(first);
+  expect(held.frame).not.toBe(first);
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.locator('#analysis-cancel').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return !a.pending && !a.busy && !state.decoding;
+  });
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  const recovered = await drawn();
+  expect(recovered.presented).toBe(recovered.frame);
+  expect(recovered.frame).toBe(held.frame);
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(await page.evaluate(() => window.fireViewer.state.findings[0].frameId)).toBe(held.frame);
+});
+
+test('recovering a reopened recording presents its first frame with visible canvas and controls', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  await page.evaluate(() => {
+    const a = window.fireViewer.thermalAnalysis,
+      originalFactory = a.client.workerFactory;
+    a.client.workerFactory = () => {
+      const worker = originalFactory();
+      worker.postMessage = () => {};
+      return worker;
+    };
+    window.restoreAnalysisWorker = () => (a.client.workerFactory = originalFactory);
+  });
+  // Reopen; the first frame's analysis is held, so nothing is presented yet.
+  await page.locator('#video-file').setInputFiles(fixture('thermal.mkv'));
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return state.frame && a.client.pending && state.frames.length > 1;
+  });
+  await page.evaluate(() => {
+    const { state, showFrame } = window.fireViewer,
+      decoder = state.decoder,
+      decode = decoder.decode.bind(decoder);
+    decoder.decode = async () => {
+      decoder.decode = decode;
+      throw new Error('Injected decode failure');
+    };
+    return showFrame(state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  await expect(page.locator('#video-canvas')).toBeHidden();
+  await expect(page.locator('#empty-video')).toBeVisible();
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.locator('#analysis-cancel').click();
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  await expect(page.locator('#video-canvas')).toBeVisible();
+  await expect(page.locator('#empty-video')).toBeHidden();
+  await expect(page.locator('#play')).toBeEnabled();
+  await expect(page.locator('#next')).toBeEnabled();
+  await expect(page.locator('#frame-number')).toContainText('Frame 1 /');
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return state.findings[0].frameId === state.frame.id && state.presentedFrame === state.frame;
+    }),
+  ).toBe(true);
+});

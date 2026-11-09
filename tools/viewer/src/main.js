@@ -11,6 +11,7 @@ import {
   handOver,
   parseRemoteUrl,
   remoteName,
+  reviewKey,
   VIDEO_EXTENSIONS,
   LOG_EXTENSIONS,
 } from './media/remote-file.js';
@@ -47,9 +48,11 @@ const elevation = new ElevationModel(),
 const state = {
   source: null,
   file: null,
+  sourceUrl: null,
   decoder: null,
   frames: [],
   frame: null,
+  presentedFrame: null,
   decoded: null,
   decoding: false,
   number: 0,
@@ -213,6 +216,10 @@ const thermalWorkbench = new ThermalWorkbench($('thermal-analysis'), {
       renderImageSafely();
     }
   },
+  onPendingChange: () => {
+    presentUndrawnFrame();
+    syncMarkFinding();
+  },
   onCandidates: (candidates) => {
     state.peaks = candidates;
     paint();
@@ -237,9 +244,7 @@ function syncFrameNavigation() {
     : 'Frame —';
 }
 function fileKey() {
-  return state.file
-    ? `fire-review:${state.file.name}:${state.file.size}:${state.file.lastModified}`
-    : '';
+  return reviewKey(state.file, state.sourceUrl);
 }
 function nameOf(record, key) {
   const value = record?.[key];
@@ -430,7 +435,7 @@ function pause() {
     }
   });
 }
-async function openVideo(file) {
+async function openVideo(file, sourceUrl = null) {
   if (!file) return;
   pause();
   projectionScheduler.reset();
@@ -443,11 +448,12 @@ async function openVideo(file) {
   state.decoder = null;
   state.source = null;
   state.file = file;
+  state.sourceUrl = sourceUrl;
   state.origin = null;
   state.pendingReviewSave = false;
   $('anchors-button').disabled = true;
   state.frames = [];
-  state.frame = null;
+  state.frame = state.presentedFrame = null;
   state.decoded = null;
   thermalWorkbench.setFrame(null, null, null, state.generation);
   state.number = 0;
@@ -489,8 +495,8 @@ async function openVideo(file) {
   queueVideoInformation();
   $('video-format').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 0% · 0 frames`;
   clearErrors('log');
-  for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding', 'scan-peaks'])
-    $(id).disabled = true;
+  for (const id of ['seek', 'previous', 'next', 'play', 'scan-peaks']) $(id).disabled = true;
+  syncMarkFinding();
   const saved = storage.get(fileKey(), {});
   state.findings = Array.isArray(saved.findings)
     ? saved.findings
@@ -668,6 +674,7 @@ async function showFrame(number) {
   state.decoding = true;
   thermalWorkbench.activity();
   const started = performance.now();
+  let presenting = false;
   try {
     const decoded = await state.decoder.decode(frame, { signal: controller.signal });
     if (own !== state.generation || seek !== state.seekGeneration) return;
@@ -682,39 +689,16 @@ async function showFrame(number) {
     thermalWorkbench.setFrame(state.file, frame, decoded, state.generation);
     if (thermalWorkbench.following) {
       // Present the frame only with its own processed result, pacing playback to analysis.
+      // state.frame is not shown yet, so a finding cannot be marked on it.
+      syncMarkFinding();
       await thermalWorkbench.ready;
-      if (own !== state.generation || seek !== state.seekGeneration) return;
+      if (own !== state.generation || seek !== state.seekGeneration) return syncMarkFinding();
     }
     state.renderMs = performance.now() - started;
-    state.peaks = [];
-    if (decoded.kind === 'gray16' && $('palette').value === 'Original')
-      $('palette').value = 'White hot';
-    const seconds = frame.pts - state.origin;
-    $('seek').value = seconds;
-    $('elapsed').textContent = clock(seconds);
-    syncFrameNavigation();
-    $('empty-video').hidden = true;
-    $('video-canvas').hidden = false;
-    for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding']) $(id).disabled = false;
-    $('scan-peaks').disabled = decoded.kind !== 'gray16';
-    syncContrastControls();
-    if (state.cursor && (state.cursor.x >= decoded.width || state.cursor.y >= decoded.height))
-      state.cursor = null;
-    for (const [id, max] of [
-      ['pixel-x', decoded.width - 1],
-      ['pixel-y', decoded.height - 1],
-    ]) {
-      $(id).disabled = false;
-      $(id).max = max;
-    }
-    $('pixel-x').value = state.cursor?.x ?? Math.floor(decoded.width / 2);
-    $('pixel-y').value = state.cursor?.y ?? Math.floor(decoded.height / 2);
     state.decoding = false;
-    thermalWorkbench.activity();
     decoderStatus(`${state.decoder.mode} · ${Math.round(state.renderMs)} ms/frame`);
-    renderImageSafely();
-    updateTelemetry();
-    renderPeaks();
+    presenting = true;
+    presentFrame();
   } catch (e) {
     if (e.name !== 'AbortError' && own === state.generation && seek === state.seekGeneration) {
       pause();
@@ -724,7 +708,69 @@ async function showFrame(number) {
       thermalWorkbench.activity();
       error(e);
     }
+    // a failed presentation is reported once, not retried here
+    if (!presenting) presentUndrawnFrame();
+    syncMarkFinding();
   }
+}
+// Shows state.frame with its controls; the only place presentedFrame is set.
+function presentFrame() {
+  const frame = state.frame,
+    decoded = state.decoded;
+  state.peaks = [];
+  if (decoded.kind === 'gray16' && $('palette').value === 'Original')
+    $('palette').value = 'White hot';
+  const seconds = frame.pts - state.origin;
+  $('seek').value = seconds;
+  $('elapsed').textContent = clock(seconds);
+  syncFrameNavigation();
+  $('empty-video').hidden = true;
+  $('video-canvas').hidden = false;
+  for (const id of ['seek', 'previous', 'next', 'play']) $(id).disabled = false;
+  $('scan-peaks').disabled = decoded.kind !== 'gray16';
+  syncContrastControls();
+  if (state.cursor && (state.cursor.x >= decoded.width || state.cursor.y >= decoded.height))
+    state.cursor = null;
+  for (const [id, max] of [
+    ['pixel-x', decoded.width - 1],
+    ['pixel-y', decoded.height - 1],
+  ]) {
+    $(id).disabled = false;
+    $(id).max = max;
+  }
+  $('pixel-x').value = state.cursor?.x ?? Math.floor(decoded.width / 2);
+  $('pixel-y').value = state.cursor?.y ?? Math.floor(decoded.height / 2);
+  thermalWorkbench.activity();
+  renderImageSafely();
+  state.presentedFrame = frame;
+  syncMarkFinding();
+  updateTelemetry();
+  renderPeaks();
+}
+// A superseded follow seek can leave state.frame unpresented once its analysis ends.
+function presentUndrawnFrame() {
+  if (
+    !state.decoded ||
+    state.presentedFrame === state.frame ||
+    state.decoding ||
+    thermalWorkbench.pending
+  )
+    return;
+  try {
+    presentFrame();
+  } catch (e) {
+    error(e);
+  }
+}
+const canMark = () =>
+  !!state.frame &&
+  !!state.decoded &&
+  state.presentedFrame === state.frame &&
+  state.markingGeneration !== state.generation &&
+  !thermalWorkbench.pending;
+// Marking needs the drawn frame, no pending analysis and no mark in progress.
+function syncMarkFinding() {
+  $('mark-finding').disabled = !canMark();
 }
 function syncContrastControls() {
   const enabled = !!state.decoded && !thermalWorkbench.plane;
@@ -835,6 +881,8 @@ function renderImageSafely() {
       makeImage();
     } catch (fatal) {
       state.image = null;
+      state.presentedFrame = null;
+      syncMarkFinding();
       updateVideoProjection();
       $('video-canvas').hidden = true;
       throw fatal;
@@ -1126,7 +1174,7 @@ function renderPeaks() {
   $('peak-list').replaceChildren(...nodes);
 }
 async function markFinding() {
-  if (!state.frame || !state.decoded || state.markingGeneration === state.generation) return;
+  if (!canMark()) return;
   const generation = state.generation;
   const d = state.decoded,
     point = state.cursor || { x: Math.floor(d.width / 2), y: Math.floor(d.height / 2) },
@@ -1179,7 +1227,7 @@ async function markFinding() {
     createdAt: new Date().toISOString(),
   };
   state.markingGeneration = generation;
-  $('mark-finding').disabled = true;
+  syncMarkFinding();
   try {
     let projection = elevation.project(pose, point.x, point.y, d.width, d.height);
     if (projection.status === 'loading') {
@@ -1194,7 +1242,7 @@ async function markFinding() {
   } finally {
     if (state.generation === generation) {
       state.markingGeneration = null;
-      $('mark-finding').disabled = false;
+      syncMarkFinding();
     }
   }
   saveReview();
@@ -1476,9 +1524,11 @@ async function openUrl(kind, href) {
     });
     if (!current()) return release();
     pending[kind] = null;
-    await handOver(owned[kind], { file, release }, video ? openVideo : loadLog).catch((e) =>
-      error(e, kind),
-    );
+    await handOver(
+      owned[kind],
+      { file, release },
+      video ? (f) => openVideo(f, url.href) : loadLog,
+    ).catch((e) => error(e, kind));
   } catch (e) {
     if (pending[kind] !== controller) return; // superseded
     pending[kind] = null;
