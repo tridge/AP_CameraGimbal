@@ -3,6 +3,8 @@ import { layout } from './ui/layout.js';
 import { ThermalWorkbench } from './ui/thermal-workbench.js';
 import { VideoViewport } from './ui/video-viewport.js';
 import { ProjectionScheduler } from './ui/projection-scheduler.js';
+import { SplatPanel } from './ui/splat-panel.js';
+import { sourceKind, splatUnavailable, timingCorrected } from './domain/splat-request.js';
 import { projectionPose } from './domain/projection-pose.js';
 import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
@@ -141,6 +143,7 @@ function terrainChanged() {
     if (state.closed) return;
     updateTelemetry();
     if (state.log) refreshLog(true);
+    splatPanel.terrainChanged();
   }, 60);
 }
 // errors are kept per source so a log failure survives the video opening, and vice versa
@@ -291,6 +294,7 @@ function projectedRecord(record = alignedRecord()) {
 }
 function updateVideoTrack() {
   if (!map) return;
+  if (splatPanel.active) return splatPanel.poseChanged();
   const generation = state.generation;
   $('map-track-hint').textContent = 'Updating video track…';
   const pending = map.setVideoTrack(state.frames, (frame) => alignedRecord(frame));
@@ -486,6 +490,8 @@ async function openVideo(file, sourceUrl = null) {
   $('peak-list').replaceChildren();
   $('telemetry-fields').replaceChildren(...field('Recorded UTC', '—'), ...field('Position', '—'));
   state.seekGeneration++;
+  splatPanel.reset();
+  syncSplatButton();
   map?.clear();
   updateVideoProjection();
   updateTrackLegend();
@@ -633,6 +639,7 @@ async function openVideo(file, sourceUrl = null) {
       $('seek').max = extent();
       $('duration').textContent = clock(extent());
       syncFrameNavigation();
+      syncSplatButton();
       status(
         `100% · ${state.frames.length.toLocaleString()} frames indexed · ${state.warnings.length ? state.warnings.join('; ') : 'ready for review'}`,
       );
@@ -645,6 +652,7 @@ async function openVideo(file, sourceUrl = null) {
         state.indexError = e.message;
         videoIndexSummary();
         syncFrameNavigation();
+        syncSplatButton();
         error(e);
         if (state.frames.length) status('Playable prefix retained; file indexing stopped.');
       }
@@ -747,6 +755,7 @@ function presentFrame() {
   renderImageSafely();
   state.presentedFrame = frame;
   syncMarkFinding();
+  syncSplatButton();
   updateTelemetry();
   renderPeaks();
 }
@@ -1473,6 +1482,76 @@ function releaseOwned(kind) {
   owned[kind].release?.();
   owned[kind].release = null;
 }
+// Pending handovers keep the ?url= download's lock until WebSplat has its own copy;
+// one hold per file, counted over all its pending handovers.
+const handoverHolds = new Map();
+function holdDownload(file) {
+  let hold = handoverHolds.get(file);
+  if (hold) {
+    hold.count++;
+    return hold;
+  }
+  if (file !== state.file || !state.sourceUrl || !owned.video.release) return null;
+  hold = { release: owned.video.release, count: 1 };
+  owned.video.release = null;
+  handoverHolds.set(file, hold);
+  return hold;
+}
+function releaseDownload(file, hold) {
+  if (!hold || --hold.count > 0) return;
+  handoverHolds.delete(file);
+  if (file === state.file && !owned.video.release) owned.video.release = hold.release;
+  else hold.release();
+}
+function splatSource() {
+  const track = state.source?.tracks?.find((t) => t.id === state.frames[0]?.trackId);
+  return {
+    kind: sourceKind(state.source?.format, track?.codec),
+    width: track?.width ?? state.decoded?.width,
+    height: track?.height ?? state.decoded?.height,
+  };
+}
+const splatPanel = new SplatPanel({
+  map: () => map,
+  elevation,
+  frames: () => state.frames,
+  current: () => state.frame,
+  origin: () => state.origin ?? 0,
+  extent: () => extent(),
+  record: (frame) => alignedRecord(frame),
+  file: () => state.file,
+  source: splatSource,
+  hfov: () => state.fovOverride,
+  timingCorrected: () => timingCorrected(state.offset, state.anchors),
+  websplatUrl: () => window.VIEWER_CONFIG?.websplatUrl,
+  clock,
+  setMapMode,
+  restoreTrack: () => updateVideoTrack(),
+  trackHint: (text) => ($('map-track-hint').textContent = text),
+  trackChanged: () => updateTrackLegend(),
+  holdDownload,
+  releaseDownload,
+  onStatus: status,
+  onError: error,
+});
+let splatKey = null;
+function syncSplatButton() {
+  const key = `${state.generation}:${state.indexed}:${state.indexFailed}:${state.decoded?.kind}:${state.fovOverride}`;
+  if (key === splatKey) return;
+  splatKey = key;
+  const track = state.source?.tracks?.find((t) => t.id === state.frames[0]?.trackId);
+  splatPanel.setAvailability(
+    splatUnavailable({
+      frames: state.frames,
+      indexed: state.indexed,
+      indexFailed: state.indexFailed,
+      format: state.source?.format,
+      codec: track?.codec,
+      decodedKind: state.decoded?.kind,
+      fovOverride: state.fovOverride,
+    }),
+  );
+}
 function downloadRow(name, url, cancel) {
   const row = document.createElement('div'),
     title = document.createElement('strong'),
@@ -1663,14 +1742,14 @@ $('offset-reset').onclick = () => {
   saveReview();
   updateTelemetry();
 };
-for (const mode of ['2d', '3d'])
-  $(`map-${mode}`).onclick = () => {
-    map?.setMode(mode);
-    for (const m of ['2d', '3d']) {
-      $(`map-${m}`).classList.toggle('selected', m === mode);
-      $(`map-${m}`).setAttribute('aria-pressed', String(m === mode));
-    }
-  };
+function setMapMode(mode) {
+  map?.setMode(mode);
+  for (const m of ['2d', '3d']) {
+    $(`map-${m}`).classList.toggle('selected', m === mode);
+    $(`map-${m}`).setAttribute('aria-pressed', String(m === mode));
+  }
+}
+for (const mode of ['2d', '3d']) $(`map-${mode}`).onclick = () => setMapMode(mode);
 $('log-time-mode').onchange = () => refreshLog(true);
 $('map-follow').onchange = (e) => map?.setFollow(e.target.checked);
 $('map-project-video').onchange = (e) => {
@@ -1745,6 +1824,7 @@ $('apply-settings').onclick = async () => {
     state.projectionYawSeconds = projectionYawSeconds;
     if (generation === state.generation) state.fovOverride = fov;
     saveReview();
+    syncSplatButton();
     $('settings-dialog').close();
     updateVideoTrack();
     renderFindings();
@@ -1871,6 +1951,7 @@ window.addEventListener('beforeunload', () => {
 window.fireViewer = {
   state,
   thermalAnalysis: thermalWorkbench,
+  splatPanel,
   videoViewport,
   openVideo,
   openUrl,

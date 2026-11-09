@@ -5,4 +5,5 @@ window.VIEWER_CONFIG = {
   terrainUrl: '/quantized/',
   terrainDatum: 'amsl', // The plot tiler preserves SRTM/EGM96 orthometric heights.
   amslToEllipsoidMetres: 0,
+  websplatUrl: '../websplat/', // Create splat opens WebSplat here (same origin).
 };

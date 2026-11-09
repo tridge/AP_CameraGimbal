@@ -213,6 +213,38 @@ Loading a log does not replace valid camera pose with vehicle pose. When a log
 has multiple plan/home versions, frame-time selection avoids using a future
 upload or a later arming's home. Diagnostic details are in Settings.
 
+## Create a splat
+
+**Create splat** (map heading) hands part of a recording to
+[WebSplat](../GaussianSplat/WebSplat/), which builds a Gaussian splat in the
+browser. It works with APCG raw thermal MKVs (FFV1 gray16) and with H.264/HEVC
+RGB recordings (MPEG-TS with MISB KLV, MP4/TS with APCG SEI) whose frames carry
+camera pose and, for RGB, a horizontal FOV (recorded or the FOV override). The button is enabled once the file is
+indexed; its tooltip says why when it is not. The map switches to 3D and a
+panel opens above the map options:
+
+- **Range**: **Set start here** / **Set end here** use the current frame; the
+  seek bar shows the range. Only the in-range track is drawn (**Show whole
+  flight** dims the rest) and the dots show where the camera looked.
+- **Target**: defaults to the median of those dots. **Pick on map** sets it
+  from the next map click; the height (m AMSL) can be edited or nudged by
+  1 m (shift: 10 m). A picked target needs a terrain height or an entered
+  one. For thermal, **Refine to the hot spot** lets WebSplat move it to the
+  hottest point nearby.
+- **Width** (RGB): the processing width, Full or 1920 / 1280 (default) / 960 /
+  640, never above the source. The panel shows the frames used (3 fps) and
+  the pixel workload; widths above 1280 may exceed GPU memory on small GPUs.
+- **View**: **Use this view** captures the current 3D camera as the splat's
+  start view; without one WebSplat picks its own.
+- **Go** opens WebSplat in a new tab and passes it the request and the open
+  file, without a second download. Allow pop-ups for the site. Keep this tab
+  open until the panel reports that WebSplat accepted the job.
+
+WebSplat uses the recorded telemetry, not the telemetry offset or time anchors
+set here, and the recording's FOV unless Settings overrides it. Its location
+is `websplatUrl` in `viewer-config.js` (default `../websplat/`, the same
+origin).
+
 ## Maps and Google keys
 
 `public/viewer-config.js` is a **public runtime configuration template** copied
