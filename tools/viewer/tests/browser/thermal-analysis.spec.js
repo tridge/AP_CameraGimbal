@@ -465,7 +465,8 @@ test('apply to every frame never records the previous frame result against the n
     const { state, thermalAnalysis: a } = window.fireViewer;
     return a.busy && a.client.pending && state.decoding;
   });
-  expect(await page.evaluate(() => window.fireViewer.state.frame.id)).not.toBe(shown);
+  expect(await page.evaluate(() => window.fireViewer.state.frame.id)).toBe(shown);
+  expect(await page.evaluate(() => window.fireViewer.state.pendingFrame.frame.id)).not.toBe(shown);
   await expect(page.locator('#analysis-export')).toBeDisabled();
   await expect(page.locator('#analysis-peaks')).toBeDisabled();
   await expect(page.locator('#mark-finding')).toBeDisabled();
@@ -611,7 +612,11 @@ test('cancelling a superseded follow analysis draws its frame before marking is 
   const drawn = () =>
     page.evaluate(() => {
       const { state } = window.fireViewer;
-      return { frame: state.frame.id, presented: state.presentedFrame?.id };
+      return {
+        frame: state.frame.id,
+        presented: state.presentedFrame?.id,
+        pending: state.pendingFrame?.frame.id,
+      };
     });
   const first = (await drawn()).presented;
   await page.locator('#next').click();
@@ -624,7 +629,8 @@ test('cancelling a superseded follow analysis draws its frame before marking is 
   await expect(page.locator('#error-text')).toContainText('Injected decode failure');
   const held = await drawn();
   expect(held.presented).toBe(first);
-  expect(held.frame).not.toBe(first);
+  expect(held.frame).toBe(first);
+  expect(held.pending).not.toBe(first);
   await expect(page.locator('#mark-finding')).toBeDisabled();
   await page.locator('#analysis-cancel').click();
   await page.waitForFunction(() => {
@@ -634,11 +640,11 @@ test('cancelling a superseded follow analysis draws its frame before marking is 
   await page.evaluate(() => window.restoreAnalysisWorker());
   const recovered = await drawn();
   expect(recovered.presented).toBe(recovered.frame);
-  expect(recovered.frame).toBe(held.frame);
+  expect(recovered.frame).toBe(held.pending);
   await expect(page.locator('#mark-finding')).toBeEnabled();
   await page.locator('#mark-finding').click();
   await expect(page.locator('#finding-count')).toHaveText('1');
-  expect(await page.evaluate(() => window.fireViewer.state.findings[0].frameId)).toBe(held.frame);
+  expect(await page.evaluate(() => window.fireViewer.state.findings[0].frameId)).toBe(held.pending);
 });
 
 test('recovering a reopened recording presents its first frame with visible canvas and controls', async ({
@@ -666,7 +672,7 @@ test('recovering a reopened recording presents its first frame with visible canv
   await page.locator('#video-file').setInputFiles(fixture('thermal.mkv'));
   await page.waitForFunction(() => {
     const { state, thermalAnalysis: a } = window.fireViewer;
-    return state.frame && a.client.pending && state.frames.length > 1;
+    return state.pendingFrame && a.client.pending && state.frames.length > 1;
   });
   await page.evaluate(() => {
     const { state, showFrame } = window.fireViewer,

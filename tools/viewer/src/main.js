@@ -53,6 +53,7 @@ const state = {
   frames: [],
   frame: null,
   presentedFrame: null,
+  pendingFrame: null,
   decoded: null,
   decoding: false,
   number: 0,
@@ -453,7 +454,7 @@ async function openVideo(file, sourceUrl = null) {
   state.pendingReviewSave = false;
   $('anchors-button').disabled = true;
   state.frames = [];
-  state.frame = state.presentedFrame = null;
+  state.frame = state.presentedFrame = state.pendingFrame = null;
   state.decoded = null;
   thermalWorkbench.setFrame(null, null, null, state.generation);
   state.number = 0;
@@ -678,18 +679,12 @@ async function showFrame(number) {
   try {
     const decoded = await state.decoder.decode(frame, { signal: controller.signal });
     if (own !== state.generation || seek !== state.seekGeneration) return;
-    state.number = Math.max(
-      0,
-      state.frames.findIndex((f) => f.id === frame.id),
-    );
-    state.requestedNumber = null;
-    state.requestedFrameId = null;
-    state.frame = frame;
-    state.decoded = decoded;
+    // state.frame and state.decoded stay on the drawn frame until presentFrame,
+    // so hover, projection and marking never see a frame that isn't on screen.
+    state.pendingFrame = { frame, decoded };
     thermalWorkbench.setFrame(state.file, frame, decoded, state.generation);
     if (thermalWorkbench.following) {
       // Present the frame only with its own processed result, pacing playback to analysis.
-      // state.frame is not shown yet, so a finding cannot be marked on it.
       syncMarkFinding();
       await thermalWorkbench.ready;
       if (own !== state.generation || seek !== state.seekGeneration) return syncMarkFinding();
@@ -713,10 +708,18 @@ async function showFrame(number) {
     syncMarkFinding();
   }
 }
-// Shows state.frame with its controls; the only place presentedFrame is set.
+// Shows the pending frame with its controls; the only place state.frame and presentedFrame are set.
 function presentFrame() {
-  const frame = state.frame,
-    decoded = state.decoded;
+  const { frame, decoded } = state.pendingFrame;
+  state.pendingFrame = null;
+  state.frame = frame;
+  state.decoded = decoded;
+  state.number = Math.max(
+    0,
+    state.frames.findIndex((f) => f.id === frame.id),
+  );
+  // the request stays outstanding until its frame is shown, so stepping counts from it
+  if (state.requestedFrameId === frame.id) state.requestedNumber = state.requestedFrameId = null;
   state.peaks = [];
   if (decoded.kind === 'gray16' && $('palette').value === 'Original')
     $('palette').value = 'White hot';
@@ -747,15 +750,9 @@ function presentFrame() {
   updateTelemetry();
   renderPeaks();
 }
-// A superseded follow seek can leave state.frame unpresented once its analysis ends.
+// A superseded follow seek can leave a frame pending once its analysis ends.
 function presentUndrawnFrame() {
-  if (
-    !state.decoded ||
-    state.presentedFrame === state.frame ||
-    state.decoding ||
-    thermalWorkbench.pending
-  )
-    return;
+  if (!state.pendingFrame || state.decoding || thermalWorkbench.pending) return;
   try {
     presentFrame();
   } catch (e) {
@@ -766,6 +763,7 @@ const canMark = () =>
   !!state.frame &&
   !!state.decoded &&
   state.presentedFrame === state.frame &&
+  !state.pendingFrame &&
   state.markingGeneration !== state.generation &&
   !thermalWorkbench.pending;
 // Marking needs the drawn frame, no pending analysis and no mark in progress.
@@ -867,6 +865,8 @@ function displaySettings(samples) {
   };
 }
 function renderImageSafely() {
+  // a pending frame is drawn by presentFrame with its own result
+  if (state.pendingFrame) return;
   $('analysis-display-badge').hidden = !thermalWorkbench.plane;
   $('analysis-display-badge').textContent = thermalWorkbench.plane
     ? `Processed · ${thermalWorkbench.result.settings.method}`
@@ -1357,7 +1357,8 @@ async function play() {
   while (state.playing && own === state.generation && playEpoch === state.playEpoch) {
     const start = performance.now(),
       duration = frameDuration(state.frame) / Number($('speed').value);
-    if (state.number >= state.frames.length - 1) {
+    const current = state.requestedNumber ?? state.number;
+    if (current >= state.frames.length - 1) {
       if (state.indexed) {
         pause();
         break;
@@ -1365,7 +1366,7 @@ async function play() {
       await new Promise((r) => setTimeout(r, 100));
       continue;
     }
-    await showFrame((state.requestedNumber ?? state.number) + 1);
+    await showFrame(current + 1);
     if (!state.playing || playEpoch !== state.playEpoch) break;
     await new Promise((r) =>
       setTimeout(r, Math.max(0, duration * 1000 - (performance.now() - start))),
