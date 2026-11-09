@@ -30,6 +30,17 @@ export function remoteName(url) {
   }
 }
 
+// Saved-review storage key; URL-opened files also key on the URL (without fragment), as name
+// and size can repeat across servers and lastModified is 0 without a Last-Modified header.
+export function reviewKey(file, sourceUrl = null) {
+  if (!file) return '';
+  const key = `${file.name}:${file.size}:${file.lastModified}`;
+  if (!sourceUrl) return `fire-review:${key}`;
+  const url = new URL(sourceUrl);
+  url.hash = '';
+  return `fire-review:url:${url.href}:${key}`;
+}
+
 // An unknown extension is rejected; no extension is left to content detection.
 export function checkExtension(name, extensions, kind) {
   const match = /\.[A-Za-z0-9]{1,5}$/.exec(name);
