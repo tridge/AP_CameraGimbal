@@ -18,7 +18,8 @@ export const test = base.extend({
       context.on('page', (popup) => popup.on('pageerror', (error) => errors.push(error.message)));
       // Same-origin runtime config remains loaded through the production URL.
       // Offline imagery makes the tests repeatable without credentials or tiles.
-      await page.route('**/viewer-config.js', (route) =>
+      // context.route also covers pages a test opens itself.
+      await context.route('**/viewer-config.js', (route) =>
         route.fulfill({
           contentType: 'text/javascript',
           body: "window.VIEWER_CONFIG={imagery:'none',googleMapsApiKey:'',terrainUrl:'',amslToEllipsoidMetres:0};",
