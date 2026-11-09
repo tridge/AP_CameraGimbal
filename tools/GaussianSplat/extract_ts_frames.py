@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from splat_common import (R_BODY_CAM, R_ENU_NED, LocalFrame, fatal, intrinsics, rot_x, rot_y, rot_z,  # noqa: E402
-                          terrain_height)
+                          terrain_cells_per_degree, terrain_height)
 
 UAS_KEY = bytes.fromhex('060e2b34020b01010e01030101000000')
 
@@ -69,6 +69,85 @@ def camera_rotation(k):
     return R_ENU_NED @ body @ sensor @ R_BODY_CAM
 
 
+def _first_root(h0, hm, h1):
+    """Smallest s in (0, 1] where the quadratic through (0, h0 > 0), (0.5, hm), (1, h1) is zero, or None."""
+    A = 2 * h0 - 4 * hm + 2 * h1
+    B = 4 * hm - 3 * h0 - h1
+    if abs(A) < 1e-9:
+        roots = [-h0 / B] if B else []
+    else:
+        d = B * B - 4 * A * h0
+        if d < 0:
+            roots = []
+        else:
+            q = -0.5 * (B + math.copysign(math.sqrt(d), B))
+            roots = [q / A, h0 / q]
+    s = min((r for r in roots if 0 < r <= 1), default=None)
+    return 1.0 if s is None and h1 <= 0 else s
+
+
+def ray_ground_hit(c, a, local, home, max_range=5000.0):
+    """First point in front of the camera at c where the unit ray a meets the terrain, or None if
+    it doesn't within max_range (m). SRTM is bilinear in each grid cell and latitude and longitude
+    are linear along the ray in the local frame, so within a cell the height above ground is
+    quadratic along the ray: walk the cells the ray crosses and solve each one exactly. A cell
+    with a void or unavailable corner is the flat takeoff-height plane."""
+    if home is None:  # flat ground at takeoff height
+        t = -c[2] / a[2] if a[2] < 0 else math.inf
+        return c + a * t if 0 < t <= max_range else None
+    lat, lon, _ = local.to_geodetic(c)
+    end = local.to_geodetic(c + a * max_range)
+    n = terrain_cells_per_degree(lat, lon) or terrain_cells_per_degree(*end[:2]) or 3600
+    # ray parameters where it crosses a grid line
+    ts = [0.0, max_range]
+    for v0, v1 in ((lat * n, end[0] * n), (lon * n, end[1] * n)):
+        if v1 != v0:
+            k = np.arange(math.floor(min(v0, v1)) + 1, math.ceil(max(v0, v1)))
+            ts.extend((k - v0) / (v1 - v0) * max_range)
+    ts = np.unique(ts)
+
+    def terrain(t):
+        g = terrain_height(*local.to_geodetic(c + a * t)[:2])
+        return None if g is None else g - home
+    for t0, t1 in zip(ts[:-1], ts[1:]):
+        # samples inside the cell, so a neighbouring cell's validity can't leak in
+        d = t1 - t0
+        g = [terrain(t0 + f * d) for f in (0.25, 0.5, 0.75)]
+        z0, z1 = c[2] + a[2] * t0, c[2] + a[2] * t1
+        if None in g:
+            h0, hm, h1 = z0, (z0 + z1) / 2, z1
+        else:
+            # the quadratic through the samples, at the ends and middle of the cell
+            D, E = 2 * (g[2] - g[0]), 8 * (g[0] - 2 * g[1] + g[2])
+            h0, hm, h1 = z0 - (g[1] - D / 2 + E / 4), (z0 + z1) / 2 - g[1], z1 - (g[1] + D / 2 + E / 4)
+        if h0 <= 0:
+            # camera under the terrain, or the ray meets a step at a void edge
+            return None if t0 == 0 else c + a * t0
+        s = _first_root(h0, hm, h1)
+        if s is not None:
+            return c + a * (t0 + s * d)
+    return None
+
+
+def takeoff_reference(records, use_terrain, takeoff_alt=None, agl_warn=30.0):
+    """(takeoff altitude as GPS AMSL, SRTM height there or None): the first KLV record, as KLV has no
+    relative altitude, unless takeoff_alt is given, which sets both."""
+    if takeoff_alt is not None:
+        return takeoff_alt, takeoff_alt if use_terrain else None
+    first = records[0]
+    if not use_terrain:
+        return first['alt'], None
+    t = terrain_height(first['lat'], first['lon'])
+    if t is None:
+        print('no terrain height at the start: terrain is taken relative to its GPS altitude')
+        return first['alt'], first['alt']
+    if first['alt'] - t > agl_warn:
+        print('the first KLV record is %.0f m above SRTM terrain, so the recording may start airborne: '
+              'heights are relative to it; give --takeoff-alt (m AMSL) to set the takeoff altitude'
+              % (first['alt'] - t))
+    return first['alt'], t
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('ts', type=Path)
@@ -77,8 +156,10 @@ def main():
     ap.add_argument('--hfov', type=float, help='override the KLV horizontal FOV (deg)')
     ap.add_argument('--skip-start', type=float, default=0.0, help='seconds dropped at the start (e.g. on the ground)')
     ap.add_argument('--skip-end', type=float, default=0.0, help='seconds dropped at the end')
-    ap.add_argument('--min-height', type=float, default=5.0, help='drop frames lower than this above the start (m)')
+    ap.add_argument('--min-height', type=float, default=5.0, help='drop frames lower than this above takeoff (m)')
     ap.add_argument('--no-terrain', action='store_true', help='take the ground to be at takeoff height')
+    ap.add_argument('--takeoff-alt', type=float,
+                    help='takeoff altitude (m AMSL), also the SRTM reference (default: the first KLV record)')
     args = ap.parse_args()
 
     import av
@@ -97,8 +178,7 @@ def main():
     klv_tb = ds.time_base
     c.close()
     keys = np.array(sorted(klv))
-    first = klv[keys[0]]
-    ground = first['alt']  # takeoff height
+    ground, home = takeoff_reference([klv[k] for k in keys], not args.no_terrain, args.takeoff_alt)
     c = av.open(str(args.ts))
     vs = c.streams.video[0]
     vs.thread_type = 'AUTO'
@@ -139,24 +219,15 @@ def main():
                            position=local.to_enu(k['lat'], k['lon'], k['alt']).tolist(),
                            rotation=rot.tolist() if rot is not None else None))
     # target: where the view axes meet the ground, robustly
-    home = None if args.no_terrain else terrain_height(first['lat'], first['lon'])
-
-    def ground_up(p):
-        # SRTM at both ends cancels its offset from GPS altitude
-        t = None if home is None else terrain_height(*local.to_geodetic(p)[:2])
-        return 0.0 if t is None else t - home
-
     hits = []
     for f in frames:
         if f['rotation'] is None:
             continue
-        c_, a = np.array(f['position']), np.array(f['rotation'])[:, 2]
+        a = np.array(f['rotation'])[:, 2]
         if a[2] < -0.2:
-            g = ground_up(c_)
-            for _ in range(3):  # follow the terrain along the ray
-                hit = c_ + a * ((g - c_[2]) / a[2])
-                g = ground_up(hit)
-            hits.append(c_ + a * ((g - c_[2]) / a[2]))
+            hit = ray_ground_hit(np.array(f['position']), a, local, home)
+            if hit is not None:
+                hits.append(hit)
     target = np.median(hits, axis=0) if hits else np.array([0.0, 0.0, 0.0])
     info = dict(source=str(args.ts.resolve()), kind='rgb', width=int(round(2 * K[0, 2])), height=int(round(2 * K[1, 2])),
                 hfov_deg=float(2 * math.degrees(math.atan(K[0, 2] / K[0, 0]))), K=K.tolist(),

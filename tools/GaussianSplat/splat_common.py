@@ -125,36 +125,66 @@ class LocalFrame:
 # SRTM1 tiles from ArduPilot's terrain server, in MAVProxy's tile cache
 SRTM_URL = 'https://terrain.ardupilot.org/SRTM1/'
 SRTM_CACHE = Path(os.environ.get('SRTM_CACHE', Path.home() / '.tilecache' / 'SRTM1'))
-_srtm_tiles = {}
+_srtm_tiles = {}  # not thread-safe: the tools look terrain up from one thread
+
+
+def _srtm_download(name, path):
+    """Fetch a tile into a private temp file, then publish it atomically over path."""
+    import shutil
+    import tempfile
+    import urllib.request
+    SRTM_CACHE.mkdir(parents=True, exist_ok=True)
+    fd, part = tempfile.mkstemp(prefix=name + '.', suffix='.part', dir=SRTM_CACHE)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            with urllib.request.urlopen(SRTM_URL + name + '.zip', timeout=60) as r:
+                shutil.copyfileobj(r, f)
+            umask = os.umask(0)
+            os.umask(umask)
+            os.fchmod(f.fileno(), 0o644 & ~umask)  # mkstemp makes it 0600
+        os.replace(part, path)
+    except BaseException:
+        os.unlink(part)
+        raise
 
 
 def _srtm_tile(lat_i, lon_i):
+    """A tile's heights, or None if it can't be had; failures are cached so each tile is tried once a run."""
+    import zipfile
     name = '%s%02d%s%03d.hgt' % ('N' if lat_i >= 0 else 'S', abs(lat_i), 'E' if lon_i >= 0 else 'W', abs(lon_i))
     if name not in _srtm_tiles:
-        import shutil
-        import urllib.request
-        import zipfile
         path = SRTM_CACHE / (name + '.zip')
-        if not path.exists():
-            SRTM_CACHE.mkdir(parents=True, exist_ok=True)
-            part = path.with_name(path.name + '.part')
-            with urllib.request.urlopen(SRTM_URL + name + '.zip', timeout=60) as r, part.open('wb') as f:
-                shutil.copyfileobj(r, f)
-            part.replace(path)
-        with zipfile.ZipFile(path) as z:
-            data = z.read(next(n for n in z.namelist() if n.endswith('.hgt')))
-        n = math.isqrt(len(data) // 2)
-        _srtm_tiles[name] = np.frombuffer(data, '>i2').reshape(n, n)
+        _srtm_tiles[name] = None
+        try:
+            for attempt in range(2):
+                if attempt or not path.exists():
+                    _srtm_download(name, path)  # replaces a corrupt cached zip
+                try:
+                    with zipfile.ZipFile(path) as z:
+                        data = z.read(next(n for n in z.namelist() if n.endswith('.hgt')))
+                    break
+                except zipfile.BadZipFile:
+                    if attempt:
+                        raise
+            n = math.isqrt(len(data) // 2)
+            _srtm_tiles[name] = np.frombuffer(data, '>i2').reshape(n, n)
+        except Exception as e:
+            print('terrain height unavailable for %s: %s' % (name, e))
     return _srtm_tiles[name]
+
+
+def terrain_cells_per_degree(lat, lon):
+    """Grid cells per degree of the SRTM tile holding (lat, lon); None if it can't be had.
+    Grid nodes are at whole multiples of 1/cells degrees of latitude and longitude."""
+    a = _srtm_tile(math.floor(lat), math.floor(lon))
+    return None if a is None else a.shape[0] - 1
 
 
 def terrain_height(lat, lon):
     """SRTM ground height (m AMSL), bilinear; None if the tile can't be had or the point is a void."""
     lat_i, lon_i = math.floor(lat), math.floor(lon)
-    try:
-        a = _srtm_tile(lat_i, lon_i)
-    except Exception as e:
-        print('terrain height unavailable: %s' % e)
+    a = _srtm_tile(lat_i, lon_i)
+    if a is None:
         return None
     n = a.shape[0] - 1
     y, x = (lat_i + 1 - lat) * n, (lon - lon_i) * n  # row 0 is the north edge

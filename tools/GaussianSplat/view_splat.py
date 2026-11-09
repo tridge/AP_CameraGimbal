@@ -16,13 +16,34 @@ import time
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from colormaps import NAMES, colormap_lut
+from colormaps import GREY_BELOW, NAMES, colormap_lut
 from splat_common import setup_cuda_env
 
 setup_cuda_env()
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 from splat_model import view_values  # noqa: E402
+
+
+def thermal_rgb(temp, lut, lo, hi, bg=None, grey=False, gmin=None):
+    """Colour temperatures as the web viewer does. With bg (the auto range's knee): lo..bg linear over
+    the bottom 70% of the palette, bg..hi log-compressed into the top 30%; otherwise linear lo..hi.
+    grey (GloryHot): grey lo..bg and colours bg..hi on the log curve with bg, else grey gmin..lo."""
+    if bg is not None:
+        log = torch.log1p((temp - bg).clamp(min=0) / 8) / math.log1p((hi - bg) / 8)
+        if grey:
+            x, below, g = log, temp <= bg, (temp - lo) / max(bg - lo, 0.1)
+        else:
+            x = torch.where(temp <= bg, 0.7 * (temp - lo) / (bg - lo), 0.7 + 0.3 * log)
+    else:
+        x = (temp - lo) / (hi - lo)
+        if grey:
+            gmin = lo - 10 if gmin is None or gmin >= lo else gmin
+            below, g = temp <= lo, (temp - gmin) / max(lo - gmin, 0.1)
+    rgb = lut[(x.clamp(0, 1) * 255).long()]
+    if grey:
+        rgb = torch.where(below[..., None], (g.clamp(0, 1) * (200 / 255))[..., None].expand_as(rgb), rgb)
+    return rgb
 
 
 def rotmat_to_wxyz(R):
@@ -276,20 +297,21 @@ def main():
                 lo_c, bg_c, hi_c = float(q[0]), float(q[1]), float(tv.max())
             else:
                 lo_c, bg_c, hi_c = st['lo'].value, st['hi'].value, st['hi'].value
+            grey = st['cmap'].value in GREY_BELOW
             if st['auto'].value:
                 # as the web viewer: 1%..99.5% over the bottom 70% of the palette, hotter up to the
                 # peak log-compressed into the top 30%, so heat sources stand out instead of saturating
                 lo = lo_c
                 bg = max(bg_c, lo + 1)
                 hi = max(hi_c, bg + 1)
-                x = torch.where(temp <= bg, 0.7 * (temp - lo) / (bg - lo),
-                                0.7 + 0.3 * torch.log1p((temp - bg).clamp(min=0) / 8) / math.log1p((hi - bg) / 8))
-                info = 'display %.1f..%.1f C, hotter to %.1f C in the top of the scale' % (lo, bg, hi)
+                rgb = thermal_rgb(temp, luts[st['cmap'].value], lo, hi, bg, grey)
+                info = ('grey %.1f..%.1f C, colours hotter to %.1f C' if grey else
+                        'display %.1f..%.1f C, hotter to %.1f C in the top of the scale') % (lo, bg, hi)
             else:
                 lo, hi = st['lo'].value, max(st['hi'].value, st['lo'].value + 0.1)
-                x = (temp - lo) / (hi - lo)
-                info = 'display %.1f..%.1f C' % (lo, hi)
-            rgb = luts[st['cmap'].value][(x.clamp(0, 1) * 255).long()] * alpha[0]
+                rgb = thermal_rgb(temp, luts[st['cmap'].value], lo, hi, grey=grey, gmin=lo_c)
+                info = ('grey below %.1f C, colours to %.1f C' if grey else 'display %.1f..%.1f C') % (lo, hi)
+            rgb = rgb * alpha[0]
         st['stats'].value = 'peak %.1f C, %s' % (hi_c, info)
         client.scene.set_background_image((rgb.cpu().numpy() * 255).astype(np.uint8), format='jpeg',
                                           jpeg_quality=85)
