@@ -74,6 +74,14 @@ tr[data-state='failed'] td.state {
   color: #d33;
   font-weight: 600;
 }
+tr[data-state='needs-input'] td.state {
+  color: #c60;
+  font-weight: 600;
+}
+#proposal:not([hidden]) {
+  border: 2px solid #c60;
+  background: #c601;
+}
 tr[data-state='interrupted'] td.state,
 tr[data-state='paused'] td.state {
   color: #c90;

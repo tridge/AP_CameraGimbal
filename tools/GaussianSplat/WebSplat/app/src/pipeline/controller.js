@@ -335,10 +335,12 @@ export class Controller extends EventTarget {
     let current;
     let currentUncertain = false;
     const waiting = [];
+    const factor = this.eta.factor();
     const stages = this.stages.map((def) => {
       const r = this.record(def.id);
       const clock = this.clocks.get(def.id);
       const remaining = clock ? clock.remaining(now) : null;
+      let priorSec = null; // a waiting stage's estimate as the overall ETA counts it
       if (clock) {
         current = remaining;
         currentUncertain = remaining == null || !!clock.est.uncertain;
@@ -346,9 +348,9 @@ export class Controller extends EventTarget {
         const est = def.estimate(this.config, this.envNow());
         const ckpts =
           est.checkpointEvery && est.total ? Math.floor((est.total - 1) / est.checkpointEvery) : 0;
-        waiting.push(
-          (est.seconds ?? 60) + (est.overhead ?? 0) + ckpts * (est.checkpointSeconds ?? 0),
-        );
+        const prior = (est.seconds ?? 60) + (est.overhead ?? 0) + ckpts * (est.checkpointSeconds ?? 0);
+        waiting.push(prior);
+        priorSec = prior * factor;
       }
       return {
         id: def.id,
@@ -364,6 +366,7 @@ export class Controller extends EventTarget {
         elapsedMs: (r.timings?.elapsedMs ?? 0) + (clock ? clock.elapsedMs(now) : 0),
         timings: r.timings ?? null,
         remainingSec: clock ? remaining : r.state === 'done' ? 0 : null,
+        priorSec,
         uncertain: clock ? currentUncertain : false,
         error: r.error ?? null,
       };

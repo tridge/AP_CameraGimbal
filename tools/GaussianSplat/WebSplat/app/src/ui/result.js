@@ -1,11 +1,12 @@
 // The result view (stage 7): the exported splat in the embedded GaussianSplat viewer with
 // temperatures, the downloads, and a summary (Gaussians, temperature range, timings).
 import { embedViewer } from '../stages/export/embed.js';
+import { assetURL } from '../asset-url.js';
 import { formatDuration } from '../pipeline/eta.js';
 import { readFile } from '../storage/opfs.js';
 import { tarBlob } from './tar.js';
 
-const VIEWER = 'vendor/splat-viewer/index.html';
+const VIEWER = assetURL('vendor/splat-viewer/index.html');
 const LARGE_PLY = 250e6;
 const mb = (b) => `${(b / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB`;
 const el = (tag, props = {}, ...kids) => {

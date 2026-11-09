@@ -107,7 +107,12 @@ serveStage(async (msg, api) => {
       };
       const poll = setInterval(() => api.stopped && fail(stopped()), 250);
       const run = (fn) => Promise.resolve().then(fn).catch(fail);
-      worker.onerror = (e) => fail(new Error(`training worker: ${e.message}`));
+      // an uncaught error in the Brush worker (e.g. a wasm panic once the device is lost) can arrive
+      // before its own 'failed' message, which names the cause: give that a moment first
+      worker.onerror = (e) => {
+        e.preventDefault?.();
+        setTimeout(() => fail(new Error(`training worker: ${e.message}`)), 2000);
+      };
       worker.onmessage = ({ data: m }) =>
         run(async () => {
           if (finished) return;
@@ -193,9 +198,11 @@ serveStage(async (msg, api) => {
             finished = true;
             clearInterval(poll);
             resolve(m);
-          } else if (m.type === 'failed') {
+          } else if (m.type === 'failed' || m.type === 'failure') {
             fail(new Error(`training failed: ${m.reason}`));
           } else if (m.type === 'error') {
+            // a snapshot refused because the run already failed: its 'failed' message names the cause
+            if (/^(Error: )?(no snapshot: run is failed|run failed (before|during) a snapshot)/.test(m.message)) return;
             fail(new Error(m.message.split('\n')[0]));
           } else if (m.type === 'gpuerror' || m.type === 'shaderError') {
             api.log(`${m.type}: ${m.message ?? m.messages?.join('; ')}`, 'error');
@@ -209,6 +216,7 @@ serveStage(async (msg, api) => {
         dataset: ['websplat', ...brushDir.split('/').filter(Boolean)],
         config,
         stepsPerMessage: 50,
+        testFault: msg.env?.testFault?.train ?? null,
       });
     }).then(async () => {
       api.phase('write');

@@ -59,7 +59,8 @@ export function showPreview(tr, s) {
     .catch(() => {});
 }
 
-export function renderStages(table, snap) {
+// needs: {stage, text} for a stage waiting for the user, shown in its row
+export function renderStages(table, snap, needs = null) {
   if (table.rows.length !== snap.stages.length) {
     table.replaceChildren(
       ...snap.stages.map((s) => {
@@ -74,16 +75,24 @@ export function renderStages(table, snap) {
   }
   snap.stages.forEach((s, k) => {
     const tr = table.rows[k];
-    tr.dataset.state = s.state;
+    const asking = needs?.stage === s.id;
+    tr.dataset.state = asking ? 'needs-input' : s.state;
     tr.querySelector('.title').textContent = s.title;
     const phase = s.phase && s.phase !== 'work' && s.state === 'running' ? ` (${s.phase})` : '';
-    tr.querySelector('.state').textContent = s.state + phase;
+    tr.querySelector('.state').textContent = asking ? 'waiting for you' : s.state + phase;
     const bar = tr.querySelector('progress');
     const p = s.progress;
+    const active = s.state === 'running' || s.state === 'checkpointing';
     if (s.state === 'done') bar.value = 1;
     else if (p?.total) bar.value = Math.min(1, (p.done ?? 0) / p.total);
-    else bar.removeAttribute('value');
-    tr.querySelector('.units').textContent = s.error ? s.error.message : progressText(s);
+    // indeterminate only while work is actually happening
+    else if (active) bar.removeAttribute('value');
+    else bar.value = 0;
+    tr.querySelector('.units').textContent = asking
+      ? needs.text
+      : s.error
+        ? s.error.message
+        : progressText(s);
     showPreview(tr, s);
     tr.querySelector('.elapsed').textContent = s.elapsedMs ? formatDuration(s.elapsedMs) : '';
     tr.querySelector('.eta').textContent =

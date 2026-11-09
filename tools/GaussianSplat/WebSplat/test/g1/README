@@ -41,6 +41,10 @@ and exportPly after 'done', then dispose; any GPU error, shader error or device 
 Building the fork: Brush (pinned 1388f74 + ../../app/src/stages/train/brush-patches/brush/*.patch)
 with a CubeCL checkout next to it (tracel-ai/cubecl at 467522442c7b + brush-patches/cubecl/*.patch,
 as the directory cubecl-fork); then
-  cargo build -p brush-js --target wasm32-unknown-unknown --release
+  RUSTFLAGS='--cfg getrandom_backend="wasm_js" --remap-path-prefix=PARENT=/websplat
+    --remap-path-prefix=CARGO_HOME=/cargo' cargo build -p brush-js --target wasm32-unknown-unknown --release
   wasm-bindgen --target web --out-dir PKG target/wasm32-unknown-unknown/release/brush_js.wasm
+(PARENT: the directory holding the Brush and CubeCL checkouts; CARGO_HOME: usually ~/.cargo. The
+remaps keep local paths out of the wasm's panic messages, which the app's deploy script checks;
+RUSTFLAGS replaces .cargo/config.toml's rustflags, so the getrandom setting is repeated.)
   cargo build --release -p brush-cli

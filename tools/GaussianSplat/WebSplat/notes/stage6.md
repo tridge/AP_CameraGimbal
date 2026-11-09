@@ -443,7 +443,8 @@ the bounds in any run (largest 2.8 mm). Stage 6 meets the acceptance rule on bot
 codex round 2 build.
 
 Timing: laptop training 738-757 s, below series 2 and 3 (758-857 s; series 3 also restarted Adam
-every 200 steps). win11 training 638-767 s, above its earlier 434-513 s: after the series the win11
-GPU showed 99% utilisation with the harness Chrome stopped, from the machine's interactive
-session (not touched). win11 runs are exempt from the idle check by the rule, so this affects
-timing only; the win11 ETA prior (461 s) is not revised from these runs.
+every 200 steps). win11 training 638-767 s, above its earlier 434-513 s: splat training ran concurrently
+in that machine's WSL VM during the series (its GPU load shows in nvidia-smi's utilisation, 98-99%,
+but not in its process list; corrected 2026-11-09, an earlier version of this note blamed the
+interactive session). win11 runs are exempt from the idle check by the rule, so this affects timing
+only and the result stands; the win11 ETA prior is not revised from these runs.

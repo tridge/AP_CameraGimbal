@@ -41,6 +41,12 @@ serveStage(async (msg, api) => {
     const index = ingestRecord(ingest, source);
     const telemetry = telemetrySummary(ingest.frames);
     for (const p of telemetry.problems) api.log(p, 'warn');
+    // mapping is seeded by the vehicle telemetry: without any there is nothing to place the cameras
+    if (!telemetry.position || !telemetry.attitude)
+      throw new Error(
+        `this recording has no vehicle telemetry (position and attitude) in its ${telemetry.frames} ` +
+          'frames, so the cameras cannot be placed; record with the autopilot connected to the gimbal',
+      );
     await writeJson(`${msg.outDir}/index.json`, index);
 
     decoder = new FrameDecoder(ingest, { coreURL: msg.coreURL, workers: msg.workers });

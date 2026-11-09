@@ -34,6 +34,7 @@ export function serveStage(body) {
     if (m.type === 'stop') stopped = true;
     else if (m.type === 'ack') (acks.get(m.id)?.(), acks.delete(m.id));
     else if (m.type === 'start') {
+      globalThis.websplatTestFault = m.env?.testFault ?? null; // tests only (?testFault=)
       try {
         post({ type: 'result', value: await body(m, api) });
       } catch (e) {

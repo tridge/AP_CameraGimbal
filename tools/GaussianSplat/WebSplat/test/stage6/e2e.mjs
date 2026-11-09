@@ -7,7 +7,7 @@
 //     reload the page and Resume; training must continue from that checkpoint (not restart)
 // Writes $WEBSPLAT_DATA/stage6/runs/<name>/ (report.json, prepare/, train/, scores); exits 1 if a
 // check fails. GPU errors, shader errors or device loss fail the train stage itself.
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -27,7 +27,7 @@ const mkv = a.mkv ?? `${data}/input/orbit.mkv`;
 const stopAt = a['stop-at'] ? Number(a['stop-at']) : null;
 const trainConfig = a['train-config'] ? JSON.parse(a['train-config']) : null;
 const name = `${machine}${stopAt ? `-stop${stopAt}` : ''}${trainConfig ? '-cfg' : ''}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
-const out = `${data}/stage6/runs/${name}`;
+const out = `${a['runs-dir'] ?? `${data}/stage6/runs`}/${name}`; // --runs-dir DIR: elsewhere (e.g. stage 8)
 mkdirSync(out, { recursive: true });
 const base = `http://127.0.0.1:${port}`;
 const say = (s) => console.log(`${new Date().toISOString().slice(11, 19)} ${s}`);
@@ -40,13 +40,17 @@ const check = (n, ok, detail = '') => {
 
 // the build under test: the Brush wasm and the bundled training worker scripts
 const sha = (f) => createHash('sha256').update(readFileSync(f)).digest('hex');
-const assets = readdirSync(`${APP_DIST}/assets`);
+// a plain build has assets/ and vendor/ at its root; a deploy release (scripts/deploy.sh) is a site
+// root with them in its one releases/<release>/ directory
+const appRoot = existsSync(`${APP_DIST}/assets`) ? APP_DIST
+  : `${APP_DIST}/releases/${readdirSync(`${APP_DIST}/releases`).find((d) => !d.endsWith('.partial'))}`;
+const assets = readdirSync(`${appRoot}/assets`);
 const build = {
-  wasm: sha(`${APP_DIST}/vendor/brush/brush_js_bg.wasm`),
+  wasm: sha(`${appRoot}/vendor/brush/brush_js_bg.wasm`),
   ...Object.fromEntries(['train.stage.worker', 'brush-worker'].map((n) => {
     const f = assets.filter((a) => a.startsWith(`${n}-`) && a.endsWith('.js'));
     if (f.length !== 1) throw new Error(`build: ${f.length} ${n} assets`);
-    return [n, sha(`${APP_DIST}/assets/${f[0]}`)];
+    return [n, sha(`${appRoot}/assets/${f[0]}`)];
   })),
 };
 build.id = createHash('sha256').update(JSON.stringify(build)).digest('hex').slice(0, 16);
@@ -128,6 +132,20 @@ try {
     } catch { /* reloading */ }
   }, 10000);
 
+  // every 2 s: stage states, priors, remaining times and the overall estimate (test/stage8/eta_check.mjs)
+  const samples = [];
+  const sampleTimer = setInterval(async () => {
+    try {
+      const x = await snap();
+      samples.push({
+        wall: Date.now(),
+        overall: x.overall?.remainingSec ?? null,
+        stages: x.stages.map((t) => ({ id: t.id, state: t.state, done: t.progress?.done ?? null,
+          total: t.progress?.total ?? null, remaining: t.remainingSec, prior: t.priorSec })),
+      });
+    } catch { /* reloading */ }
+  }, 2000);
+
   let resume = null;
   if (stopAt) {
     await page.waitForFunction((n) => {
@@ -165,12 +183,25 @@ try {
   }, null, { timeout: 4 * 3600000, polling: 1000 });
   clearInterval(ticker);
   clearInterval(etaTimer);
+  clearInterval(sampleTimer);
+  { // a final sample: the 2 s sampler may stop before the last stage reports done
+    const x = await snap();
+    samples.push({ wall: Date.now(), overall: x.overall?.remainingSec ?? null, stages: x.stages.map((t) => ({ id: t.id,
+      state: t.state, done: t.progress?.done ?? null, total: t.progress?.total ?? null, remaining: t.remainingSec, prior: t.priorSec })) });
+  }
+  writeFileSync(`${out}/samples.json`, JSON.stringify(samples));
+  const v = await page.evaluate(() => window.websplat.verify().then((r) => ({ ok: r.ok, files: r.files, bad: r.bad ?? r.error }), (e) => ({ ok: false, bad: String(e) })));
+  check('the app\'s verify() passes (manifest, output hashes)', v.ok, `${v.files} files${v.ok ? '' : ', bad: ' + JSON.stringify(v.bad).slice(0, 300)}`);
   ticker = null;
   const s = await snap();
   const tEnd = Date.now();
   for (const st of s.stages) check(`${st.id} done`, st.state === 'done', st.error?.message ?? '');
   const job = await page.evaluate(() => window.websplat.job());
   const tr = job.stages.train;
+  const exp = job.stages.export;
+  check('export published its downloads (splat.ply, splat.spz, meta.json)',
+    exp?.state === 'done' && ['splat.ply', 'splat.spz', 'meta.json'].every((n) => exp.outputs?.[n]?.bytes > 0),
+    Object.keys(exp?.outputs ?? {}).join(','));
 
   // copy files out of OPFS in 8 MB chunks
   const copy = async (path, dest) => {

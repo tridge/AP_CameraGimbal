@@ -46,8 +46,8 @@ function showDevice(d) {
         (d.smoke ? `, smoke test ${d.smoke.ok ? 'passed' : 'FAILED'} in ${d.smoke.ms} ms` : ''),
     );
   }
-  if (d.smoke?.warnings?.length)
-    lines.push(`<span class="warn">${d.smoke.warnings.join('<br>')}</span>`);
+  // self-test notes for developers (the stages already work around them)
+  if (d.smoke?.warnings?.length) console.info('WebGPU self-test:', d.smoke.warnings.join('; '));
   if (!d.ok) {
     lines.push(`<b>${d.reason}</b>`);
     if (d.smoke?.errors?.length) lines.push(d.smoke.errors.map((e) => `- ${e}`).join('<br>'));
@@ -88,6 +88,15 @@ async function showStorage() {
   api.storage = s;
 }
 
+// what a stage waiting for the user asks of them (controller.needs)
+const NEEDS = {
+  select: {
+    row: 'confirm the target and camera above, then press Continue',
+    overall: 'confirm the target and camera',
+  },
+  train: { row: 'choose a trained splat above', overall: 'choose a trained splat' },
+};
+
 let pending = false;
 function update() {
   if (pending) return;
@@ -95,11 +104,16 @@ function update() {
   setTimeout(() => {
     pending = false;
     const snap = controller.snapshot();
-    renderStages($('stages'), snap);
+    const needs = !snap.running && snap.needs ? NEEDS[snap.needs] : null;
+    renderStages($('stages'), snap, needs && { stage: snap.needs, text: needs.row });
     const o = snap.overall;
     $('overall').textContent =
       `Elapsed ${formatDuration(o.elapsedMs)}` +
-      (o.text === 'done' ? ', all stages done' : `, ${o.text} remaining`);
+      (o.text === 'done'
+        ? ', all stages done'
+        : needs
+          ? `; waiting for you to ${needs.overall} (then ${o.text})`
+          : `, ${o.text} remaining`);
     $('start').disabled = snap.running || snap.stages.every((s) => s.state === 'done');
     $('start').textContent = snap.stages.some((s) =>
       ['interrupted', 'paused', 'failed'].includes(s.state),
@@ -260,6 +274,9 @@ function confirmProposal(proposal) {
     ),
   );
   $('proposal').hidden = false;
+  $('proposal').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  f.elements.lat.focus({ preventScroll: true });
+  update();
   return new Promise((resolve) => {
     f.onsubmit = (e) => {
       e.preventDefault();
@@ -312,7 +329,9 @@ async function main() {
   api.device = device;
   showDevice(device);
 
-  const name = params.get('pipeline') ?? (device.ok ? 'thermal' : 'dummy');
+  // test and development pipelines are only offered when the URL names one
+  const name = params.get('pipeline') ?? 'thermal';
+  $('pipeline').closest('label').hidden = !params.has('pipeline');
   const set = stageSet(name);
   const noSource = name === 'dummy' || set?.source === false;
   for (const s of stageSets())
@@ -399,6 +418,8 @@ async function main() {
     powerPreference,
     noGpu: params.get('gpu') === '0' || !device.ok,
     sourceSize: job.manifest.source?.size ?? 0,
+    // recovery tests only: injected faults (storage/opfs.js, stages/train/brush-worker.js)
+    testFault: params.get('testFault') ? JSON.parse(params.get('testFault')) : null,
   };
   controller = new Controller({ set, job, config, env, sourceFile });
   controller.addEventListener('update', update);
@@ -414,6 +435,7 @@ async function main() {
   // storage internals for the harness's fault and recovery tests
   api.testing = {
     job: () => job,
+    controller: () => controller, // its 'update' events (stage 8 recovery tests)
     Job,
     hashJson,
     loadManifest,

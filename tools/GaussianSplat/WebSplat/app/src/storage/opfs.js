@@ -38,8 +38,15 @@ async function fileHandle(path, create) {
   return d.getFileHandle(ps.at(-1), { create });
 }
 
+// tests only (?testFault={"quota":"REGEX"}): writes to matching paths fail as a full quota would
+function injectedQuota(path) {
+  const f = globalThis.websplatTestFault?.quota;
+  return f ? new RegExp(f).test(path) : false;
+}
+
 // data: ArrayBuffer, view, Blob or string; or a (sync or async) generator of chunks
 export async function writeFile(path, data) {
+  if (injectedQuota(path)) throw quota(new DOMException('injected quota fault', 'QuotaExceededError'));
   const h = await fileHandle(path, true);
   const w = await h.createWritable();
   try {

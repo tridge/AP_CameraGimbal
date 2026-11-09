@@ -12,14 +12,14 @@ export const mapStage = defineStage({
   inputs: ['select', 'features', 'match'],
   configKeys: ['map'],
   checkpoints: true,
-  // measured (G2): 62-74 s for 4 rounds on the laptop and the win11 machine; one checkpoint per round
+  // measured: 75-89 s for 4 rounds in the page (series 4, notes/stage6.md; G2 62-74 s); one checkpoint per round
   estimate: (config) => {
     const rounds = config.map?.thresholds?.length ?? 4;
     // BA may stop before its iteration limit, so the work left in a round is uncertain
     return {
       total: rounds,
       uncertain: true,
-      seconds: 17 * rounds,
+      seconds: 19.5 * rounds,
       overhead: 2,
       checkpointEvery: 1,
       checkpointSeconds: 0.2,
