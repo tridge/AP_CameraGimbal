@@ -7,10 +7,20 @@
 // meta.rasterize_mode 'classic' selects gsplat classic rendering (no mip opacity compensation).
 // Thermal splats hold the scaled temperature in every channel; it is blended over black into a
 // float (or half-float) target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
+// A ceiling slider hides Gaussians above a height (floaters) with a Spark SplatEdit plane, display
+// only; a PLY can be downloaded without them.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+import {
+  SparkRenderer,
+  SplatEdit,
+  SplatEditRgbaBlendMode,
+  SplatEditSdf,
+  SplatEditSdfType,
+  SplatMesh,
+} from '@sparkjsdev/spark';
 import { spzMeta } from '../spz-meta.mjs';
+import { clipPly } from '../ply-clip.mjs';
 import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
 
 // render size caps (pixels): integrated GPUs struggle at full HiDPI resolution
@@ -20,6 +30,7 @@ const FORMATS = ['ply', 'spz', 'splat', 'ksplat', 'sog'];
 const UP_AXES = { z: [0, 0, 1], y: [0, 1, 0], '-y': [0, -1, 0] };
 
 const cfg = window.SPLAT;
+window.splatViewer = {}; // state for tests (ceiling)
 const $ = (id) => document.getElementById(id);
 
 for (const img of document.querySelectorAll('img.project-icon')) img.src = projectIconUrl;
@@ -198,6 +209,123 @@ async function main() {
   let home = null;
   let sceneLo = null; // the last auto range's low: GloryHot's grey floor in a manual range
   const greyBelow = (name) => name === 'gloryhot';
+
+  // ceiling: Gaussians above it get opacity 0 (a plane edit, inverted: it acts above the plane);
+  // moving the plane re-runs Spark's generator on the GPU, the splat is not rebuilt
+  const ceilingSdf = new SplatEditSdf({
+    type: SplatEditSdfType.PLANE,
+    invert: true,
+    opacity: 0,
+    color: new THREE.Color(1, 1, 1),
+  });
+  const ceilingEdit = new SplatEdit({ rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY });
+  ceilingEdit.add(ceilingSdf);
+  const STEPS = 1000;
+  // sorted Gaussian heights (world z) as Spark holds the centres (float16 for colour splats, so
+  // the count can differ slightly from the exact PLY's at the ceiling)
+  let heights = null;
+  let ceilingRange = null; // [target height (or the lowest 1% above it), highest Gaussian]
+  let targetZ = null;
+  let ceilingH = null; // the ceiling, null when off
+  let source = null; // the opened PLY (Blob or bytes), for the clipped download
+  let sourceName = '';
+  let upAxis = [0, 0, 1];
+  const ceilingUi = document.createElement('div');
+  ceilingUi.id = 'ceiling-controls';
+  ceilingUi.hidden = true;
+  ceilingUi.innerHTML =
+    `<label>Ceiling (hide floaters above) <input id="ceiling" type="range" min="0" ` +
+    `max="${STEPS}" step="1" value="${STEPS}" /></label><p id="ceiling-value" class="note"></p>` +
+    `<button id="ceiling-download" type="button" hidden>Download PLY without them</button>`;
+  $('reset').before(ceilingUi);
+
+  const above = (h) => {
+    // binary search: the Gaussians above h
+    let a = 0;
+    let b = heights.length;
+    while (a < b) {
+      const m = (a + b) >> 1;
+      if (heights[m] <= h) a = m + 1;
+      else b = m;
+    }
+    return heights.length - a;
+  };
+
+  function setCeiling(step) {
+    const [lo, hi] = ceilingRange;
+    const off = step >= STEPS;
+    ceilingH = off ? null : lo + ((hi - lo) * step) / STEPS;
+    if (off) scene.remove(ceilingEdit);
+    else {
+      ceilingSdf.position.set(0, 0, ceilingH);
+      if (!ceilingEdit.parent) scene.add(ceilingEdit);
+    }
+    const h = off ? hi : ceilingH;
+    const rel = meta.target
+      ? `${(h - targetZ).toFixed(1)} m above the target`
+      : `height ${h.toFixed(1)} m`;
+    const amsl =
+      meta.origin?.alt_amsl != null && meta.up
+        ? `, ${(meta.origin.alt_amsl + h).toFixed(1)} m AMSL`
+        : '';
+    $('ceiling-value').textContent = off
+      ? `Off: highest Gaussian ${rel}${amsl}.`
+      : `${rel}${amsl}: ${above(h).toLocaleString('en')} Gaussians hidden (view only).`;
+    $('ceiling-download').hidden = off || !source;
+    window.splatViewer.ceiling = {
+      height: ceilingH,
+      hidden: off ? 0 : above(h),
+      range: ceilingRange,
+    };
+    needSplat = true;
+  }
+
+  function setupCeiling() {
+    scene.remove(ceilingEdit);
+    ceilingH = null;
+    const zs = new Float32Array(mesh.numSplats);
+    const v = new THREE.Vector3();
+    mesh.forEachSplat((i, centre) => {
+      zs[i] = v.copy(centre).applyQuaternion(holder.quaternion).z;
+    });
+    zs.sort();
+    heights = zs;
+    const top = zs[zs.length - 1];
+    targetZ = meta.target
+      ? new THREE.Vector3(...meta.target).applyQuaternion(holder.quaternion).z
+      : null;
+    // from the target, or from the lowest 1% when the target is below the scene
+    const lo = Math.max(targetZ ?? -Infinity, zs[Math.floor(0.01 * (zs.length - 1))]);
+    ceilingUi.hidden = !(top > lo);
+    if (ceilingUi.hidden) return;
+    ceilingRange = [lo, top];
+    $('ceiling').value = STEPS;
+    setCeiling(STEPS);
+  }
+
+  $('ceiling').oninput = () => setCeiling(Number($('ceiling').value));
+  $('ceiling-download').onclick = async () => {
+    if (!source || ceilingH == null) return;
+    const bytes =
+      source instanceof Blob
+        ? new Uint8Array(await source.arrayBuffer())
+        : source instanceof Uint8Array
+          ? source
+          : new Uint8Array(source);
+    // null too when the bytes went to Spark (detached)
+    const r = bytes.length ? clipPly(bytes, upAxis, ceilingH) : null;
+    if (!r) {
+      setStatus('This PLY cannot be clipped here.');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([r.bytes]));
+    a.download = `${sourceName.replace(/\.ply$/i, '')}-ceiling-${ceilingH.toFixed(1)}m.ply`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  };
 
   function setLut(name) {
     const rows = colormaps[name];
@@ -445,6 +573,7 @@ async function main() {
   }
 
   function setUp(axis) {
+    upAxis = axis;
     holder.quaternion.setFromUnitVectors(
       new THREE.Vector3(...axis).normalize(),
       new THREE.Vector3(0, 0, 1),
@@ -453,7 +582,8 @@ async function main() {
     needSplat = true;
   }
 
-  async function show(bytes, name, m) {
+  // src: the file as opened (a Blob, or bytes), kept for the clipped PLY download
+  async function show(bytes, name, m, src = bytes) {
     meta = m || { kind: 'rgb', title: name };
     thermal = meta.kind === 'thermal' && !!meta.temperature_scale;
     const title = meta.title || name.split('/').pop();
@@ -500,6 +630,9 @@ async function main() {
 
     if (ui.up) ui.up.closest('label').hidden = !!meta.up;
     setUp(meta.up || UP_AXES[ui.up ? ui.up.value : 'z']);
+    source = extension(name) === 'ply' ? src : null;
+    sourceName = String(name).split('/').pop();
+    setupCeiling();
 
     if (thermal) {
       if (!colormaps) colormaps = await getJson(cfg ? cfg.colormaps : 'colormaps.json');
@@ -557,6 +690,7 @@ async function main() {
     ui.up.onchange = () => {
       if (!mesh || meta.up) return;
       setUp(UP_AXES[ui.up.value]);
+      setupCeiling();
       home = fitView();
       goHome();
     };
@@ -594,10 +728,10 @@ async function main() {
 
   // metadata: m (given, or the site's meta.json), else the file's own, else sidecar() (a .json
   // beside it or chosen with it)
-  async function openBytes(bytes, name, m, sidecar = null) {
+  async function openBytes(bytes, name, m, sidecar = null, src = bytes) {
     if ($('open-panel')) $('open-panel').hidden = true;
     $('panel').hidden = false;
-    await show(bytes, name, m || embeddedMeta(bytes) || (sidecar && (await sidecar())));
+    await show(bytes, name, m || embeddedMeta(bytes) || (sidecar && (await sidecar())), src);
   }
 
   if (cfg) {
@@ -619,7 +753,7 @@ async function main() {
     const json = list.find((f) => extension(f.name) === 'json');
     setStatus(`Reading ${file.name}…`);
     const sidecar = json ? async () => JSON.parse(await json.text()) : null;
-    await openBytes(new Uint8Array(await file.arrayBuffer()), file.name, null, sidecar);
+    await openBytes(new Uint8Array(await file.arrayBuffer()), file.name, null, sidecar, file);
   };
   for (const input of document.querySelectorAll('input[type=file]')) {
     input.onchange = (e) => e.target.files.length && openFiles(e.target.files).catch(fail);
@@ -639,7 +773,7 @@ async function main() {
       window.parent.postMessage({ type: 'apcg-splat-opened', name, error }, location.origin);
     const data = bytes instanceof Blob ? bytes.arrayBuffer() : Promise.resolve(bytes);
     data
-      .then((b) => openBytes(new Uint8Array(b), name, meta))
+      .then((b) => openBytes(new Uint8Array(b), name, meta, null, bytes))
       .then(
         () => reply(),
         (err) => (fail(err), reply(err.message)),
