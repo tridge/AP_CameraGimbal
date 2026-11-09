@@ -486,8 +486,9 @@ async function main() {
       post.material.uniforms.t0.value = s.t0_c;
       post.material.uniforms.k.value = s.k_c;
       post.material.uniforms.norm.value = norm;
-      const names = [...ui.cmap.options].map((o) => o.value);
-      ui.cmap.value = names.includes(meta.colormap) ? meta.colormap : 'ironbow';
+      // thermal splats open in whitehot; meta.colormap ('ironbow' from every exporter so far) is
+      // not a per-splat choice
+      ui.cmap.value = 'whitehot';
       setLut(ui.cmap.value);
       const range = meta.display_range_c || [Math.floor(s.t0_c), Math.ceil(s.t1_c)];
       ui.lo.value = range[0];
