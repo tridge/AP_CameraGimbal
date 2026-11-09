@@ -144,8 +144,12 @@ file from the visitor's disk (button or drag and drop; the file is never uploade
 metadata). It reads `.ply`, `.spz`, `.splat`, `.ksplat` and `.sog`. PLY files from `train.py`,
 `train_rgb.py` and `export_web.py --ply` carry their metadata (kind, up axis, orbit target,
 temperature scale, start view) in a `comment apcg_splat {json}` header line that other PLY
-readers ignore, so a thermal splat is a single file; other splats open in colour with a view
-fitted to them and an up-axis choice.
+readers ignore, so a thermal splat is a single file. SPZ files from `export_web.py` carry the
+same JSON in their gzip header (an `AP` subfield of the FEXTRA field, RFC 1952, which gzip and
+other SPZ readers skip). For an SPZ without it, the page uses a `.json` chosen with the file or,
+for `?url=`, `NAME.json` or `meta.json` beside it; `&meta=` and a site's `meta.json` take
+precedence over all of these. Other splats open in colour with a view fitted to them and an
+up-axis choice.
 
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
@@ -191,7 +195,11 @@ or for nginx `gzip on; gzip_types text/javascript application/json;` (the build 
 splat they open.
 
 `export_web.py SPLATDIR --ply OUT.ply` writes a single self-describing PLY from any `splat.pt`,
-for sharing or opening in the stand-alone page. `viewer/public/colormaps.json` is generated
+for sharing or opening in the stand-alone page. SPZs exported before the metadata was embedded
+get it with `node viewer/embed-meta.mjs --write SITE` (or `NAME.json` for a sample pair; without
+`--write` it only reports): it takes the JSON from the PLY header beside the SPZ, else from
+`meta.json` less its `downloads` and `video`, and rewrites only the gzip header, checking that the
+SPZ decodes to the same bytes. `viewer/public/colormaps.json` is generated
 from `colormaps.py` (`colormaps.py --json viewer/public/colormaps.json`); regenerate it after
 changing the colormaps.
 

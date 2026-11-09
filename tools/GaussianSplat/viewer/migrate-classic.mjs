@@ -3,7 +3,7 @@
 // PLY `comment apcg_splat` headers, and the SPZ antialiased flag cleared (as ply2spz.mjs now
 // writes it). Only the marker changes: meta.json and PLY header text gain the field (nothing else
 // is rewritten, PLY bodies are copied unchanged), and an SPZ is re-gzipped with only its flags
-// byte changed.
+// byte changed (and the rasterize_mode of its embedded metadata, if it has any).
 //   node migrate-classic.mjs [--write] [--kinds thermal,rgb] PATH ...
 // PATH: an export_web.py site (every DATE/FLIGHT/RUN/meta.json with that run's splat.spz and
 // splat.ply), a NAME.json (with NAME.spz and NAME.ply beside it, if present; meta.json pairs
