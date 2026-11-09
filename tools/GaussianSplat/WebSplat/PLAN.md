@@ -200,7 +200,41 @@ add error). Accept: the downloaded PLY opens with temperatures at plot.ardupilot
 Full runs from the MKV on both machines with timings in PROGRESS.md and calibrated estimates.
 Tested: stop/resume at every stage, reload during checkpoint writes, quota exhaustion, stale
 versions, two tabs, `device.lost`, allocation failure, missing telemetry. A short README.
-Deploy for testing at uav.tridgell.net/Splats/make/.
+Deploy at plot.ardupilot.org/websplat/ (decided 2026-11-09, replacing uav.tridgell.net/Splats/make/):
+the same origin as /video/ and /splat/, so a later version can start from a recording /video/
+has already downloaded into browser storage (see Future versions).
+
+## Future versions: starting a splat from the video viewer
+
+Recorded 2026-11-09; not part of release 1, which ships first as the standalone page.
+
+plot.ardupilot.org/video/ already holds the recording and telemetry, the flight path in a 3D
+map with terrain, ray/terrain picking and video projection. It is the natural place to choose
+what to splat. The viewer selects; WebSplat computes.
+
+- **Create splat** in /video/ enters a selection mode:
+  1. Time range: two handles on the timeline. The 3D map shows only that part of the flight
+     (the rest dimmed) and the ground points the camera looked at. "Snap to orbit" proposes
+     GUIDED or loiter segments, or segments where the camera rays converge.
+  2. Coverage: a ring around the target showing which bearings the range covers and how well
+     the gimbal held the target; warnings for a partial orbit or a frame-count cap; frame count
+     and an estimated time before starting.
+  3. Target: click in 3D (terrain intersection), with the hot-spot estimate offered; a vertical
+     handle adjusts the height. This replaces the latitude/longitude confirmation form.
+  4. View: the 3D camera pose relative to the target becomes the splat's start camera and up
+     axis, so the default view is chosen at creation.
+  5. Go: opens WebSplat in a new tab with a job description. Kept as a separate page so video
+     review does not load tens of MB of wasm, and review can continue during a 10-15 minute
+     job. The WebSplat tab must stay visible (hidden tabs are throttled).
+- WebSplat accepts a job description: source path in browser storage (same origin, so no
+  second download), time range, target, view, camera settings; the confirmation step is skipped
+  when they are given. Ingest and selection process only the range, not the whole recording.
+- Later: show the finished splat in the viewer's 3D map, georeferenced from the splat origin;
+  RGB `.ts` recordings as sources.
+
+Phasing: v2 = range, target and height, view capture and Go in /video/, plus job description
+and range-only ingest in WebSplat. v3 = coverage ring and snap to orbit, splat in the 3D map,
+RGB sources.
 
 ## Risks
 

@@ -1,4 +1,5 @@
 // Progress and remaining-time model (PLAN.md "User experience").
+const EVIDENCE_SEC = 60;
 // A stage estimate: { total, seconds, overhead, cumCost(u), checkpointEvery, checkpointSeconds }.
 // seconds is the prior work time for the detected GPU class, overhead the prior non-work time
 // (compile, load, evaluation); checkpoints are counted separately at their measured duration.
@@ -104,10 +105,13 @@ export class PipelineEta {
   }
 
   // calibration of priors from completed stages, clamped
+  // actual / prior over the finished stages, shrunk towards 1 by EVIDENCE_SEC of prior: a few
+  // seconds of short stages must not rescale minutes of later estimates (stage 8: the first three
+  // stages, 21 s, took the match prior from 66 s to 42 s)
   factor() {
     const p = this.completed.reduce((a, c) => a + c.prior, 0);
     const a = this.completed.reduce((s, c) => s + c.actual, 0);
-    return p > 0 ? Math.min(4, Math.max(0.25, a / p)) : 1;
+    return p > 0 ? Math.min(4, Math.max(0.25, (a + EVIDENCE_SEC) / (p + EVIDENCE_SEC))) : 1;
   }
 
   complete(prior, actual) {

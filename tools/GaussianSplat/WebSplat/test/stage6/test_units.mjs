@@ -83,7 +83,7 @@ function columns(bytes) {
   let mono = true;
   for (let u = 0; u < 30000; u += 100) if (c(u + 100) < c(u)) mono = false;
   check('ETA cost curve: 0 at start, total at end, monotone', c(0) === 0 && Math.abs(c(30000) - 30000) < 1e-9 && mono);
-  check('ETA cost curve: training slows (second half costs more than the first)', c(30000) - c(15000) > c(15000) - c(0));
+  check('ETA cost curve: training slows while Gaussians grow (iterations 12k-14k cost more than 0-2k)', c(14000) - c(12000) > c(2000) - c(0));
 }
 const prep = process.argv[2];
 if (prep) {

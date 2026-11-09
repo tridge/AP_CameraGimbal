@@ -20,6 +20,7 @@
 //      {type: 'shader', label, code} (captureShaders)
 //      {type: 'done', iter, elapsedMs, splats}  {type: 'evalRenders', views}  {type: 'ply', bytes}
 //      {type: 'checkpoint', iter, bytes}  {type: 'previewRender', iter, views}
+//      {type: 'failure', reason}: the run has failed (sent at once; 'failed' follows when idle)
 //      {type: 'failed', reason, gpuErrors, shaderErrors}  {type: 'error', message}
 //      {type: 'disposed', ok, reason, gpuErrors, shaderErrors}
 
@@ -89,6 +90,8 @@ function fail(reason) {
   if (failure || state === 'disposed') return;
   failure = reason;
   state = 'failed';
+  // the cause at once: 'failed' waits for wasm calls to settle, and a call that traps never does
+  post({ type: 'failure', reason });
   settle();
 }
 
@@ -246,6 +249,7 @@ async function start(msg) {
     if (state !== 'running') break;
     await drainSnapshots(); // at this batch boundary: the splats are those of `iter`
     if (state !== 'running') break;
+    injectFault(msg.testFault, iter);
     if (msg.stressCleanup) app.memoryCleanup(); // buffer-lifetime stress test
     post({
       type: 'progress',
@@ -280,12 +284,26 @@ async function start(msg) {
   post({ type: 'done', iter, elapsedMs, splats: splatCount() });
 }
 
+// recovery tests only (testFault {deviceLostAt, allocAt}): lose the device, or ask for an
+// allocation the device must refuse, once training reaches the iteration
+let faulted = false;
+function injectFault(f, iter) {
+  if (!f || faulted) return;
+  if (f.deviceLostAt != null && iter >= f.deviceLostAt) {
+    faulted = true;
+    device.destroy();
+  } else if (f.allocAt != null && iter >= f.allocAt) {
+    faulted = true;
+    device.createBuffer({ size: 2 ** 40, usage: GPUBufferUsage.STORAGE });
+  }
+}
+
 // a snapshot of the splats while training continues (checkpoints, previews): taken between two
 // trainSteps batches, so its parameters are exactly those of the iteration it is labelled with
 const pendingSnapshots = [];
 function snapshot(fn) {
   if (state !== 'running' && state !== 'trained')
-    return Promise.reject(new Error(`no snapshot: run is ${state}`));
+    return Promise.reject(new Error(`no snapshot: run is ${state}${failure ? ` (${failure})` : ''}`));
   return new Promise((resolve, reject) => {
     pendingSnapshots.push({ fn, resolve, reject });
     if (state === 'trained') drainSnapshots();

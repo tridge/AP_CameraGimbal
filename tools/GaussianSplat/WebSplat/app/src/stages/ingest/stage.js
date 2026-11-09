@@ -4,13 +4,10 @@
 import { defineStage } from '../../pipeline/registry.js';
 import { FFMPEG_VERSION } from '../../../../../../viewer/src/versions.js';
 import { INGEST_VERSION } from './ingest.js';
+import { assetURL } from '../../asset-url.js';
 
 // the viewer's pinned FFmpeg core, served by the app under vendor/
-export const coreURL = () =>
-  new URL(
-    `vendor/ffmpeg/${FFMPEG_VERSION}/ffmpeg-core.js`,
-    globalThis.document?.baseURI ?? location.href,
-  ).href;
+export const coreURL = () => assetURL(`vendor/ffmpeg/${FFMPEG_VERSION}/ffmpeg-core.js`);
 
 export const ingestStage = defineStage({
   id: 'ingest',
