@@ -9,6 +9,8 @@
 //   --select-mode single|redecode|cache (default single)
 //   --reference: use the reference extraction's target (CONTRACTS.md stage 2) instead of the proposal
 //   --profile NAME: Chrome profile directory name under $WEBSPLAT_DATA/harness/profiles
+//   --trained PLY: the trained splat the training stand-in loads before the export stage
+//     (default G1's laptop browser run, $WEBSPLAT_DATA/g1/final_laptop/export.ply)
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { APP_DIST, WEBSPLAT, args, env } from './lib/env.mjs';
@@ -33,7 +35,16 @@ const check = (name, ok, detail = '') => {
   say(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ': ' + detail : ''}`);
 };
 
-const server = await serve(APP_DIST, port);
+// stage 6 is a stand-in until training is in the app: it loads this trained splat
+const trained = a.trained ?? `${data}/g1/final_laptop/export.ply`;
+writeFileSync(
+  `${out}/standin.json`,
+  JSON.stringify({ train: { files: { 'splat.ply': '/__data/trained.ply' } } }),
+);
+const server = await serve(APP_DIST, port, '127.0.0.1', {
+  '/__data/trained.ply': trained,
+  '/__data/standin.json': `${out}/standin.json`,
+});
 // --profile NAME: a separate Chrome profile (another harness run may hold the default one)
 const profile = `${data}/harness/profiles/${a.profile ?? `thermal-${machine}-${adapter}`}`;
 const gpu = new GpuSampler({
@@ -64,7 +75,7 @@ try {
   });
   const t0 = Date.now();
   await page.goto(
-    `${base}/index.html?pipeline=thermal&adapter=${adapter}${a['select-mode'] ? `&selectMode=${a['select-mode']}` : ''}`,
+    `${base}/index.html?pipeline=thermal&adapter=${adapter}&standin=/__data/standin.json${a['select-mode'] ? `&selectMode=${a['select-mode']}` : ''}`,
   );
   await page.waitForSelector('#file', { state: 'visible' });
   if (machine === 'win11') {

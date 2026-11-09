@@ -10,12 +10,16 @@
 // in:  {type: 'start', pkg, dataset: [OPFS directory names], config: {kebab-case Brush options},
 //       stepsPerMessage, captureShaders, traceBuffers, stressCleanup, tasksPerSubmit}
 //      {type: 'renderEval'}  {type: 'exportPly', comments: [..]}  {type: 'dispose'}
+//      while training or trained: {type: 'checkpoint'} (raw parameters, PLY bytes) and
+//      {type: 'previewRender'} (eval-view renders), served at the next batch boundary; iter is the
+//      step whose parameters they hold
 // out: {type: 'device', adapter, features}  {type: 'dataset', train, eval}
 //      {type: 'progress', iter, total, elapsedMs, splats, buffers (traceBuffers)}
 //      {type: 'refine', iter, splats}  {type: 'eval', iter, psnr}  {type: 'warning', text}
 //      {type: 'gpuerror', count, iter, message}  {type: 'shaderError', label, messages}
 //      {type: 'shader', label, code} (captureShaders)
 //      {type: 'done', iter, elapsedMs, splats}  {type: 'evalRenders', views}  {type: 'ply', bytes}
+//      {type: 'checkpoint', iter, bytes}  {type: 'previewRender', iter, views}
 //      {type: 'failed', reason, gpuErrors, shaderErrors}  {type: 'error', message}
 //      {type: 'disposed', ok, reason, gpuErrors, shaderErrors}
 
@@ -240,6 +244,8 @@ async function start(msg) {
       m.free();
     }
     if (state !== 'running') break;
+    await drainSnapshots(); // at this batch boundary: the splats are those of `iter`
+    if (state !== 'running') break;
     if (msg.stressCleanup) app.memoryCleanup(); // buffer-lifetime stress test
     post({
       type: 'progress',
@@ -265,9 +271,44 @@ async function start(msg) {
     // let errors from the last submitted work arrive before declaring success
     await device.queue.onSubmittedWorkDone();
   }
-  if (state !== 'running') return; // fail() has reported (or will, once no wasm call is busy)
+  if (state !== 'running') {
+    await drainSnapshots(); // rejects what is still queued
+    return; // fail() has reported (or will, once no wasm call is busy)
+  }
   state = 'trained';
+  await drainSnapshots();
   post({ type: 'done', iter, elapsedMs, splats: splatCount() });
+}
+
+// a snapshot of the splats while training continues (checkpoints, previews): taken between two
+// trainSteps batches, so its parameters are exactly those of the iteration it is labelled with
+const pendingSnapshots = [];
+function snapshot(fn) {
+  if (state !== 'running' && state !== 'trained')
+    return Promise.reject(new Error(`no snapshot: run is ${state}`));
+  return new Promise((resolve, reject) => {
+    pendingSnapshots.push({ fn, resolve, reject });
+    if (state === 'trained') drainSnapshots();
+  });
+}
+
+async function drainSnapshots() {
+  while (pendingSnapshots.length) {
+    const { fn, resolve, reject } = pendingSnapshots.shift();
+    if (state !== 'running' && state !== 'trained') {
+      reject(new Error(`run failed before a snapshot: ${failure}`));
+      continue;
+    }
+    const iter = currentIter;
+    try {
+      const out = await wasmCall(fn);
+      if (state !== 'running' && state !== 'trained')
+        reject(new Error(`run failed during a snapshot: ${failure}`));
+      else resolve({ out, iter });
+    } catch (e) {
+      reject(e);
+    }
+  }
 }
 
 async function result(fn) {
@@ -300,6 +341,15 @@ self.onmessage = async (e) => {
     } else if (msg.type === 'exportPly') {
       const bytes = await result(() => training.exportPly(msg.comments || []));
       post({ type: 'ply', bytes }, [bytes.buffer]);
+    } else if (msg.type === 'checkpoint') {
+      const { out, iter } = await snapshot(() => training.exportCheckpoint());
+      post({ type: 'checkpoint', iter, bytes: out }, [out.buffer]);
+    } else if (msg.type === 'previewRender') {
+      const { out, iter } = await snapshot(() => training.renderEval());
+      post(
+        { type: 'previewRender', iter, views: out },
+        out.map((v) => v.data.buffer),
+      );
     } else if (msg.type === 'dispose') {
       if (disposeOk === null) disposeOk = state === 'trained' && !failure;
       if (state === 'running') fail('disposed while training');
