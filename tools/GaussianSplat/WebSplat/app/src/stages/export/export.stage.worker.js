@@ -63,6 +63,9 @@ serveStage(async (msg, api) => {
         rasterizeMode: train.rasterize_mode ?? 'classic',
         targetPolicy: msg.targetPolicy,
         camera,
+        training: train.stopped_early
+          ? { iterations: train.iterations, iterations_planned: train.iterations_planned }
+          : null,
         ply,
         progress: (d, n) => api.progress(d, 2 * n),
         throwIfStopped: () => api.throwIfStopped(),

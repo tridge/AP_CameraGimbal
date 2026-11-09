@@ -92,7 +92,8 @@ const turn = () => new Promise((r) => setTimeout(r, 0));
 
 // Pass 1: the PLY. opts: input (file), dataset (5b dataset.json), frames (stage 2 frames.json),
 // title, description, rasterizeMode, targetPolicy (exportInputs), camera (default: the start
-// camera), ply (sink), chunk,
+// camera), training (an early stop's {iterations, iterations_planned}, recorded in the info as
+// stopped_early), ply (sink), chunk,
 // progress(done, count), throwIfStopped(). Returns {info, count, plySize, input}.
 export async function plyPass(opts) {
   const chunk = opts.chunk ?? CHUNK;
@@ -119,6 +120,7 @@ export async function plyPass(opts) {
   const info = rgb
     ? rgbWebInfo(common)
     : webInfo({ ...common, scale: inputs.scale, hotspot: inputs.hotspot });
+  if (opts.training) info.stopped_early = opts.training;
   const comments = [apcgComment(info)];
   checkComments(comments);
   const names = plyPropertyNames(src.shDegree);

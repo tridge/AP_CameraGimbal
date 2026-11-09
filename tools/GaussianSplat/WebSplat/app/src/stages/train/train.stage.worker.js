@@ -1,12 +1,17 @@
 // Stage 6 worker: training with the Brush fork from stage 5b's dataset (thermal numeric targets,
 // or RGB images through Brush's stock colour path).
-// msg: {prepareDir, selectDir, outDir, pkgURL, options, checkpoint, ckptBase, firstCheckpointGeneration}
+// msg: {prepareDir, selectDir, outDir, pkgURL, options, accept, exportConfig, checkpoint, ckptBase,
+//       firstCheckpointGeneration}
 //   options: {checkpointEvery (iterations, default 5000), previewEvery (default 2000),
 //             growthGradThreshold, meanNoiseWeight, refineEvery}
 // Writes outDir/{train.json, splat.ply, eval/NAME.f32, preview.png} (CONTRACTS.md 6-7); the Brush
 // input directory is built in outDir/brush/ for the attempt and removed before returning.
 // Checkpoints: ckpt-<g>/{params.bin (WSSP raw parameters), state.json}; a resumed attempt starts
 // Brush at the checkpoint's iteration from those parameters (no optimiser moments).
+// Commands (api.onCommand): 'preview' (the current splat as a viewable PLY, preview.js) and
+// 'finish' (stop and accept: training ends at the next batch boundary and the run completes as
+// usual with the iterations done). msg.accept (an accepted stop recorded in the manifest) ends a
+// resumed run at once after the checkpoint, or without one at accept.iteration.
 // The Brush wasm runs in a nested module worker (brush-worker.js): Stop and stage failure
 // terminate it with this worker. Any GPU error, shader error or device loss fails the stage.
 import { serveStage } from '../../workers/runtime.js';
@@ -14,6 +19,7 @@ import { readFile, readJson, remove, writeFile, writeJson } from '../../storage/
 import { RGB_CAP, brushConfig, writeBrushDataset } from './brush-dataset.js';
 import { plyToWssp, wsspHeader, wsspToPly } from './params.js';
 import { apcgComment, trainInfo } from '../export/meta.js';
+import { previewPly } from './preview.js';
 
 export const TRAINER =
   'Brush 1388f74 + WebSplat patches (brush-patches/brush 0001-0016), CubeCL 467522442c7b + 0001';
@@ -89,6 +95,14 @@ serveStage(async (msg, api) => {
       ? Math.min(dataset.training.options.cap, RGB_CAP[msg.env?.gpuClass] ?? RGB_CAP.unknown)
       : null,
   });
+  // stop and accept, recorded before this attempt: right after the checkpoint (Brush may run a
+  // few steps: it reports them in groups), else where asked
+  const stopAt = msg.accept
+    ? msg.checkpoint
+      ? startIter + 1
+      : Math.max(1, msg.accept.iteration ?? 1)
+    : null;
+  if (stopAt != null) api.log(`stopping early at iteration ${stopAt} (accepted)`);
   const datasetMs = performance.now() - t0;
   api.progress(startIter, total, { gaussians: null });
   api.phase('compile');
@@ -102,6 +116,40 @@ serveStage(async (msg, api) => {
   let gaussians = null;
   let trainMs = null;
   let checkpoints = 0;
+  let doneIter = total;
+  let trainingStarted = false;
+  let finishing = false;
+  let snapshotId = 0;
+  const snapshots = new Map();
+  api.onCommand = async (name) => {
+    if (name === 'finish') {
+      if (!trainingStarted) throw new Error('training has not started yet');
+      if (!finishing) worker.postMessage({ type: 'finish' });
+      finishing = true;
+      return { value: { requested: true } };
+    }
+    if (name === 'preview') {
+      if (!trainingStarted) throw new Error('training has not started yet');
+      const id = ++snapshotId;
+      const snap = await new Promise((res, rej) => {
+        snapshots.set(id, { res, rej });
+        worker.postMessage({ type: 'snapshotPly', id });
+      });
+      const p = await previewPly({
+        splat: snap.bytes,
+        dataset,
+        frames,
+        view: msg.exportConfig?.view ?? null,
+        targetPolicy: msg.exportConfig?.target ?? null,
+        title: `${msg.exportConfig?.title ?? (rgb ? 'RGB splat' : 'Thermal splat')} (training preview)`,
+      });
+      return {
+        value: { bytes: p.bytes, iteration: snap.iter, total, gaussians: p.count },
+        transfer: [p.bytes.buffer],
+      };
+    }
+    throw new Error(`unknown command ${name}`);
+  };
   // RGB: Brush's eval renders return channel 0 only, so the preview is the red channel in grey
   const previewView = dataset.images.find((im) => im.split === 'test' && (rgb || im.hot))?.name;
   const evalViews = dataset.images.filter((im) => im.split === 'test').map((im) => im.name);
@@ -112,6 +160,8 @@ serveStage(async (msg, api) => {
         if (finished) return;
         finished = true;
         clearInterval(poll);
+        for (const s of snapshots.values()) s.rej(e);
+        snapshots.clear();
         reject(e);
       };
       const poll = setInterval(() => api.stopped && fail(stopped()), 250);
@@ -128,7 +178,10 @@ serveStage(async (msg, api) => {
           if (m.type === 'progress' || m.type === 'refine') {
             if (m.splats != null) gaussians = m.splats;
             if (m.type === 'refine') return;
-            if (m.iter > startIter) api.phase('train');
+            if (m.iter > startIter) {
+              trainingStarted = true;
+              api.phase('train');
+            }
             api.progress(m.iter, total, { gaussians });
             if (!busy && m.iter < total && m.iter >= nextCkpt) {
               busy = true;
@@ -161,6 +214,10 @@ serveStage(async (msg, api) => {
             checkpoints++;
             api.phase('train');
             busy = false;
+          } else if (m.type === 'snapshotPly') {
+            const s = snapshots.get(m.id);
+            snapshots.delete(m.id);
+            s?.res(m);
           } else if (m.type === 'previewRender') {
             const v = m.views.find((x) => x.name === previewView);
             if (v) {
@@ -179,7 +236,11 @@ serveStage(async (msg, api) => {
           } else if (m.type === 'done') {
             trainMs = m.elapsedMs;
             gaussians = m.splats;
-            api.progress(total, total, { gaussians });
+            doneIter = m.iter;
+            trainingStarted = false; // no more snapshots: the run moves on to its results
+            if (doneIter < total)
+              api.log(`training stopped early at iteration ${doneIter} of ${total}`);
+            api.progress(doneIter, total, { gaussians });
             api.phase('eval');
             const wait = () =>
               new Promise((r) => {
@@ -238,6 +299,7 @@ serveStage(async (msg, api) => {
         dataset: ['websplat', ...brushDir.split('/').filter(Boolean)],
         config,
         stepsPerMessage: 50,
+        stopAt,
         testFault: msg.env?.testFault?.train ?? null,
       });
     }).then(async () => {
@@ -250,7 +312,8 @@ serveStage(async (msg, api) => {
         gaussians,
         sh_degree: dataset.training.options.sh_degree,
         rasterize_mode: 'classic',
-        iterations: total,
+        iterations: doneIter,
+        ...(doneIter < total ? { iterations_planned: total, stopped_early: true } : {}),
         eval: { dir: 'eval', views: evalViews },
         standin: false,
         trainer: TRAINER,
@@ -260,7 +323,9 @@ serveStage(async (msg, api) => {
       await writeJson(`${msg.outDir}/train.json`, train);
       return {
         gaussians,
-        iterations: total,
+        iterations: doneIter,
+        iterations_planned: total,
+        stopped_early: doneIter < total,
         resumed_from: resumed.map((r) => r.iteration),
         train_seconds: trainMs != null ? trainMs / 1000 : null,
         dataset_seconds: datasetMs / 1000,

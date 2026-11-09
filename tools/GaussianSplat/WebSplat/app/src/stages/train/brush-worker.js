@@ -8,11 +8,13 @@
 // is posted, resources are released once no wasm call is outstanding, and no result is served.
 //
 // in:  {type: 'start', pkg, dataset: [OPFS directory names], config: {kebab-case Brush options},
-//       stepsPerMessage, captureShaders, traceBuffers, stressCleanup, tasksPerSubmit}
+//       stepsPerMessage, stopAt, captureShaders, traceBuffers, stressCleanup, tasksPerSubmit}
 //      {type: 'renderEval'}  {type: 'exportPly', comments: [..]}  {type: 'dispose'}
-//      while training or trained: {type: 'checkpoint'} (raw parameters, PLY bytes) and
-//      {type: 'previewRender'} (eval-view renders), served at the next batch boundary; iter is the
-//      step whose parameters they hold
+//      while training or trained: {type: 'checkpoint'} (raw parameters, PLY bytes),
+//      {type: 'previewRender'} (eval-view renders) and {type: 'snapshotPly', id} (exportPly's bytes),
+//      served at the next batch boundary; iter is the step whose parameters they hold
+//      {type: 'finish'}: end training early at the next batch boundary (as stopAt)
+//   stopAt: end training once this iteration is reached ('done' then carries iter < total)
 // out: {type: 'device', adapter, features}  {type: 'dataset', train, eval}
 //      {type: 'progress', iter, total, elapsedMs, splats, buffers (traceBuffers)}
 //      {type: 'refine', iter, splats}  {type: 'eval', iter, psnr}  {type: 'warning', text}
@@ -20,6 +22,7 @@
 //      {type: 'shader', label, code} (captureShaders)
 //      {type: 'done', iter, elapsedMs, splats}  {type: 'evalRenders', views}  {type: 'ply', bytes}
 //      {type: 'checkpoint', iter, bytes}  {type: 'previewRender', iter, views}
+//      {type: 'snapshotPly', id, iter, bytes}
 //      {type: 'failure', reason}: the run has failed (sent at once; 'failed' follows when idle)
 //      {type: 'failed', reason, gpuErrors, shaderErrors}  {type: 'error', message}
 //      {type: 'disposed', ok, reason, gpuErrors, shaderErrors}
@@ -33,6 +36,7 @@ let device = null;
 let gpuErrors = 0;
 let shaderErrors = 0;
 let currentIter = 0;
+let stopAt = null; // finish early once training reaches this iteration
 const post = (m, transfer) => self.postMessage(m, transfer || []);
 
 Error.stackTraceLimit = 100; // full Rust panic stacks
@@ -218,7 +222,10 @@ async function start(msg) {
   const dir = await openDir(msg.dataset);
   const total = msg.config['total-train-iters'];
   training = app.startTrainingFromDirectory(dir, async (cfg) => ({ ...cfg, ...msg.config }));
+  const startIter = msg.config['start-iter'] ?? 0;
+  if (msg.stopAt != null) stopAt = msg.stopAt;
   let iter = 0;
+  const early = () => stopAt != null && iter >= stopAt && iter < total;
   let elapsedMs = 0;
   const splatCount = () => {
     // a snapshot holds the splat tensors' GPU buffers until freed
@@ -228,7 +235,11 @@ async function start(msg) {
     return n;
   };
   while (state === 'running') {
-    const msgs = await wasmCall(() => training.trainSteps(msg.stepsPerMessage || 100));
+    const per = msg.stepsPerMessage || 100;
+    // a batch ends at stopAt, so an early finish lands on it
+    const steps =
+      stopAt != null ? Math.max(1, Math.min(per, stopAt - Math.max(iter, startIter))) : per;
+    const msgs = await wasmCall(() => training.trainSteps(steps));
     if (!msgs.length) break;
     for (const m of msgs) {
       const kind = kinds[m.kind];
@@ -268,9 +279,9 @@ async function start(msg) {
           }
         : {}),
     });
-    if (iter >= total) break;
+    if (iter >= total || early()) break;
   }
-  if (state === 'running' && iter < total)
+  if (state === 'running' && iter < total && !early())
     fail(`training stream ended at iteration ${iter} of ${total}`);
   if (state === 'running') {
     // let errors from the last submitted work arrive before declaring success
@@ -363,6 +374,11 @@ self.onmessage = async (e) => {
     } else if (msg.type === 'checkpoint') {
       const { out, iter } = await snapshot(() => training.exportCheckpoint());
       post({ type: 'checkpoint', iter, bytes: out }, [out.buffer]);
+    } else if (msg.type === 'snapshotPly') {
+      const { out, iter } = await snapshot(() => training.exportPly([]));
+      post({ type: 'snapshotPly', id: msg.id, iter, bytes: out }, [out.buffer]);
+    } else if (msg.type === 'finish') {
+      if (state === 'running') stopAt = currentIter;
     } else if (msg.type === 'previewRender') {
       const { out, iter } = await snapshot(() => training.renderEval());
       post(

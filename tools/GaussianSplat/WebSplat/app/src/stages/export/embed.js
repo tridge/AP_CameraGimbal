@@ -5,6 +5,7 @@
 //   const v = embedViewer(container, 'vendor/splat-viewer/index.html');
 //   await v.open(files['splat.ply'], 'splat.ply');      // metadata from the PLY header
 //   await v.open(files['splat.spz'], 'splat.spz', meta); // SPZ needs meta.json
+//   v.dispose();   // removes the iframe; an open still waiting rejects
 
 export function embedViewer(container, viewerUrl) {
   const iframe = document.createElement('iframe');
@@ -15,8 +16,12 @@ export function embedViewer(container, viewerUrl) {
   iframe.className = 'splat-viewer';
   const origin = url.origin;
   let pending = null;
+  let disposed = null; // rejects whatever is still waiting
+  const gone = new Promise((_, reject) => (disposed = reject));
+  gone.catch(() => {});
+  let onMessage = null;
   const ready = new Promise((resolve) => {
-    const onMessage = (e) => {
+    onMessage = (e) => {
       if (e.source !== iframe.contentWindow || e.origin !== origin) return;
       if (e.data?.type === 'apcg-splat-ready') resolve();
       else if (e.data?.type === 'apcg-splat-opened' && pending) {
@@ -35,11 +40,19 @@ export function embedViewer(container, viewerUrl) {
     // bytes: a buffer (copied, so the caller keeps it) or a Blob / File (e.g. from OPFS: the
     // viewer reads it)
     async open(bytes, name, meta = null) {
-      await ready;
+      await Promise.race([ready, gone]);
       if (pending) throw new Error('the viewer is still opening a splat');
       const done = new Promise((resolve, reject) => (pending = { resolve, reject }));
       iframe.contentWindow.postMessage({ type: 'apcg-splat-open', bytes, name, meta }, origin);
       return done;
+    },
+    dispose() {
+      window.removeEventListener('message', onMessage);
+      iframe.remove();
+      const err = new Error('the viewer was closed');
+      pending?.reject(err);
+      pending = null;
+      disposed(err);
     },
   };
 }

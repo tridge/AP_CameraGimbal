@@ -36,6 +36,7 @@ import {
 import { renderStages } from './ui/stage-list.js';
 import { RGB_MAX_FEATURES } from './stages/features/sift.js';
 import { showResult } from './ui/result.js';
+import { trainActions } from './ui/train-actions.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -77,6 +78,7 @@ function showDevice(d) {
 
 let controller = null;
 let job = null;
+let actions = null;
 let wakeLock = null;
 
 async function wake(on) {
@@ -140,6 +142,7 @@ function update() {
       ? 'Resume'
       : 'Start';
     $('stop').disabled = !snap.running;
+    actions?.update(snap);
     showRequestSummary();
   }, 100);
 }
@@ -664,6 +667,10 @@ async function main() {
     saveManifest,
   };
   api.verify = () => verifyJob(job.id);
+  if (set.stages.some((d) => d.id === 'train') && !config.standin?.train)
+    actions = trainActions({ controller, job, resume: () => start(), log });
+  api.trainPreview = () => actions?.preview();
+  api.acceptTraining = () => controller.acceptEarly('train');
   $('job').hidden = false;
   $('stages-panel').hidden = false;
   $('start').onclick = () => start();

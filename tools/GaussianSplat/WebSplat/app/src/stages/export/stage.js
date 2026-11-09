@@ -55,6 +55,7 @@ export const exportStage = defineStage({
       temperatureC: s ? [s.t0_c, s.t1_c] : null,
       displayRangeC: ply.info.display_range_c ?? null,
       rasterizeMode: ply.info.rasterize_mode,
+      stoppedEarly: ply.info.stopped_early ?? null, // {iterations, iterations_planned}
       files: { 'splat.ply': ply.plySize, 'splat.spz': fin.spzSize, 'meta.json': fin.metaSize },
       spz: fin.spz,
       timesMs: { ply: t1 - t0, spz: t2 - t1 },

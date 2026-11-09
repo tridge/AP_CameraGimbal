@@ -2,7 +2,9 @@
 //   {type:'progress', done, total?, extra?}  {type:'phase', phase, kind?}  {type:'log', level, text}
 //   {type:'checkpoint-begin'}  {type:'checkpoint', id, generation, info}   (files already written)
 //   {type:'result', value}  {type:'error', name, message, stack}
-// host -> worker: {type:'start', ...msg}, {type:'stop'}, {type:'ack', id, error?}
+//   {type:'reply', id, value?, error?}                                     (answer to a command)
+// host -> worker: {type:'start', ...msg}, {type:'stop'}, {type:'ack', id, error?},
+//   {type:'command', id, name, data}   (opts.channel.request(name, data): a promise of the reply)
 // The returned promise settles only after every pending handler (checkpoint publication) has
 // finished, so nothing from this run is still in flight when the caller moves on.
 export class StageAborted extends Error {
@@ -22,15 +24,28 @@ export class WorkerError extends Error {
 export function runWorker(
   factory,
   msg,
-  { signal, handlers = {}, transfer = [], stopGraceMs = 3000 } = {},
+  { signal, handlers = {}, transfer = [], stopGraceMs = 3000, channel = null } = {},
 ) {
   return new Promise((resolve, reject) => {
     let worker = null;
     let settled = false;
     const pending = new Set();
+    const replies = new Map();
+    let nextId = 1;
+    if (channel)
+      channel.request = (name, data) =>
+        new Promise((res, rej) => {
+          if (settled || !worker) return rej(new Error('the stage is not running'));
+          const id = nextId++;
+          replies.set(id, { res, rej });
+          worker.postMessage({ type: 'command', id, name, data });
+        });
     const finish = (fn, v) => {
       if (settled) return;
       settled = true;
+      if (channel) channel.request = null;
+      for (const r of replies.values()) r.rej(new Error('the stage ended'));
+      replies.clear();
       signal?.removeEventListener('abort', onAbort);
       worker?.terminate();
       Promise.allSettled([...pending]).then(() => fn(v));
@@ -71,6 +86,13 @@ export function runWorker(
                 .catch((e) => finish(reject, e));
               pending.add(p);
               p.finally(() => pending.delete(p));
+              return;
+            }
+            case 'reply': {
+              const r = replies.get(m.id);
+              replies.delete(m.id);
+              if (m.error) r?.rej(new Error(m.error));
+              else r?.res(m.value);
               return;
             }
             case 'result':

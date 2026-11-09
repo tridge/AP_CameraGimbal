@@ -1,7 +1,7 @@
 // Stage 6 definition (pipeline/registry.js): thermal training with the Brush fork (WebGPU,
 // brush-worker.js) from stage 5b's dataset, train.py's rules enforced as notes/stage6.md lists.
 // config.train: {checkpointEvery, previewEvery, growthGradThreshold, meanNoiseWeight,
-// refineEvery} (train.stage.worker.js).
+// refineEvery} (train.stage.worker.js). ctx.accept: an accepted early stop (controller.acceptEarly).
 import { defineStage } from '../../pipeline/registry.js';
 import { assetURL } from '../../asset-url.js';
 
@@ -58,6 +58,9 @@ export const trainStage = defineStage({
         selectDir: ctx.input('select').dir,
         pkgURL: brushURL(),
         options: ctx.config.train ?? {},
+        accept: ctx.accept ?? null,
+        // for previews (start view, target, title); not part of the stage's output
+        exportConfig: ctx.config.export ?? null,
       },
     ),
 });
