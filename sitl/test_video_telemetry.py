@@ -5,6 +5,7 @@ import json
 import math
 import os
 import pathlib
+import random
 import re
 import socket
 import struct
@@ -27,10 +28,32 @@ M = mavutil.mavlink
 LAT = -353632610
 
 
+_issued = set()
+
+
+def _ephemeral_start():
+    try:
+        return int(pathlib.Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 32768
+
+
 def port(kind=socket.SOCK_STREAM):
-    with socket.socket(socket.AF_INET, kind) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    """A free localhost port below the kernel's ephemeral range, so outgoing connections cannot
+    take it before the simulator binds it; never the same port twice in one run."""
+    for _ in range(1000):
+        candidate = random.randrange(20000, _ephemeral_start())
+        if candidate in _issued:
+            continue
+        try:
+            for k in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+                with socket.socket(socket.AF_INET, k) as sock:
+                    sock.bind(("127.0.0.1", candidate))
+        except OSError:
+            continue
+        _issued.add(candidate)
+        return candidate
+    raise RuntimeError("no free localhost port")
 
 
 def stop(process):
@@ -43,10 +66,12 @@ def stop(process):
             process.wait(timeout=5)
 
 
-def ready(path, process):
+def ready(path, process, log=None):
     until = time.monotonic() + 10
     while not path.exists():
-        assert process.poll() is None, process.returncode
+        if process.poll() is not None:
+            tail = "".join(pathlib.Path(log).read_text(errors="replace").splitlines(True)[-40:]) if log else ""
+            raise AssertionError(f"exited with {process.returncode} before {path.name}" + (f"; {log}:\n{tail}" if tail else ""))
         assert time.monotonic() < until, path
         time.sleep(0.02)
 
@@ -237,9 +262,9 @@ def main():
         try:
             gimbal = subprocess.Popen([sys.executable, str(REPO / "sitl/gimbal_sim.py"), "--backend", args.backend,
                                        "--port", str(gimbal_port), "--ready-file", str(gimbal_ready)], stdout=glog, stderr=subprocess.STDOUT)
-            ready(gimbal_ready, gimbal)
+            ready(gimbal_ready, gimbal, directory / "gimbal.log")
             camera = subprocess.Popen([str(build / "camera-app"), "--backend", args.backend], env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(camera_ready, camera)
+            ready(camera_ready, camera, directory / "camera.log")
             client = RTSP(rtsp_port, "video1")
             try:
                 for _, record in client.frames(3, args.codec):
