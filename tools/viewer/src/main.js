@@ -6,6 +6,14 @@ import { ProjectionScheduler } from './ui/projection-scheduler.js';
 import { projectionPose } from './domain/projection-pose.js';
 import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
+import {
+  downloadFile,
+  handOver,
+  parseRemoteUrl,
+  remoteName,
+  VIDEO_EXTENSIONS,
+  LOG_EXTENSIONS,
+} from './media/remote-file.js';
 import { FrameDecoder } from './media/native-decoder.js';
 import { selectLogAt } from './domain/flight-log.js';
 import { ReviewMap } from './map/map-view.js';
@@ -131,11 +139,20 @@ function terrainChanged() {
     if (state.log) refreshLog(true);
   }, 60);
 }
-function error(value) {
-  const message = value?.message || String(value);
-  $('error-text').textContent = message;
-  $('error-banner').hidden = false;
+// errors are kept per source so a log failure survives the video opening, and vice versa
+const errors = new Map();
+function showErrors() {
+  $('error-text').textContent = [...errors.values()].join('\n');
+  $('error-banner').hidden = !errors.size;
+}
+function error(value, source = 'video') {
+  errors.set(source, value?.message || String(value));
+  showErrors();
   console.error(value);
+}
+function clearErrors(keep = null) {
+  for (const source of errors.keys()) if (source !== keep) errors.delete(source);
+  showErrors();
 }
 function status(text) {
   $('status').textContent = text;
@@ -471,7 +488,7 @@ async function openVideo(file) {
   $('video-info').disabled = false;
   queueVideoInformation();
   $('video-format').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 0% · 0 frames`;
-  $('error-banner').hidden = true;
+  clearErrors('log');
   for (const id of ['seek', 'previous', 'next', 'play', 'mark-finding', 'scan-peaks'])
     $(id).disabled = true;
   const saved = storage.get(fileKey(), {});
@@ -1364,6 +1381,8 @@ function loadLog(file) {
   state.logWorker?.terminate();
   const worker = new Worker(new URL('./domain/log.worker.js', import.meta.url), { type: 'module' });
   state.logWorker = worker;
+  errors.delete('log');
+  showErrors();
   status(`Reading ${file.name} locally…`);
   worker.onmessage = ({ data }) => {
     if (worker !== state.logWorker) return;
@@ -1383,27 +1402,107 @@ function loadLog(file) {
       state.logWorker = null;
     }
     if (data.type === 'error') {
-      error(data.message);
+      error(data.message, 'log');
       worker.terminate();
       state.logWorker = null;
     }
   };
   worker.onerror = (e) => {
-    if (worker === state.logWorker) error(new Error(e.message));
+    if (worker === state.logWorker) error(new Error(e.message), 'log');
   };
   worker.postMessage({ file });
+}
+// ?url= video and ?log= flight log downloads; a newer open of the same kind replaces them.
+// pending: the in-flight download; owned: the release of the open downloaded copy.
+const pending = { video: null, log: null },
+  owned = { video: {}, log: {} };
+function cancelDownload(kind) {
+  pending[kind]?.abort();
+  pending[kind] = null;
+}
+function releaseOwned(kind) {
+  owned[kind].release?.();
+  owned[kind].release = null;
+}
+function downloadRow(name, url, cancel) {
+  const row = document.createElement('div'),
+    title = document.createElement('strong'),
+    bar = document.createElement('progress'),
+    text = document.createElement('span'),
+    button = document.createElement('button');
+  row.className = 'download';
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', `Download ${name}`);
+  title.textContent = `Downloading ${name}`;
+  title.title = url.href;
+  bar.max = 1;
+  text.className = 'muted';
+  text.textContent = `Connecting to ${url.host}…`;
+  button.textContent = 'Cancel';
+  button.onclick = cancel;
+  row.append(title, button, bar, text);
+  $('downloads').append(row);
+  return { row, bar, text };
+}
+async function openUrl(kind, href) {
+  const video = kind === 'video';
+  let url;
+  try {
+    url = parseRemoteUrl(href, location.href);
+  } catch (e) {
+    error(e, kind);
+    return;
+  }
+  cancelDownload(kind);
+  const controller = new AbortController();
+  pending[kind] = controller;
+  // a superseded download must not touch the status, errors or the open file
+  const current = () => pending[kind] === controller && !controller.signal.aborted;
+  const name = remoteName(url),
+    ui = downloadRow(name, url, () => controller.abort());
+  status(`Downloading ${name}…`);
+  try {
+    const { file, release } = await downloadFile(url, {
+      extensions: video ? VIDEO_EXTENSIONS : LOG_EXTENSIONS,
+      kind: video ? 'video' : 'flight log',
+      signal: controller.signal,
+      onProgress: (text, fraction) => {
+        if (!current()) return;
+        if (fraction === null) ui.bar.removeAttribute('value');
+        else ui.bar.value = fraction;
+        ui.text.textContent = text;
+        status(`Downloading ${name} · ${text}`);
+      },
+    });
+    if (!current()) return release();
+    pending[kind] = null;
+    await handOver(owned[kind], { file, release }, video ? openVideo : loadLog).catch((e) =>
+      error(e, kind),
+    );
+  } catch (e) {
+    if (pending[kind] !== controller) return; // superseded
+    pending[kind] = null;
+    if (e?.name === 'AbortError') status(`Download of ${name} cancelled`);
+    else error(e, kind);
+  } finally {
+    ui.row.remove();
+  }
 }
 $('open-video').onclick = $('empty-open').onclick = () => $('video-file').click();
 $('video-file').onchange = (e) => {
   const file = e.target.files[0];
   e.target.value = '';
+  if (file) cancelDownload('video');
   openVideo(file).catch(error);
+  if (file) releaseOwned('video');
 };
 $('open-log').onclick = () => $('log-file').click();
 $('log-file').onchange = (e) => {
   const file = e.target.files[0];
   e.target.value = '';
+  if (file) cancelDownload('log');
   loadLog(file);
+  if (file) releaseOwned('log');
 };
 $('play').onclick = play;
 $('previous').onclick = () => {
@@ -1530,7 +1629,7 @@ $('map-project-video').onchange = (e) => {
 $('map-center').onclick = () => map?.centerCurrent();
 $('map-zoom-in').onclick = () => map?.zoom(true);
 $('map-zoom-out').onclick = () => map?.zoom(false);
-$('dismiss-error').onclick = () => ($('error-banner').hidden = true);
+$('dismiss-error').onclick = () => clearErrors();
 $('video-info').onclick = () => {
   pause();
   refreshVideoInformation();
@@ -1664,7 +1763,10 @@ $('export-geojson').onclick = () => exportFindings(true);
 $('video-stage').ondragover = (e) => e.preventDefault();
 $('video-stage').ondrop = (e) => {
   e.preventDefault();
-  openVideo(e.dataTransfer.files[0]).catch(error);
+  const file = e.dataTransfer.files[0];
+  if (file) cancelDownload('video');
+  openVideo(file).catch(error);
+  if (file) releaseOwned('video');
 };
 document.addEventListener('keydown', (e) => {
   if (
@@ -1720,6 +1822,7 @@ window.fireViewer = {
   thermalAnalysis: thermalWorkbench,
   videoViewport,
   openVideo,
+  openUrl,
   showFrame,
   loadLog,
   markFinding,
@@ -1731,3 +1834,6 @@ window.fireViewer = {
     return alignedRecord();
   },
 };
+const params = new URLSearchParams(location.search);
+if (params.get('url')) openUrl('video', params.get('url'));
+if (params.get('log')) openUrl('log', params.get('log'));
