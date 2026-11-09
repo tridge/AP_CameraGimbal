@@ -178,9 +178,9 @@ def main():
         try:
             gimbal = subprocess.Popen([sys.executable, str(REPO/'sitl/gimbal_sim.py'), '--backend', 'mt11',
                 '--port',str(gp),'--ready-file',str(root/'gimbal.ready')],stdout=glog,stderr=subprocess.STDOUT)
-            ready(root/'gimbal.ready',gimbal)
+            ready(root/'gimbal.ready',gimbal,root/'gimbal.log')
             camera = subprocess.Popen([str(args.build.resolve()/'camera-app')],env=env,stdout=clog,stderr=subprocess.STDOUT)
-            ready(root/'camera.ready',camera)
+            ready(root/'camera.ready',camera,root/'camera.log')
             link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mp}',source_system=255,source_component=190)
             M = mavutil.mavlink
             def feed():

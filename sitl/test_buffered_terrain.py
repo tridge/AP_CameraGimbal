@@ -64,7 +64,7 @@ def main():
                 ready(gimbal_ready, gimbal)
                 camera = subprocess.Popen([str(args.build.resolve() / 'camera-app')], env=env,
                                           stdout=log, stderr=subprocess.STDOUT)
-                ready(camera_ready, camera)
+                ready(camera_ready, camera, root / 'camera.log')
                 client = RTSP(rtsp_port, 'video1')
                 times = [time.monotonic() for _ in client.frames(80, 'h264')]
                 intervals = [b-a for a,b in zip(times[5:], times[6:])]

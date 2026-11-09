@@ -82,10 +82,10 @@ def run_case(args, directory, fixture, mode, system_id):
             gimbal = subprocess.Popen([sys.executable, str(REPO / 'sitl/gimbal_sim.py'),
                 '--backend', args.backend, '--port', str(gimbal_port),
                 '--ready-file', str(gimbal_ready)], stdout=glog, stderr=subprocess.STDOUT)
-            ready(gimbal_ready, gimbal)
+            ready(gimbal_ready, gimbal, directory / 'gimbal.log')
             camera = subprocess.Popen([str(args.build / 'camera-app'), '--backend', args.backend],
                                        env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(camera_ready, camera)
+            ready(camera_ready, camera, directory / 'camera.log')
             link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}',
                                               source_system=255, source_component=190)
             if mode == 'while_armed':

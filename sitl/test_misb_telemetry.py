@@ -323,9 +323,9 @@ def run(backend, directory, codec, mavproxy=None):
         try:
             gimbal = subprocess.Popen([sys.executable, str(ROOT/'sitl/gimbal_sim.py'), '--backend', backend,
                 '--port', str(gport), '--ready-file', str(gim_ready)], stdout=glog, stderr=subprocess.STDOUT)
-            ready(gim_ready, gimbal)
+            ready(gim_ready, gimbal, directory/'gimbal.log')
             camera = subprocess.Popen([str(build/'camera-app'), '--backend', backend], env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(cam_ready, camera)
+            ready(cam_ready, camera, directory/'camera.log')
             link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mport}', source_system=42, source_component=1)
             def send():
                 while not done.is_set():
@@ -409,7 +409,7 @@ def run(backend, directory, codec, mavproxy=None):
             stop(camera)
             cam_ready.unlink(missing_ok=True)
             camera = subprocess.Popen([str(build/'camera-app'), '--backend', backend], env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(cam_ready, camera)
+            ready(cam_ready, camera, directory/'camera.log')
             with socket.create_connection(('127.0.0.1', rport), timeout=5) as sock:
                 sock.settimeout(.5)
                 sock.sendall(f'DESCRIBE rtsp://127.0.0.1:{rport}/video1.misb RTSP/1.0\r\nCSeq: 1\r\n\r\n'.encode())
