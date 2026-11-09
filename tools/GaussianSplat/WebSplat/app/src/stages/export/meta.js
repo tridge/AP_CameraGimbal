@@ -44,10 +44,11 @@ const norm = (a) => Math.sqrt(dot(a, a));
 
 // export_web.py start_camera: the middle hot view (else the middle view) from cam_from_world
 // viewmats [4x4 row-major]; looking nearly straight down, an oblique view from the same side
-export function startCamera({ viewmats, names, hot = [], K, height }, target) {
+// view: the index of the view to start from (default export_web.py's choice)
+export function startCamera({ viewmats, names, hot = [], K, height }, target, view = null) {
   const hotSet = new Set(hot);
   const hotIds = names.map((n, i) => (hotSet.has(n) ? i : -1)).filter((i) => i >= 0);
-  const i = hotIds.length ? hotIds[hotIds.length >> 1] : viewmats.length >> 1;
+  const i = view ?? (hotIds.length ? hotIds[hotIds.length >> 1] : viewmats.length >> 1);
   const m = viewmats[i].flat();
   // c2w = inverse(viewmat): R^T, -R^T t
   const R = [0, 1, 2].map((r) => [m[4 * r], m[4 * r + 1], m[4 * r + 2]]);
@@ -78,6 +79,24 @@ export function startCamera({ viewmats, names, hot = [], K, height }, target) {
 // how the splat was trained: 'classic' (gsplat default, train.py; Brush's export renders as gsplat
 // classic) adds the 0.3 px^2 blur without opacity compensation; the viewer renders it that way
 export const RASTERIZE_MODE = 'classic';
+
+// the result view's start (stage 7): the hot view whose recorded frame maximum is highest, the
+// one where the hot source was seen best (frameMax: name -> maximum_c from frames.json); null
+// (export_web.py's middle hot view) without hot views or frame maxima
+export function hottestView({ names, hot = [] }, frameMax) {
+  if (!frameMax) return null;
+  let best = null;
+  for (const n of hot) {
+    const i = names.indexOf(n);
+    if (
+      i >= 0 &&
+      Number.isFinite(frameMax[n]) &&
+      (best === null || frameMax[n] > frameMax[names[best]])
+    )
+      best = i;
+  }
+  return best;
+}
 
 // train.py save_ply header info
 export function trainInfo({ target, scale, origin, rasterizeMode = RASTERIZE_MODE }) {

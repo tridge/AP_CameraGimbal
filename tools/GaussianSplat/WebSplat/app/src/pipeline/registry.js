@@ -27,7 +27,8 @@ export function defineStage(def) {
 
 const sets = new Map();
 
-export function registerStageSet(name, stages, { title = name } = {}) {
+// source: false for a set that works without a recording (the page gives it a placeholder source)
+export function registerStageSet(name, stages, { title = name, source = true } = {}) {
   const ids = new Set();
   for (const s of stages) {
     if (ids.has(s.id)) throw new Error(`duplicate stage ${s.id}`);
@@ -37,7 +38,7 @@ export function registerStageSet(name, stages, { title = name } = {}) {
     }
     ids.add(s.id);
   }
-  sets.set(name, { name, title, stages });
+  sets.set(name, { name, title, stages, source });
 }
 
 export const stageSet = (name) => sets.get(name);

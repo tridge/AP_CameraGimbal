@@ -7,8 +7,16 @@ import { Job, jobDir } from './storage/job.js';
 import { JobLockedError } from './storage/lock.js';
 import { ManifestError, loadManifest, saveManifest } from './storage/manifest.js';
 import { hashBlob, hashJson } from './storage/hash.js';
-import { list, readFile, requestPersistence, storageInfo, writeFile } from './storage/opfs.js';
+import {
+  exists,
+  list,
+  readFile,
+  requestPersistence,
+  storageInfo,
+  writeFile,
+} from './storage/opfs.js';
 import { renderStages } from './ui/stage-list.js';
+import { showResult } from './ui/result.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -112,10 +120,15 @@ async function start() {
   showStorage();
   wake(true);
   log('started');
+  await checkInputs();
   await controller.start();
-  while (controller.needs === 'select') {
-    const proposal = controller.results().ingest?.proposal;
-    job.manifest.config.select = await confirmProposal(proposal);
+  for (;;) {
+    if (controller.needs === 'select') {
+      const proposal = controller.results().ingest?.proposal;
+      job.manifest.config.select = await confirmProposal(proposal);
+    } else if (controller.needs === 'train') {
+      await chooseTrained();
+    } else break;
     await job.save();
     await controller.start();
   }
@@ -127,6 +140,53 @@ async function start() {
   else if (snap.stages.every((s) => s.state === 'done')) log('all stages done');
   else log('stopped');
   showStorage();
+  await result();
+}
+
+// the result view once the export stage is done
+async function result() {
+  const r = job.manifest.stages?.export;
+  if (r?.state !== 'done') return;
+  const res = await showResult($('result'), r, controller.snapshot(), job.manifest.stages?.map);
+  api.result = {
+    meta: res.meta,
+    sizes: Object.fromEntries(Object.entries(res.files).map(([k, f]) => [k, f.size])),
+  };
+  await res.opened;
+  api.result.opened = true;
+}
+
+// stand-in inputs the page copied into storage must still be there; a missing one is asked for
+// again (the train stand-in then waits for a file)
+async function checkInputs() {
+  const st = job.manifest.config.standin ?? {};
+  for (const [id, v] of Object.entries(st)) {
+    if (job.manifest.stages?.[id]?.state === 'done') continue; // loaded already
+    const urls = Object.values(v.files ?? {}).filter((u) => u.startsWith('opfs:'));
+    for (const u of urls) {
+      if (await exists(u.slice(5))) continue;
+      log(`${id}: ${u.slice(5)} is no longer in browser storage; choose it again`, 'warn');
+      delete st[id];
+      await job.save();
+      break;
+    }
+  }
+}
+
+// stage 6 stand-in: a trained splat chosen by the user, copied into the job's storage
+async function chooseTrained() {
+  $('trained').hidden = false;
+  const file = await new Promise(
+    (r) => ($('trained-file').onchange = () => r($('trained-file').files[0])),
+  );
+  const name = file.name.endsWith('.bin') ? 'params.bin' : 'splat.ply';
+  log(`copying ${file.name} into browser storage`);
+  // under source/, which recovery keeps (stage directories lose unpublished files)
+  const path = `${job.dir}/source/inputs/${name}`;
+  await writeFile(path, file);
+  const config = job.manifest.config;
+  config.standin = { ...config.standin, train: { files: { [name]: `opfs:${path}` } } };
+  $('trained').hidden = true;
 }
 
 const DUMMY_SOURCE = {
@@ -254,6 +314,7 @@ async function main() {
 
   const name = params.get('pipeline') ?? (device.ok ? 'thermal' : 'dummy');
   const set = stageSet(name);
+  const noSource = name === 'dummy' || set?.source === false;
   for (const s of stageSets())
     $('pipeline').add(new Option(s.title, s.name, false, s.name === name));
   $('pipeline').onchange = () => {
@@ -261,7 +322,8 @@ async function main() {
     params.delete('job');
     location.search = params.toString();
   };
-  if (!set || (!device.ok && name !== 'dummy')) {
+  // the export-test set needs no WebGPU (the viewer is WebGL)
+  if (!set || (!device.ok && !noSource)) {
     api.ready = true;
     return;
   }
@@ -273,6 +335,11 @@ async function main() {
         source: DUMMY_SOURCE,
         config: { dummySeed: num('seed', 0) },
       });
+    } else if (noSource) {
+      job = await Job.open(params.get('job') ?? name, {
+        source: { ...DUMMY_SOURCE, name, hash: `sha256:${name}` },
+        config: {},
+      });
     } else if (params.get('job') ?? localStorage.getItem(remembered)) {
       job = await Job.open(params.get('job') ?? localStorage.getItem(remembered));
       if (job.missing) {
@@ -283,7 +350,7 @@ async function main() {
     if (!job) {
       api.ready = true; // waiting for a file
       ({ job, file: sourceFile } = await chooseSource(name));
-    } else if (name !== 'dummy') {
+    } else if (!noSource) {
       api.ready = true;
       sourceFile = await sourceFor(job);
     }
@@ -309,11 +376,24 @@ async function main() {
     return;
   }
   api.ready = false;
-  if (name !== 'dummy') localStorage.setItem(remembered, job.id);
+  if (!noSource) localStorage.setItem(remembered, job.id);
   // run-time knobs come from the URL; output-affecting config from the job
   const config = (job.manifest.config ??= {});
   Object.assign(config, { speed: num('speed', 1), ckptMs: num('ckptMs', 1500) });
   if (params.has('selectMode')) config.selectMode = params.get('selectMode'); // same output, any mode
+  // stand-in inputs (stage 6 and the export-test set): ?standin=URL of {id: {files: {name: url}}}
+  if (params.get('standin')) {
+    const r = await fetch(params.get('standin'));
+    if (!r.ok) throw new Error(`standin: HTTP ${r.status}`);
+    const urls = await r.json();
+    for (const v of Object.values(urls)) {
+      for (const [k, u] of Object.entries(v.files)) v.files[k] = new URL(u, r.url).href;
+    }
+    config.standin = { ...config.standin, ...urls };
+  }
+  config.export ??= {
+    title: params.get('title') ?? (job.manifest.source?.name ?? 'splat').replace(/\.[^.]*$/, ''),
+  };
   const env = {
     gpuClass: device.gpuClass ?? 'unknown',
     powerPreference,
@@ -359,6 +439,7 @@ async function main() {
   const interrupted = controller.snapshot().stages.filter((s) => s.state === 'interrupted');
   if (interrupted.length)
     log(`interrupted: ${interrupted.map((s) => s.title).join(', ')}; press Resume`);
+  await result().catch((e) => log(`result: ${e.message}`, 'error'));
   api.ready = true;
   // autostart begins a fresh job only; an interrupted one waits for Resume
   const fresh = controller.snapshot().stages.every((s) => s.state === 'waiting');

@@ -50,7 +50,7 @@ cp "$O/js/splat.ply" "$O/js/splat.spz" "$O/js/meta.json" "$O/web/files/"
 cp "$O/js/splat.ply" "$O/js/splat.spz" "$O/js/meta.json" "$O/web/site/2026-11-08/tiny/run1/"
 sed 's|@ROOT@|../../../|g' "$gs/viewer/splat.html" > "$O/web/site/2026-11-08/tiny/run1/index.html"
 cp -r "$O/viewer-dist" "$O/web/site/viewer"
-node viewer_check.mjs "$O/web" "$O/js" "$O/views"
+node viewer_check.mjs "$O/web" "$O/js" "$O/views" --port "${PORT:-8861}" # 8797 is often taken by other harness runs
 $PY compare_views.py "$O/js" "$O/gsplat.npz" "$O/views"
 
 if [ "${FULL:-1}" != 0 ] && [ -f "$WEBSPLAT_DATA/ref/splat_run13/splat.pt" ]; then

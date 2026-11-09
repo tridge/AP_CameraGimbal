@@ -127,15 +127,17 @@ export function plyHeader(count, names, comments = []) {
   return new TextEncoder().encode(lines.join('\n') + '\n');
 }
 
-// train.py save_ply layout; quats normalised here unless already done (opts.normalised)
-export function writePly(s, { comments = [], normalised = false } = {}) {
-  const names = plyPropertyNames(s.shDegree);
-  const head = plyHeader(s.count, names, comments);
+export function checkComments(comments) {
   for (const c of comments) {
     // plyfile reads the header as ASCII
     if (/[^\x20-\x7e]/.test(c)) throw new Error('PLY comment must be printable ASCII');
   }
-  const stride = names.length;
+}
+
+// the rows of a train.py-layout PLY body (float32 little-endian, as on disk); quats normalised
+// here unless already done (normalised)
+export function plyBody(s, { normalised = false } = {}) {
+  const stride = plyPropertyNames(s.shDegree).length;
   const k = shCoeffs(s.shDegree);
   const q = normalised ? s.quats : normaliseQuats(s.quats);
   const body = new Float32Array(stride * s.count);
@@ -158,9 +160,17 @@ export function writePly(s, { comments = [], normalised = false } = {}) {
     r[o + 3] = s.scales[3 * i + 2];
     for (let c = 0; c < 4; c++) r[o + 4 + c] = q[4 * i + c];
   }
-  const out = new Uint8Array(head.length + body.byteLength);
+  return new Uint8Array(body.buffer);
+}
+
+// train.py save_ply layout
+export function writePly(s, { comments = [], normalised = false } = {}) {
+  checkComments(comments);
+  const head = plyHeader(s.count, plyPropertyNames(s.shDegree), comments);
+  const body = plyBody(s, { normalised });
+  const out = new Uint8Array(head.length + body.length);
   out.set(head);
-  out.set(new Uint8Array(body.buffer), head.length);
+  out.set(body, head.length);
   return out;
 }
 
@@ -183,8 +193,9 @@ const TYPES = {
   float64: ['getFloat64', 8],
 };
 
-// any binary little-endian PLY whose first element is the vertex list (train.py, Brush, ...)
-export function readPly(input) {
+// header of a binary little-endian PLY whose first element is the vertex list (train.py,
+// Brush, ...): {count, comments, props [{name, type, offset}], names, stride, start (body offset)}
+export function parsePlyHeader(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const probe = new TextDecoder('latin1').decode(
     bytes.subarray(0, Math.min(bytes.length, 1 << 20)),
@@ -203,25 +214,47 @@ export function readPly(input) {
     else if (w[0] === 'property') {
       if (w[1] === 'list') throw new Error('PLY list properties are not supported');
       if (!TYPES[w[1]]) throw new Error(`PLY property type ${w[1]}`);
+      if (!elements.length) throw new Error('PLY property before any element');
       elements.at(-1).props.push({ name: w[2], type: w[1] });
     }
   }
   const vertex = elements[0];
   if (!vertex || vertex.name !== 'vertex') throw new Error('PLY has no leading vertex element');
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const stride = vertex.props.reduce((a, p) => a + TYPES[p.type][1], 0);
-  const start = m.index + m[0].length;
-  if (start + stride * vertex.count > bytes.length) throw new Error('PLY is truncated');
-  const props = {};
-  let off = 0;
+  if (!Number.isSafeInteger(vertex.count) || vertex.count < 0) throw new Error('bad vertex count');
+  let stride = 0;
   for (const p of vertex.props) {
-    const [get, size] = TYPES[p.type];
-    const a = new Float32Array(vertex.count);
-    for (let i = 0, at = start + off; i < vertex.count; i++, at += stride) a[i] = dv[get](at, true);
-    props[p.name] = a;
-    off += size;
+    p.offset = stride;
+    stride += TYPES[p.type][1];
   }
-  return { count: vertex.count, comments, props, names: vertex.props.map((p) => p.name) };
+  return {
+    count: vertex.count,
+    comments,
+    props: vertex.props,
+    names: vertex.props.map((p) => p.name),
+    stride,
+    start: m.index + m[0].length,
+  };
+}
+
+// n consecutive vertex rows (rows: their bytes) as {count, comments, props, names}
+export function readPlyRows(header, rows, n) {
+  if (rows.length < n * header.stride) throw new Error('PLY is truncated');
+  const dv = new DataView(rows.buffer, rows.byteOffset, rows.byteLength);
+  const props = {};
+  for (const p of header.props) {
+    const get = TYPES[p.type][0];
+    const a = new Float32Array(n);
+    for (let i = 0, at = p.offset; i < n; i++, at += header.stride) a[i] = dv[get](at, true);
+    props[p.name] = a;
+  }
+  return { count: n, comments: header.comments, props, names: header.names };
+}
+
+export function readPly(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const h = parsePlyHeader(bytes);
+  if (h.start + h.stride * h.count > bytes.length) throw new Error('PLY is truncated');
+  return readPlyRows(h, bytes.subarray(h.start), h.count);
 }
 
 export function apcgMeta(comments) {

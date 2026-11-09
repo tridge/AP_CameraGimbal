@@ -32,7 +32,8 @@ export function embedViewer(container, viewerUrl) {
   return {
     iframe,
     ready,
-    // bytes are copied, so the caller keeps its buffer
+    // bytes: a buffer (copied, so the caller keeps it) or a Blob / File (e.g. from OPFS: the
+    // viewer reads it)
     async open(bytes, name, meta = null) {
       await ready;
       if (pending) throw new Error('the viewer is still opening a splat');

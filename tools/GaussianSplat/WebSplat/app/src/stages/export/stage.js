@@ -1,0 +1,60 @@
+// Stage 7 definition (pipeline/registry.js): the downloads (splat.ply, splat.spz, meta.json, as
+// export_web.py makes them) from stage 6's trained splat, streamed (stream.js). Two workers in
+// turn: the PLY, then the SPZ (Spark in chunks, checked chunk by chunk) and meta.json.
+// config.export: {title, description}.
+import { defineStage } from '../../pipeline/registry.js';
+import { remove } from '../../storage/opfs.js'; // retries while a worker's handle is released
+
+export const EXPORT_VERSION = 2;
+
+const worker = () =>
+  new Worker(new URL('./export.stage.worker.js', import.meta.url), { type: 'module' });
+
+export const exportStage = defineStage({
+  id: 'export',
+  title: 'Export',
+  version: EXPORT_VERSION,
+  unit: 'Gaussians',
+  inputs: ['select', 'prepare', 'train'],
+  configKeys: ['export'],
+  // measured in the page (notes/stage7.md): about 15 s per million Gaussians on the laptop
+  estimate: (config, env) => {
+    const n = env.results?.train?.gaussians ?? 600000;
+    return { total: 2 * n, seconds: (15 * n) / 1e6, overhead: 2 };
+  },
+  async run(ctx) {
+    const dirs = {
+      selectDir: ctx.input('select').dir,
+      prepareDir: ctx.input('prepare').dir,
+      trainDir: ctx.input('train').dir,
+      title: ctx.config.export?.title ?? 'Thermal splat',
+      description: ctx.config.export?.description ?? '',
+    };
+    const t0 = performance.now();
+    const ply = await ctx.runWorker(worker, { ...dirs, pass: 'ply' });
+    const t1 = performance.now();
+    const fin = await ctx.runWorker(worker, { ...dirs, pass: 'spz', ply });
+    await remove(`${ctx.outDir}/spz.raw`);
+    const t2 = performance.now();
+    // a decoded SPZ outside the quantisation bounds (or not finite) is a broken file; values the
+    // format clamps are counted apart (spz.clamped) and shown in the result view
+    if (Object.keys(fin.spz.over).length)
+      throw new Error(`the SPZ does not decode within its bounds: ${JSON.stringify(fin.spz.over)}`);
+    const train = ctx.input('train').result ?? {};
+    const s = ply.info.temperature_scale;
+    return {
+      title: dirs.title,
+      trainStandin: !!train.standin, // made from a stand-in's splat, not stage 6's training
+      gaussians: ply.count,
+      shDegree: ply.info.sh_degree,
+      input: ply.input,
+      temperatureC: [s.t0_c, s.t1_c],
+      displayRangeC: ply.info.display_range_c,
+      rasterizeMode: ply.info.rasterize_mode,
+      files: { 'splat.ply': ply.plySize, 'splat.spz': fin.spzSize, 'meta.json': fin.metaSize },
+      spz: fin.spz,
+      timesMs: { ply: t1 - t0, spz: t2 - t1 },
+      workerTimesMs: { ply: ply.ms, spz: fin.ms },
+    };
+  },
+});

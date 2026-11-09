@@ -66,13 +66,20 @@ export async function readJson(path) {
   return JSON.parse(await (await readFile(path)).text());
 }
 
+// a worker that was stopped or whose page was reloaded may still hold a file's access handle
+// for a moment: removal retries with backoff (about 10 s in all) before giving up
 export async function remove(path) {
   const ps = parts(path);
-  try {
-    const d = await dir(ps.slice(0, -1).join('/'));
-    await d.removeEntry(ps.at(-1), { recursive: true });
-  } catch (e) {
-    if (e.name !== 'NotFoundError') throw e;
+  for (let i = 0, wait = 50; ; i++, wait = Math.min(2 * wait, 1000)) {
+    try {
+      const d = await dir(ps.slice(0, -1).join('/'));
+      await d.removeEntry(ps.at(-1), { recursive: true });
+      return;
+    } catch (e) {
+      if (e.name === 'NotFoundError') return;
+      if (e.name !== 'NoModificationAllowedError' || i >= 15) throw e;
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }
 
