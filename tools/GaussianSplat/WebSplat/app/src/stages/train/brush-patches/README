@@ -1,5 +1,5 @@
 Brush fork for WebSplat thermal training (G1). Upstream: github.com/ArthurBrussee/brush
 (Apache-2.0), pinned at 1388f74c6fe0236f68ee4915564bf00e9d2e3747; brush/ is the patch series on top
-(git am). The last patch points every CubeCL crate at a sibling checkout named cubecl-fork:
+(git am); 0013-0016 add stage 6's rules (notes/stage6.md). One patch points every CubeCL crate at a sibling checkout named cubecl-fork:
 github.com/tracel-ai/cubecl (Apache-2.0/MIT) at 467522442c7b68f02c7ff0c84b2e249e36d8da91, the
 revision burn pins, with cubecl/ applied. Build and test steps: test/g1/README.

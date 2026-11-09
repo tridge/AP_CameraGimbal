@@ -1,5 +1,6 @@
 // Stage list: state, natural-unit progress, elapsed and remaining time per stage.
 import { formatDuration, formatEta } from '../pipeline/eta.js';
+import { readFile } from '../storage/opfs.js';
 
 const fmtCount = (n) => (n == null ? '?' : Math.round(n).toLocaleString('en'));
 
@@ -28,6 +29,36 @@ function progressText(s) {
   return t;
 }
 
+// a running stage's capped preview image in OPFS (progress extra.preview: {path, seq, view,
+// iteration}), e.g. training's held-out render; read again only when seq changes
+export function showPreview(tr, s) {
+  const active = s.state === 'running' || s.state === 'checkpointing';
+  let img = tr.querySelector('img.preview');
+  if (!active) {
+    img?.remove();
+    return;
+  }
+  // ordinary progress carries no preview: keep showing the last one
+  const prev = s.progress?.extra?.preview;
+  if (!prev) return;
+  if (!img) {
+    img = document.createElement('img');
+    img.className = 'preview';
+    img.style.cssText = 'display:block;max-width:320px;margin-top:4px;image-rendering:auto';
+    tr.querySelector('.bar').append(img);
+  }
+  if (img.dataset.seq === String(prev.seq)) return;
+  img.dataset.seq = String(prev.seq);
+  readFile(prev.path)
+    .then((f) => {
+      const url = URL.createObjectURL(f);
+      img.onload = () => URL.revokeObjectURL(url);
+      img.src = url;
+      img.alt = img.title = `${prev.view} at iteration ${prev.iteration}`;
+    })
+    .catch(() => {});
+}
+
 export function renderStages(table, snap) {
   if (table.rows.length !== snap.stages.length) {
     table.replaceChildren(
@@ -53,6 +84,7 @@ export function renderStages(table, snap) {
     else if (p?.total) bar.value = Math.min(1, (p.done ?? 0) / p.total);
     else bar.removeAttribute('value');
     tr.querySelector('.units').textContent = s.error ? s.error.message : progressText(s);
+    showPreview(tr, s);
     tr.querySelector('.elapsed').textContent = s.elapsedMs ? formatDuration(s.elapsedMs) : '';
     tr.querySelector('.eta').textContent =
       s.state === 'running' || s.state === 'checkpointing'

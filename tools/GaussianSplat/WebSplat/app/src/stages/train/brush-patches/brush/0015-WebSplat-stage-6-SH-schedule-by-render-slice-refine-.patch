@@ -1,0 +1,437 @@
+From 8dcc0ad50182f028283ec38fa3c6c00410fcb536 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Mon, 9 Nov 2026 07:44:27 +1100
+Subject: [PATCH] WebSplat stage 6: SH schedule by render slice, refine stop,
+ bounds pruning every N, raw checkpoint quaternions
+
+---
+ crates/brush-process/src/train_stream.rs |   6 +
+ crates/brush-serde/src/export.rs         |  41 +++-
+ crates/brush-train/src/config.rs         |  12 ++
+ crates/brush-train/src/train.rs          | 228 ++++++++++++++++++++---
+ 4 files changed, 258 insertions(+), 29 deletions(-)
+
+diff --git a/crates/brush-process/src/train_stream.rs b/crates/brush-process/src/train_stream.rs
+index b61b101..cf10e8a 100644
+--- a/crates/brush-process/src/train_stream.rs
++++ b/crates/brush-process/src/train_stream.rs
+@@ -333,9 +333,11 @@ pub(crate) async fn train_stream(
+         let phase_progress = (phase_iter as f32 / phase_total as f32).clamp(0.0, 1.0);
+ 
+         let refine_start = Instant::now();
++        let refine_stop = train_stream_config.train_config.refine_stop_iter;
+         let refine = if phase_iter > 0
+             && phase_iter.is_multiple_of(train_stream_config.train_config.refine_every)
+             && phase_progress <= 0.95
++            && (current_lod > 0 || refine_stop == 0 || phase_iter < refine_stop)
+         {
+             let (new_splats, refine_stats) = trainer.refine(iter, splats).await;
+             splats = new_splats;
+@@ -350,6 +352,10 @@ pub(crate) async fn train_stream(
+                 total_splats: splats.num_splats(),
+             }
+         };
++        let prune_every = train_stream_config.train_config.prune_bounds_every;
++        if prune_every > 0 && iter.is_multiple_of(prune_every) {
++            splats = trainer.prune_bounds(iter, splats).await.0;
++        }
+         slot.set(0, splats.clone());
+         let refine_dur = refine_start.elapsed();
+ 
+diff --git a/crates/brush-serde/src/export.rs b/crates/brush-serde/src/export.rs
+index d69afd7..1166f65 100644
+--- a/crates/brush-serde/src/export.rs
++++ b/crates/brush-serde/src/export.rs
+@@ -80,7 +80,8 @@ struct DynamicPly {
+     vertex: Vec<DynamicPlyGaussian>,
+ }
+ 
+-async fn read_splat_data(splats: Splats) -> Result<DynamicPly, ExportError> {
++// normalize: unit quaternions (ordinary exports); a training checkpoint keeps the raw components
++async fn read_splat_data(splats: Splats, normalize: bool) -> Result<DynamicPly, ExportError> {
+     let data = Transaction::default()
+         .register(splats.transforms.val())
+         .register(splats.raw_opacities.val())
+@@ -150,14 +151,17 @@ async fn read_splat_data(splats: Splats) -> Result<DynamicPly, ExportError> {
+             let rest_coeffs = [sh_red_rest, sh_green_rest, sh_blue_rest].concat();
+             // transforms layout: means(3) + rotations(4) + log_scales(3) = stride 10
+             let t = i * 10;
+-            // Normalize the quaternion before export.
+             let (r0, r1, r2, r3): (f32, f32, f32, f32) = (
+                 transforms[t + 3],
+                 transforms[t + 4],
+                 transforms[t + 5],
+                 transforms[t + 6],
+             );
+-            let rn = (r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3).sqrt().max(1e-12);
++            let rn = if normalize {
++                (r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3).sqrt().max(1e-12)
++            } else {
++                1.0
++            };
+             DynamicPlyGaussian {
+                 x: transforms[t],
+                 y: transforms[t + 1],
+@@ -193,23 +197,24 @@ pub async fn splat_to_ply_with_comments(
+ ) -> Result<Vec<u8>, ExportError> {
+     // Fold any 3D-filter floor into the stored scales/opacity so the ply holds
+     // ordinary derived values — the floor is never written as a separate field.
+-    splat_to_ply_inner(splats.bake_min_scale(), up_axis, extra_comments).await
++    splat_to_ply_inner(splats.bake_min_scale(), up_axis, extra_comments, true).await
+ }
+ 
+ /// The trainable parameters as they are, without baking the 3D-filter floor: a training
+ /// checkpoint that resumes from these does not apply the floor twice.
+ pub async fn splat_to_ply_unbaked(splats: Splats) -> Result<Vec<u8>, ExportError> {
+     let comments = ["WebSplat checkpoint: raw parameters, 3D-filter floor not baked".to_owned()];
+-    splat_to_ply_inner(splats, None, &comments).await
++    splat_to_ply_inner(splats, None, &comments, false).await
+ }
+ 
+ async fn splat_to_ply_inner(
+     splats: Splats,
+     up_axis: Option<Vec3>,
+     extra_comments: &[String],
++    normalize: bool,
+ ) -> Result<Vec<u8>, ExportError> {
+     let sh_degree = splats.sh_degree();
+-    let ply = read_splat_data(splats.clone()).await?;
++    let ply = read_splat_data(splats.clone(), normalize).await?;
+ 
+     let render_mode_str = if splats.render_mip { "mip" } else { "default" };
+ 
+@@ -269,6 +274,28 @@ mod tests {
+         }
+     }
+ 
++    #[wasm_bindgen_test(unsupported = tokio::test)]
++    async fn checkpoint_keeps_raw_quaternions() {
++        let device: burn::tensor::Device = brush_cube::test_helpers::test_device().await.into();
++        let rot = vec![2.0f32, 0.5, -0.25, 0.125, 0.3, -0.7, 0.1, 0.05];
++        let splats = Splats::from_raw(
++            vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0],
++            rot.clone(),
++            vec![-1.0; 6],
++            vec![0.1; 6],
++            vec![0.0; 2],
++            SplatRenderMode::Default,
++            &device,
++        );
++        let ply = splat_to_ply_unbaked(splats.clone()).await.unwrap();
++        let back = load_splat_from_ply(Cursor::new(ply), None).await.unwrap();
++        assert_eq!(back.data.rotations.unwrap(), rot, "checkpoint rotations must be raw");
++        let ply = splat_to_ply(splats, None).await.unwrap();
++        let norm = load_splat_from_ply(Cursor::new(ply), None).await.unwrap().data.rotations.unwrap();
++        let n0 = norm[..4].iter().map(|x| x * x).sum::<f32>().sqrt();
++        assert!((n0 - 1.0).abs() < 1e-6, "ordinary export normalises ({n0})");
++    }
++
+     #[wasm_bindgen_test(unsupported = tokio::test)]
+     async fn test_sh_degree_exports() {
+         let _device = brush_cube::test_helpers::test_device().await;
+@@ -276,7 +303,7 @@ mod tests {
+             let splats = create_test_splats(degree);
+             assert_eq!(splats.sh_degree(), degree);
+ 
+-            let ply_data = read_splat_data(splats.clone()).await.unwrap();
++            let ply_data = read_splat_data(splats.clone(), true).await.unwrap();
+             let expected_rest_coeffs = if degree == 0 {
+                 0
+             } else {
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index 00af1fc..a41cea7 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -26,6 +26,18 @@ pub struct TrainConfig {
+     #[serde(default)]
+     pub lr_mean_absolute: bool,
+ 
++    /// Stop all refinement (growth, screen-size splitting, opacity pruning and decay) at this step,
++    /// as gsplat's `refine_stop_iter`; 0 keeps Brush's own cutoff (95% of training).
++    #[arg(long, help_heading = "Refine options", default_value = "0")]
++    #[serde(default)]
++    pub refine_stop_iter: u32,
++
++    /// Prune Gaussians outside the dataset's bounds (bounds.json) every N steps through the end of
++    /// training, without replacement, as train.py; 0 prunes them at refine instead.
++    #[arg(long, help_heading = "Refine options", default_value = "0")]
++    #[serde(default)]
++    pub prune_bounds_every: u32,
++
+     /// Raise the trained SH degree by one every N steps, from 0 to the splats' degree (train.py's
+     /// `min(step // N, sh_degree)`); 0 trains every degree from the start.
+     #[arg(long, help_heading = "Training options", default_value = "0")]
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index 13b3bed..e5f963f 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -223,6 +223,17 @@ impl SplatTrainer {
+         self.step_count = steps;
+     }
+ 
++    /// The SH coefficients rendered at this step under `--sh-degree-interval` (train.py's
++    /// `min(step // N, sh_degree)`), or None when every band is rendered.
++    fn active_sh_coeffs(&self) -> Option<usize> {
++        let interval = self.config.sh_degree_interval;
++        if interval == 0 {
++            return None;
++        }
++        let degree = ((self.step_count - 1) / interval).min(self.max_sh_degree);
++        (degree < self.max_sh_degree).then(|| sh_coeffs_for_degree(degree) as usize)
++    }
++
+     pub async fn step(&mut self, batch: SceneBatch, splats: Splats) -> (Splats, TrainStepStats) {
+         let mut splats = splats;
+ 
+@@ -230,26 +241,6 @@ impl SplatTrainer {
+         self.max_sh_degree = self.max_sh_degree.max(splats.sh_degree());
+         self.step_count += 1;
+ 
+-        // SH schedule: bands above the current degree are held at zero, with their Adam moments,
+-        // so they are unused until enabled (as train.py, where they get no gradient)
+-        let interval = self.config.sh_degree_interval;
+-        if interval > 0 {
+-            let degree = ((self.step_count - 1) / interval).min(self.max_sh_degree);
+-            if degree < self.max_sh_degree {
+-                let total = sh_coeffs_for_degree(self.max_sh_degree) as usize;
+-                let used = sh_coeffs_for_degree(degree) as usize;
+-                let mask: Vec<f32> = (0..total).map(|k| if k < used { 1.0 } else { 0.0 }).collect();
+-                let mask = Tensor::<1>::from_floats(mask.as_slice(), &splats.device().inner())
+-                    .reshape([1, total as i32, 1]);
+-                splats.sh_coeffs = splats
+-                    .sh_coeffs
+-                    .map(|t| Tensor::from_inner(t.inner() * mask.clone()).require_grad());
+-                if let Some(optim) = self.optim.as_mut() {
+-                    optim.sh_coeffs.map_momentum(|m| m * mask.clone());
+-                }
+-            }
+-        }
+-
+         let [img_h, img_w] = batch.img_size();
+         let camera = batch.camera;
+ 
+@@ -302,7 +293,16 @@ impl SplatTrainer {
+         ) = {
+             // The splats already carry their 3D-filter floor (set at refine);
+             // the render path folds it in. Optimizer/refine work on raw params.
+-            let render_input = splats.clone();
++            let mut render_input = splats.clone();
++            // SH schedule: render only the bands of the current degree. The slice is on the
++            // autodiff graph, so the bands above it get exactly zero gradient (their values and
++            // Adam moments stay as they are, zero from initialisation) and the backward's reduced
++            // SH second moment covers the rendered bands only.
++            if let Some(used) = self.active_sh_coeffs() {
++                render_input.sh_coeffs = render_input
++                    .sh_coeffs
++                    .map(|t| t.slice(s![.., 0..used as i32, ..]));
++            }
+             let diff_out = render_splats(render_input, &camera, img_size, background)
+                 .instrument(trace_span!("Forward"))
+                 .await;
+@@ -500,6 +500,39 @@ impl SplatTrainer {
+         (splats, stats)
+     }
+ 
++    /// train.py's bounds pruning (`--prune-bounds-every`): removes Gaussians outside the bounds,
++    /// with their optimiser state, refine statistics and 3D-filter floor; nothing replaces them.
++    pub async fn prune_bounds(&mut self, iter: u32, mut splats: Splats) -> (Splats, u32) {
++        let mask = match &self.prune_bounds {
++            Some(b) => outside_prune_bounds(&splats, b, iter),
++            None => return (splats, 0),
++        };
++        let (Some(mut optim), Some(mut refiner)) = (self.optim.take(), self.refine_record.take()) else {
++            return (splats, 0);
++        };
++        let n = splats.num_splats();
++        let keep = mask.bool_not().argwhere_async().await;
++        let kept = keep.dims()[0] as u32;
++        if kept > 0 && kept < n {
++            let keep = keep.squeeze_dim(1);
++            splats.min_scale = splats.min_scale.map(|m| m.select(0, keep.clone()));
++            splats = map_splats_and_opt(
++                splats,
++                &mut optim,
++                |x| x.select(0, keep.clone()),
++                |x| x.select(0, keep.clone()),
++                |x| x.select(0, keep.clone()),
++                |x| x.select(0, keep.clone()),
++                |x| x.select(0, keep.clone()),
++                |x| x.select(0, keep.clone()),
++            );
++            refiner = refiner.keep(keep.without_autodiff());
++        }
++        self.optim = Some(optim);
++        self.refine_record = Some(refiner);
++        (splats, if kept > 0 { n - kept } else { 0 })
++    }
++
+     pub async fn refine(&mut self, iter: u32, splats: Splats) -> (Splats, RefineStats) {
+         let progress = iter as f32 / self.config.total_train_iters.max(1) as f32;
+         // Refine manipulates the canonical (un-floored) params, so bake the
+@@ -565,7 +598,9 @@ impl SplatTrainer {
+             .bool_or(scale_big)
+             .bool_or(bound_mask)
+             .bool_or(non_finite_mask);
+-        if let Some(bounds) = &self.prune_bounds {
++        if let Some(bounds) = &self.prune_bounds
++            && self.config.prune_bounds_every == 0
++        {
+             prune_mask = prune_mask.bool_or(outside_prune_bounds(&splats, bounds, iter));
+         }
+ 
+@@ -952,3 +987,152 @@ fn sample_background_color<R: rand::Rng + ?Sized>(
+     );
+     (base + noise).clamp(glam::Vec3::ZERO, glam::Vec3::ONE)
+ }
++
++#[cfg(test)]
++mod websplat_tests {
++    use super::*;
++    use brush_render::camera::Camera;
++    use brush_render::gaussian_splats::SplatRenderMode;
++    use brush_render::kernels::camera_model::CameraModel;
++    use burn::module::Module;
++
++    const H: usize = 32;
++    const W: usize = 32;
++    const N: usize = 64;
++
++    fn batch() -> SceneBatch {
++        let camera = Camera::new(
++            glam::Vec3::ZERO,
++            glam::Quat::IDENTITY,
++            0.8,
++            0.8,
++            glam::vec2(0.5, 0.5),
++            CameraModel::Pinhole,
++        );
++        let bits: Vec<i32> = (0..H * W)
++            .map(|i| (0.2 + 0.6 * ((i % W) as f32 / W as f32)).to_bits() as i32)
++            .collect();
++        SceneBatch {
++            img_packed: TensorData::new(bits, [H, W]),
++            has_alpha: false,
++            alpha_mode: AlphaMode::Transparent,
++            camera,
++            float_gt: true,
++        }
++    }
++
++    fn splats(device: &Device) -> Splats {
++        let k = sh_coeffs_for_degree(3) as usize;
++        let mut pos = Vec::new();
++        let mut coeffs = vec![0.0f32; N * k * 3];
++        for i in 0..N {
++            let (x, y) = ((i % 8) as f32 - 3.5, (i / 8) as f32 - 3.5);
++            pos.extend([x * 0.4, y * 0.4, 5.0]);
++            for c in 0..3 {
++                coeffs[(i * k) * 3 + c] = 0.3; // DC only; higher bands start at zero
++            }
++        }
++        Splats::from_raw(
++            pos,
++            [1.0f32, 0.0, 0.0, 0.0].repeat(N),
++            vec![-1.5; N * 3],
++            coeffs,
++            vec![0.0; N],
++            SplatRenderMode::Default,
++            device,
++        )
++    }
++
++    async fn vec3(t: Tensor<3>) -> (Vec<f32>, [usize; 3]) {
++        let d = t.dims();
++        (t.into_data_async().await.unwrap().try_into_vec().unwrap(), d)
++    }
++
++    // values with coefficient index >= from: all bit-zero?
++    fn bands_zero(v: &[f32], d: [usize; 3], from: usize) -> bool {
++        (0..d[0]).all(|i| (from..d[1]).all(|k| (0..d[2]).all(|c| v[(i * d[1] + k) * d[2] + c].to_bits() == 0)))
++    }
++
++    async fn run(interval: u32, start: u32, steps: u32) -> (SplatTrainer, Splats) {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig {
++            sh_degree_interval: interval,
++            total_train_iters: 3000,
++            ..Default::default()
++        };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        trainer.set_step_count(start);
++        let mut s = splats(&device);
++        for _ in 0..steps {
++            let (next, _) = trainer.step(batch(), s.train()).await;
++            s = next.valid();
++        }
++        (trainer, s)
++    }
++
++    async fn moments(trainer: &SplatTrainer) -> (Vec<f32>, [usize; 3]) {
++        let m = trainer.optim.as_ref().unwrap().sh_coeffs.momentum.as_ref().unwrap();
++        vec3(m.moment_1.clone()).await
++    }
++
++    #[tokio::test]
++    async fn bounds_pruning_removes_outside_with_state() {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig { prune_bounds_every: 100, total_train_iters: 3000, ..Default::default() };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        // cylinder radius 1.0 about the origin: the 8x8 grid at 0.4 m spacing keeps the 12
++        // Gaussians with x^2 + y^2 <= 1 (plus none above the ceiling or below the floor)
++        trainer.set_prune_bounds(Some(PruneBounds {
++            centre: [0.0, 0.0],
++            radius: 1.0,
++            z_min: 0.0,
++            ceiling_origin: [-10.0, -10.0],
++            ceiling_cell: 20.0,
++            ceiling_n: 1,
++            ceiling: vec![100.0],
++            max_scale: None,
++            scale_prune_from: 0,
++            scale_prune_until: 0,
++        }));
++        let (s, _) = trainer.step(batch(), splats(&device).train()).await;
++        let (s, removed) = trainer.prune_bounds(100, s.valid()).await;
++        let inside = (0..N)
++            .filter(|i| {
++                let (x, y) = (((i % 8) as f32 - 3.5) * 0.4, ((i / 8) as f32 - 3.5) * 0.4);
++                x * x + y * y <= 1.0
++            })
++            .count();
++        assert_eq!(s.num_splats() as usize, inside, "Gaussians inside the cylinder remain");
++        assert_eq!(removed as usize, N - inside);
++        let m = trainer.optim.as_ref().unwrap().transforms.momentum.as_ref().unwrap();
++        assert_eq!(m.moment_1.dims()[0], inside, "optimiser moments follow the pruning");
++        let (next, _) = trainer.step(batch(), s.train()).await;
++        assert_eq!(next.num_splats() as usize, inside, "training continues on the pruned set");
++    }
++
++    #[tokio::test]
++    async fn inactive_bands_and_moments_stay_zero() {
++        // steps 1-5: degree 0, bands 1.. are not rendered
++        let (trainer, s) = run(1000, 0, 5).await;
++        let (v, d) = vec3(s.sh_coeffs.val()).await;
++        assert!(bands_zero(&v, d, 1), "degree 0: higher-band coefficients must stay bit-zero");
++        let (m, md) = moments(&trainer).await;
++        assert!(bands_zero(&m, md, 1), "degree 0: higher-band first moments must stay bit-zero");
++        assert!(!bands_zero(&v, d, 0), "the DC band must train");
++
++        // steps 1001-1005: degree 1 (coefficients 0-3) trains, bands 2-3 (4..16) stay zero
++        let (trainer, s) = run(1000, 1000, 5).await;
++        let (v, d) = vec3(s.sh_coeffs.val()).await;
++        assert!(bands_zero(&v, d, 4), "degree 1: bands above 1 must stay bit-zero");
++        assert!(!bands_zero(&v, d, 1), "degree 1: band 1 must train");
++        let (m, md) = moments(&trainer).await;
++        assert!(bands_zero(&m, md, 4), "degree 1: moments above band 1 must stay bit-zero");
++
++        // control: without the schedule the higher bands move in the same steps
++        let (_, s) = run(0, 0, 5).await;
++        let (v, d) = vec3(s.sh_coeffs.val()).await;
++        assert!(!bands_zero(&v, d, 4), "control: without the schedule bands 2-3 train");
++    }
++}
+-- 
+2.53.0
+

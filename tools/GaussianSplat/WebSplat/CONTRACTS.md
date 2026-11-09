@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.4 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.5 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -310,11 +310,46 @@ Defaults (train.py): `max_images` 500, `hot_delta` 10 C, `min_elevation` 20 deg,
 
 ## 6-7. Splat output (`websplat.splat` v1)
 
+Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6 is written, the
+'train' stand-in, `app/src/stages/export/standin.js`, loads a trained splat into this layout):
+
+```json
+{"format":"websplat.train","version":1,"splat":"splat.ply","gaussians":594940,"sh_degree":3,
+ "rasterize_mode":"classic","iterations":30000,"eval":{"dir":"eval","views":["00009.png",…]},
+ "standin":false}
+```
+
+- The stand-in's stage version is `"standin-1"` and its `train.json` says `"standin": true`; no
+  real stage uses such a version, so when stage 6 replaces it, stand-in outputs (and the exports
+  made from them) fail validation and are redone. The export's result records `trainStandin`.
+- `train.json` as above; `splat` names the splat file: `splat.ply` (a Brush export as G1's worker
+  writes it: binary little-endian 3DGS PLY, any property order, normals optional, `comment
+  apcg_splat` optional and ignored) or `params.bin` (the WSSP layout below). `rasterize_mode`:
+  how the trainer rasterised (Brush fork and train.py: `classic`; written to the exports).
+  `iterations` and `eval` are optional (`eval/<name>.f32`: held-out renders, float32 `[H, W]`
+  scaled values, as G1's browser runs; the stage 7 tests score them). Stage 6 also writes
+  `trainer` (fork and patch series), `brush_config` (the Brush options used) and `resumed`.
+- The export also reads 5b's `dataset.json` (scale, hot spot, views for the start camera) and
+  stage 2's `frames.json` (origin, `target_enu`).
+- Stage 7 output (`export/gen-<g>/`): `splat.ply`, `splat.spz`, `meta.json` as below (the
+  downloads), written in chunks; its manifest result has the counts, temperature range, sizes,
+  timings, the SPZ decode errors (`spzErrors`, merged over chunks; any value beyond its bound or
+  not finite fails the stage; format clamping is counted in `clamped`) and `spz.temperature`
+  (the largest drop/rise of a Gaussian's emitted temperature over 32 directions, opacity >= 0.5).
+  Its start camera is the hot view with the highest frame `maximum_c` (export_web.py's geometry
+  from that view); export.js (7a, native-identical) keeps export_web.py's middle hot view. The
+  result view also offers map's final COLMAP model as a tar (`sparse/0/*.bin`) built from the
+  OPFS files.
+
 - Checkpoint `train/ckpt-<g>/params.bin` (job layout below; the final output is `train/gen-<g>/`): header `u32[4]` `'WSSP' (0x50535357), 1, count,
   sh_degree`, then f32 arrays in this order, each `[count, …]`: means 3, scales 3 (log), quats 4
   (w,x,y,z, unnormalised), opacities 1 (logit), sh0 3, shN `((d+1)^2 - 1) x 3` (coefficient-major,
-  channel last, as gsplat/train.py). `train/ckpt-<g>/state.json`: iteration, rng/order state,
-  gaussian count, schedule. v1 resumes from params only (no optimiser moments).
+  channel last, as gsplat/train.py); the trainer's raw parameters (quaternions not normalised,
+  3D-filter floor not baked), taken between two training batches so they are exactly those of
+  `iteration`. `train/ckpt-<g>/state.json`: `iteration`, `gaussians`, `resumed` (earlier resume
+  points). v1 resumes from params only: optimiser moments, refine statistics and data order
+  restart; the step count (LR and SH schedules, refine window) continues from `iteration`; the
+  3D-filter floor is recomputed from the restored positions.
 - Exported PLY: exactly train.py `save_ply`: binary little-endian, one `vertex` element of f32
   properties `x y z nx ny nz f_dc_0..2 f_rest_0..(3K-4) opacity scale_0..2 rot_0..3`, normals 0,
   `f_rest` channel-major (`shN.transpose(0,2,1)`), quaternion normalised w,x,y,z, header
@@ -326,7 +361,8 @@ Defaults (train.py): `max_images` 500, `hot_delta` 10 C, `min_elevation` 20 deg,
   description, camera{position,target,fov_deg}, up, target, origin, rasterize_mode, temperature_scale,
   hotspot, colormap, display_range_c`, Python `json.dumps` text; `rasterize_mode` "classic": gsplat
   classic, as trained), `splat.spz` = Spark `transcodeSpz` of that PLY (`maxSh` 3, SPZ v3, 12
-  fractional bits, antialiased flag cleared for classic, gzip with a fixed header), `meta.json` = the same info plus
+  fractional bits, antialiased flag cleared for classic, gzip with a fixed header; the stage
+  encodes it in chunks of 131072 Gaussians, which gives Spark's whole-file bytes), `meta.json` = the same info plus
   `downloads{ply,spz}` (bytes), `json.dumps(indent=1)`. Start camera: `export_web.start_camera` from
   the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
 
@@ -442,6 +478,10 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
 
 ## Change log
 
+- v1.5.1 (2026-11-09): stage 6 as written: `train.json` `trainer`, `brush_config`, `resumed`;
+  checkpoint parameters raw and taken at a batch boundary; `state.json` fields.
+- v1.5 (2026-11-08): stage 6 output as the export consumes it (`train.json`, Brush PLY or WSSP);
+  stage 7 output.
 - v1.4 (2026-11-08): stage 7a export details (splat PLY, SPZ, meta.json).
 - v1.3.1 (2026-11-08): 5b as written by the prepare stage (additive: `image_id`, `skipped.budget`,
   `training`, dtype/shape records, `stats`, point order, hot spot precision).

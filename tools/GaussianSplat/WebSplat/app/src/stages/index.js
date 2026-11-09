@@ -7,17 +7,36 @@ import { featuresStage } from './features/stage.js';
 import { matchStage } from './match/stage.js';
 import { mapStage } from './map/stage.js';
 import { prepareStage } from './prepare/stage.js';
+import { exportStage } from './export/stage.js';
+import { standinStage } from './export/standin.js';
+import { trainStage } from './train/stage.js';
 import './dummy/stages.js';
 
 // selection waits for the user to confirm ingest's proposal (config.select)
 const select = { ...selectStage, ready: (config) => !!config.select };
 
+// a stand-in loads a trained splat (CONTRACTS.md 6) for the export test set
+const trainStandin = standinStage('train', 'Training', ['prepare']);
+
 registerStageSet(
   'thermal',
-  [ingestStage, select, featuresStage, matchStage, mapStage, prepareStage],
+  [ingestStage, select, featuresStage, matchStage, mapStage, prepareStage, trainStage, exportStage],
   {
-    title: 'Thermal splat (stages so far)',
+    title: 'Thermal splat',
   },
+);
+
+// export and result view on prepared inputs (frames.json, dataset.json, a trained splat): tests
+registerStageSet(
+  'export-test',
+  [
+    standinStage('select', 'Frames'),
+    standinStage('map', 'COLMAP model'),
+    standinStage('prepare', 'Training data'),
+    trainStandin,
+    exportStage,
+  ],
+  { title: 'Export from prepared files (test)', source: false },
 );
 
 export { stageSet, stageSets } from '../pipeline/registry.js';
