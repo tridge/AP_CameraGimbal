@@ -17,9 +17,12 @@ ring, snap to orbit, showing the finished splat in the viewer's map.
    pose telemetry; otherwise it is disabled with a tooltip saying why.
 2. Pressing it opens the **splat panel** (in the map panel, above the map options) and switches
    the map to 3D. The panel has:
-   - **Range**: start and end times with "Set start here" / "Set end here" buttons (current
-     frame), and two handles drawn on the seek bar. Default: the whole recording. The panel
-     shows the frame count and duration of the range.
+   - **Range**: two bracket handles (`[` and `]`, accent colour, the range shaded between) on
+     the seek bar, dragged with the pointer or moved with the arrow keys when focused (shift: 10
+     frames); clicking the bar elsewhere still seeks and the playhead stays distinct. The track
+     and look points follow once a handle stops (release, or a 300 ms pause). Default: the whole
+     recording. The panel shows the start and end times and frame numbers, the frame count and
+     duration.
    - The map shows only the in-range part of the video track; out-of-range parts are hidden
      (a "Show whole flight" checkbox shows them dimmed instead). Ground points where each
      sampled in-range frame's optical axis meets the terrain are drawn as small dots (at most
@@ -29,9 +32,15 @@ ring, snap to orbit, showing the finished splat in the viewer's map.
      suspended while picking). Latitude, longitude and height (m AMSL) are shown and editable;
      ± buttons nudge the height by 1 m (shift: 10 m). A marker with a vertical line from the
      terrain to the target height shows it in the map.
-   - **View**: **Use this view** captures the current 3D camera as the splat's start view;
-     the panel shows it as bearing/elevation/distance from the target, with **Clear**. With no
-     captured view WebSplat uses its own default (the hottest training view).
+   - **Area**: **Radius** (m), default the ground width the camera sees (`2 d tan(HFOV / 2)`
+     at the range's median camera-to-target distance and HFOV, rounded to 10 m, 100-2000 m;
+     about 650 m for the 2025-10-16 orbit at 545 m above the ground), editable, cleared to
+     restore. **Max height** slider: 5-300 m above the target, or Auto (the top end, the
+     default): WebSplat's own canopy ceiling, as the viewer cannot know the SfM points and a fixed
+     cap relative to the target would cut terrain rising within a large radius. The map shows
+     the area as a ring at the target height, or a translucent cylinder up to the max height.
+   - **View**: the 3D map's camera when Go is pressed is the splat's start view (a one-line
+     hint says so); in 2D WebSplat uses its own default (the hottest training view).
    - **Title** (default: the recording name without extension).
    - **Go** opens WebSplat in a new tab and hands it the request and the file. **Cancel**
      leaves splat mode and restores the track.
@@ -75,6 +84,9 @@ Terrain samples (`TerrainElevation.at`) are already AMSL.
 - `view` is optional; `view.camera` is the captured camera position. The look-at point is the
   target (the splat orbits it), so only the camera position and vertical FOV are carried.
 - `title` is optional (≤ 120 characters).
+- `radius` (m, [10, 10000]) and `max_height` (m above the target, [1, 10000]) are optional:
+  prepare's radius and a cap on its ceiling (`config.prepare`), for thermal and RGB; in the
+  request identity only when given.
 - Validation is strict: known keys only, finite numbers, lat in [-90, 90], lon in [-180, 180],
   start ≤ end, heights within [-500, 9000] m, fov in [10, 120] degrees; anything else is
   rejected with a message naming the field.
@@ -225,6 +237,12 @@ SSIM 0.2, SH degree 1).
      SIMPLE_RADIAL (one shared camera) seeded from the KLV HFOV at the processing width.
   5b. prepare: undistort to pinhole (as `train_rgb.py`), RGB8 targets, scene bounds and
      ceiling as `train_rgb.py` (`--radius`, ceiling grid); no temperature scale or hot spot.
+     `train_rgb.py`'s too-tall rule (vertical 1-sigma extent above max(1, max_scale / 2) m)
+     prunes from half way to the end of training, as natively; without it Gaussians at the edge
+     of the radius grew to 2 km and showed as streaks.
+     A request's radius is about its target (`config.prepare.centre` `"target"`), as the viewer's
+     cylinder shows; the standalone page keeps `train_rgb.py`'s model median. An accepted early
+     stop gets the final too-tall pass on its PLY.
   6. train: Brush's stock RGB path (the fork's numeric-target changes must leave it intact),
      L1 + SSIM 0.2, SH degree 1, Gaussian cap scaled to the GPU class.
   7. export: standard 3DGS PLY / SPZ with `kind: "rgb"` metadata (the splat viewer already

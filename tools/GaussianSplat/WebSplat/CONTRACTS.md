@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.8 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.9 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -406,7 +406,8 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
 ## RGB sources (stage set `rgb`)
 
 RGB recordings (H.264/HEVC in MPEG-TS or MP4, pose telemetry from MISB ST 0601 KLV or APCG SEI)
-run the `rgb` stage set: its own ingest, select and prepare stages (stage versions `rgb-1`),
+run the `rgb` stage set: its own ingest, select and prepare stages (stage versions `rgb-1`;
+prepare `rgb-2`),
 then the thermal features, match, map, train and export stages, which read the formats below.
 Native references: `extract_ts_frames.py`, `sfm.py`, `train_rgb.py`, `export_web.py`. Job ids
 start `rgb-`. Coordinates and frame naming follow the conventions above (`'%05d.png' % index`,
@@ -448,20 +449,34 @@ ENU about the target, up from the takeoff altitude).
   FFmpeg core on one keyframe group per batch (each group decoded once), scaled with area
   averaging.
 - **3-5**: unchanged formats on the grey images; one SIMPLE_RADIAL camera seeded from `K` at the
-  processing width. RGB jobs set `config.features = {maxNumFeatures: 4096}` (half of `sfm.py`'s
+  processing width (`config.map.camera` `"RADIAL"`: `[f, cx, cy, k1, k2]`, as `sfm.py
+  --camera-model RADIAL`; a legacy `cameraModel` key is ignored, as it always was, so stage keys
+  stay truthful; map checkpoints record `camera` and are not resumed under another model). RGB jobs set `config.features = {maxNumFeatures: 4096}` (half of `sfm.py`'s
   8192) for the same memory reason. Mapping that runs out of memory fails with a message naming
   the images and matches.
 - **5b (`websplat.dataset` v1 with `kind: "rgb"`)**: `train_rgb.py`'s setup: images undistorted to
-  the pinhole `K` (initUndistortRectifyMap + remap INTER_LINEAR, constant border, on RGB8),
+  the pinhole `K` (initUndistortRectifyMap with `[k1, k2, 0, 0]` + remap INTER_LINEAR, constant
+  border, on RGB8; SIMPLE_RADIAL, RADIAL or PINHOLE models),
   `targets.u8` `[n, H, W, 3]`; images: every registered one, evenly thinned to at most
   `max_pixels / (W H)` (500 x 1280 x 720 pixels: Brush keeps them in memory), every 25th held out
   (`holdout`); points `points.f32` `[count, 6]` (x, y, z, r, g, b in 0..1): model points within
-  `radius` (200 m) of the model's median point, coloured as the mean of up to three of their
-  observations; bounds `{centre, radius, z_min (lowest point - radius: no floor), z_max, ceiling}`
-  with `train_rgb.py`'s height ceiling; `training` as `train.py`'s structure with `train_rgb.py`'s
-  values (SH degree 1, SSIM 0.2, cap 3M, grow_grad2d 0.0008, `max_scale` radius / 100 or 16
-  ground pixels); no `scale`, `hotspot` null.
-- **6**: the Brush input images are 8-bit RGB PNGs (Brush's stock colour loss; the fork's numeric
+  `radius` (200 m, or `config.prepare.radius`) of the model's median point (request jobs:
+  `config.prepare.centre` `"target"`, about `frames.target_enu`), coloured as the mean
+  of up to three of their observations; bounds `{centre, radius, z_min (lowest point - radius: no
+  floor), z_max, ceiling, max_vertical, vertical_prune_from}` with `train_rgb.py`'s height
+  ceiling; `training` as `train.py`'s structure with `train_rgb.py`'s values (SH degree 1, SSIM
+  0.2, cap 3M, grow_grad2d 0.0008, `max_scale` radius / 100 or 16 ground pixels); no `scale`,
+  `hotspot` null. `max_vertical` (`train_rgb.py`'s `--max-vertical`: max(1, max_scale / 2) m;
+  null with option 0) and `vertical_prune_from` (iterations / 2): Gaussians whose vertical 1-sigma
+  extent `|row 2 of R(q) * scales|` exceeds it are pruned with the bounds every refine period
+  from that step to the end, and once more after the last step (`too_tall`; for a run accepted
+  before its last step the train worker applies that pass to the PLY). The too-big rule
+  (`max_scale`) keeps gsplat's window, `reset_every < step < refine_stop_iter`, as natively.
+  `config.prepare.max_height` (thermal and RGB): initial points (RGB; thermal through the
+  ceiling) and every ceiling cell and `z_max` no higher than `frames.target_enu` z + max_height.
+- **6**: `bounds.json` adds `max_vertical` and `vertical_prune_from` when the dataset has a
+  `max_vertical` (fork patch 0017; thermal `bounds.json` is unchanged). The Brush input images are
+  8-bit RGB PNGs (Brush's stock colour loss; the fork's numeric
   targets are off), `init.ply` coloured from the points; Brush's `max-splats` is the dataset cap
   limited per GPU class (desktop 3M, laptop 2M, integrated 1M, unknown 1.5M). Eval renders and the
   preview hold channel 0 (red) only.
@@ -487,15 +502,22 @@ What the video viewer's Create splat hands to WebSplat (PLAN-v2.md). Heights are
  "title":"flight2_thermal"}
 ```
 
+- `radius` (optional, metres, [10, 10000]): prepare's radius about the target
+  (`config.prepare.radius`; thermal default 150, RGB 200). The viewer's default is the ground
+  width the camera sees, `2 d tan(HFOV / 2)` at the median camera-to-target distance `d` and HFOV
+  of the range, rounded to 10 m and clamped to [100, 2000].
+- `max_height` (optional, metres above the target, [1, 10000]): prepare caps the ceiling at the
+  target height + max_height (`config.prepare.max_height`), so pruning removes everything above it
+  to the end of training. Absent: the data's own ceiling (canopy rule).
 - `kind`: `"thermal"` (default when absent) or `"rgb"`; an rgb request also carries
   `rgb: {width}` (integer in [64, 16384], at most the recording's width, checked by select) and
   must have `target.refine` false; a thermal request has no `rgb`. Ingest fails if the
   recording is not of that kind.
 - Validation (`app/src/request.js` `validateRequest`) is strict: known keys only, finite numbers,
   lat in [-90, 90], lon in [-180, 180], heights in [-500, 9000], `hfov` and `view.fov_deg` in
-  [10, 120] degrees, `range.start.pts <= range.end.pts`, integer `pts`, `offset` >= 0 and
+  [10, 120] degrees, `radius` and `max_height` as above, `range.start.pts <= range.end.pts`, integer `pts`, `offset` >= 0 and
   `size` >= 1, `timescale` > 0, `refine` boolean, `title` <= 120 characters. Optional: `hfov`,
-  `view`, `title` (absent or null), `source.lastModified`, endpoint `index`. A rejection names
+  `radius`, `max_height`, `view`, `title` (absent or null), `source.lastModified`, endpoint `index`. A rejection names
   the field.
 - `range.start` / `end`: the first and last frame (inclusive) as packet identity from the shared
   demuxer: `pts` = `timestampTicks` in track `timescale`, packet `offset` and `size`; `index` is a
@@ -505,7 +527,8 @@ What the video viewer's Create splat hands to WebSplat (PLAN-v2.md). Heights are
   authoritative (`locate_hotspot` false, export target `"picked"`).
 - `view.camera` is the start camera position; it looks at the export target; `fov_deg` vertical.
 - Identity (`requestIdentity`): `{range: {timescale, start, end: {pts, offset, size}}, target,
-  hfov, view}`, plus `kind: "rgb"` and `rgb` for rgb requests (thermal identities keep this form);
+  hfov, view}`, plus `kind: "rgb"` and `rgb` for rgb requests (thermal identities keep this form),
+  and `radius` / `max_height` when given (identities without them are unchanged);
   `requestKey` = the first 16 hex digits of its canonical-JSON hash. A request job is
   `<kind>-<source hash, 16 hex>-<requestKey>`.
 - Handover (window messages, same origin; local development pages also accept any
@@ -555,7 +578,8 @@ and `hfov` from the request or proposal, `start`/`end` = the resolved range, `st
 `max(1, ceil(frames / 1000))`, and with `refine` false `margin` = -0.25 (the picked target may
 project up to a quarter frame outside the image, as telemetry poses can be tens of metres off;
 measured 34 m on the orbit); an rgb request's: `lat`, `lon`, `target_alt`, `hfov`, `width`,
-`start`/`end`, `budget` 500), `features` (`maxNumFeatures`; RGB jobs 4096), `export` (`title`, `description`, `view` = `request.view`,
+`start`/`end`, `budget` 500), `prepare` (a request's `radius` and `max_height`), `features`
+(`maxNumFeatures`; RGB jobs 4096), `map` (`camera`), `export` (`title`, `description`, `view` = `request.view`,
 `target` = `"picked"` when `refine` is false), `request` (a request job's identity plus
 `source{name,size}`; in no stage's `configKeys`: display and reopen checks only), `standin`, and
 run-time knobs (`speed`, `ckptMs`, `selectMode`, `rgbDecoder`: `auto` | `webcodecs` | `software`).
@@ -644,6 +668,14 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
   import from `tools/viewer/src` (allowed by `app/vite.config.js`).
 
 ## Change log
+
+- v1.9 (2026-11-10): request `radius` and `max_height` (optional, in the identity when given;
+  `config.prepare.radius` / `max_height`); RGB dataset bounds `max_vertical` and
+  `vertical_prune_from` (train_rgb.py's too-tall pruning to the end, Brush fork patch 0017; RGB
+  prepare stage `rgb-2`); RADIAL camera (`config.map.camera`, RGB undistortion with k2). RGB request jobs set
+  `config.prepare.centre` `"target"`: the radius, initial points and ceiling are about the request's
+  target (the standalone page keeps `train_rgb.py`'s model median). An accepted early stop gets the
+  too-tall pass on its PLY (train worker).
 
 - v1.8 (2026-11-10): Stop and accept (train record `accept`, `train.json` and result
   `iterations_planned` / `stopped_early`, export info `stopped_early`, export result
