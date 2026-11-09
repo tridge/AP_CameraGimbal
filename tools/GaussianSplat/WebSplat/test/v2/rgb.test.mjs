@@ -470,3 +470,44 @@ test("SPZ check: Spark's colour bytes near the rounding edges are within bounds"
   assert.deepEqual(e.over, {});
   assert.equal(e.clamped.sh0, 3); // 5.0 is beyond SPZ's colour range
 });
+
+test('SPZ alpha bound allows a float16 tie tipped by a float32 sigmoid', async () => {
+  const { spzErrors } = await import('../../app/src/stages/export/spz.js');
+  const { emptySplat } = await import('../../app/src/stages/export/ply.js');
+  // the 1920 orbit's case: alpha 0.5 - 2^-13 staged as 0.5, then byte 128
+  const src = emptySplat(1, 0);
+  const dec = emptySplat(1, 0);
+  src.quats.set([1, 0, 0, 0]);
+  dec.quats.set([1, 0, 0, 0]);
+  src.opacities[0] = -0.000488295394461602;
+  dec.opacities[0] = Math.log(128 / 127);
+  assert.deepEqual(spzErrors(src, dec, 12).over, {});
+  dec.opacities[0] = Math.log(129 / 126);
+  assert.deepEqual(spzErrors(src, dec, 12).over, { alpha: 1 });
+});
+
+test('pruneTallPly: the too-tall pass on a PLY keeps the other rows byte for byte', async () => {
+  const { emptySplat, writePly, readPly, parsePlyHeader } = await import(
+    '../../app/src/stages/export/ply.js'
+  );
+  const { pruneTallPly } = await import('../../app/src/stages/train/brush-dataset.js');
+  const s = emptySplat(3, 0);
+  const h = Math.SQRT1_2 * 2; // unnormalised 90 degrees about x: local y becomes vertical
+  s.quats.set([1, 0, 0, 0, h, h, 0, 0, 1, 0, 0, 0]);
+  s.scales.set([0.1, 0.1, 2.0, 0.1, 2.0, 0.1, 5.0, 5.0, 0.1].map(Math.log));
+  s.means.set([0, 0, 0, 1, 1, 1, 2, 2, 2]);
+  const bytes = writePly(s, { comments: ['a comment'] });
+  const { bytes: out, removed } = pruneTallPly(bytes, 1);
+  assert.equal(removed, 2);
+  const hi = parsePlyHeader(bytes),
+    ho = parsePlyHeader(out);
+  assert.equal(ho.count, 1);
+  assert.deepEqual(ho.comments, ['a comment']);
+  assert.deepEqual(
+    out.subarray(ho.start),
+    bytes.subarray(hi.start + 2 * hi.stride, hi.start + 3 * hi.stride),
+  );
+  assert.deepEqual([...readPly(out).props.x], [2]);
+  // nothing taller: the same bytes
+  assert.equal(pruneTallPly(bytes, 3).bytes, bytes);
+});

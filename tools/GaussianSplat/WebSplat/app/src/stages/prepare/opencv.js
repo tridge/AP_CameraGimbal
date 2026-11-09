@@ -12,8 +12,8 @@ function invPinhole(fx, fy, cx, cy) {
   return [1 / fx, 0, -cx / fx, 0, 1 / fy, -cy / fy, 0, 0, 1];
 }
 
-/** cv2.initUndistortRectifyMap(K, [k1,0,0,0], None, K, (W, H), CV_32FC1) */
-export function undistortMaps(fx, fy, cx, cy, k1, W, H) {
+/** cv2.initUndistortRectifyMap(K, [k1,k2,0,0], None, K, (W, H), CV_32FC1) */
+export function undistortMaps(fx, fy, cx, cy, k1, W, H, k2 = 0) {
   const ir = invPinhole(fx, fy, cx, cy);
   const mapx = new Float32Array(W * H);
   const mapy = new Float32Array(W * H);
@@ -26,7 +26,7 @@ export function undistortMaps(fx, fy, cx, cy, k1, W, H) {
         x = _x * w,
         y = _y * w;
       const r2 = x * x + y * y;
-      const kr = 1 + k1 * r2;
+      const kr = 1 + (k2 * r2 + k1) * r2; // OpenCV's order (exactly k1 * r2 when k2 is 0)
       mapx[i * W + j] = fx * (x * kr) + cx;
       mapy[i * W + j] = fy * (y * kr) + cy;
     }

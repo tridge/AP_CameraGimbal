@@ -7,7 +7,7 @@ export const PRIOR_MAP_DEFAULTS = {
   thresholds: [40, 16, 8, 4], // px, per round
   priorSigma: 5, // m, telemetry position std dev (covariance sigma^2 I, CARTESIAN)
   maxIterations: 50, // Ceres iterations per BA
-  cameraModel: 'SIMPLE_RADIAL',
+  camera: 'SIMPLE_RADIAL', // camera model (SIMPLE_RADIAL, RADIAL or PINHOLE)
 };
 
 const g = (x, digits) => Number(x.toPrecision(digits)); // printf %.<digits>g

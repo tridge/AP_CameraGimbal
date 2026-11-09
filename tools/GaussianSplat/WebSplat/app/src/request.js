@@ -16,6 +16,12 @@ export const PICKED_MARGIN = -0.25;
 export const KINDS = ['thermal', 'rgb'];
 export const MIN_RGB_WIDTH = 64;
 export const MAX_RGB_WIDTH = 16384;
+// prepare's radius (m) about the target
+export const MIN_RADIUS = 10;
+export const MAX_RADIUS = 10000;
+// prepare's cap on the ceiling, metres above the target
+export const MIN_MAX_HEIGHT = 1;
+export const MAX_MAX_HEIGHT = 10000;
 
 export class RequestError extends Error {
   name = 'RequestError';
@@ -67,7 +73,7 @@ export function validateRequest(obj) {
     obj,
     'request',
     ['format', 'version', 'source', 'range', 'target'],
-    ['kind', 'rgb', 'hfov', 'view', 'title'],
+    ['kind', 'rgb', 'hfov', 'radius', 'max_height', 'view', 'title'],
   );
   if (obj.format !== REQUEST_FORMAT) fail('format', `"${obj.format}" is not ${REQUEST_FORMAT}`);
   if (obj.version !== REQUEST_VERSION)
@@ -109,6 +115,11 @@ export function validateRequest(obj) {
   };
 
   const hfov = obj.hfov == null ? null : fov(obj.hfov, 'hfov');
+  const radius = obj.radius == null ? null : number(obj.radius, 'radius', MIN_RADIUS, MAX_RADIUS);
+  const maxHeight =
+    obj.max_height == null
+      ? null
+      : number(obj.max_height, 'max_height', MIN_MAX_HEIGHT, MAX_MAX_HEIGHT);
 
   let view = null;
   if (obj.view != null) {
@@ -139,13 +150,16 @@ export function validateRequest(obj) {
     range,
     target,
     hfov,
+    radius,
+    max_height: maxHeight,
     view,
     title,
   };
 }
 
 /** The fields that affect a job's outputs (endpoint `index` is only a hint, so not included).
- * kind and rgb only for rgb, so thermal identities (and job ids) keep the v1 form. */
+ * kind and rgb only for rgb, radius and max_height only when given, so older identities (and
+ * job ids) keep their form. */
 export function requestIdentity(req) {
   const end = ({ pts, offset, size }) => ({ pts, offset, size });
   return {
@@ -153,6 +167,8 @@ export function requestIdentity(req) {
     range: { timescale: req.range.timescale, start: end(req.range.start), end: end(req.range.end) },
     target: { ...req.target },
     hfov: req.hfov,
+    ...(req.radius != null && { radius: req.radius }),
+    ...(req.max_height != null && { max_height: req.max_height }),
     view: req.view && { camera: { ...req.view.camera }, fov_deg: req.view.fov_deg },
   };
 }

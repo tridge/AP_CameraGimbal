@@ -1,7 +1,8 @@
 // Stage 5b for RGB recordings (pipeline/registry.js); config.prepare: rgb-scene.js option names.
 import { defineStage } from '../../pipeline/registry.js';
 
-export const RGB_PREPARE_VERSION = 1;
+// 2: bounds.max_vertical (train_rgb.py's too_tall)
+export const RGB_PREPARE_VERSION = 2;
 
 export const rgbPrepareStage = defineStage({
   id: 'prepare',

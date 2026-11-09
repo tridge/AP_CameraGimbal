@@ -1,0 +1,180 @@
+From 70d344560dc63eab9d1b6d23547626dea3444e8e Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Tue, 10 Nov 2026 08:48:09 +1100
+Subject: [PATCH] WebSplat RGB: train_rgb.py's too-tall pruning (max_vertical)
+ to the end of training
+
+bounds.json max_vertical / vertical_prune_from: Gaussians whose vertical 1-sigma extent exceeds max_vertical are pruned with the bounds from vertical_prune_from, and once more after the last step (train_rgb.py's too_tall).
+---
+ crates/brush-dataset/src/lib.rs          |  8 ++-
+ crates/brush-process/src/train_stream.rs |  7 +++
+ crates/brush-train/src/train.rs          | 74 +++++++++++++++++++++++-
+ 3 files changed, 87 insertions(+), 2 deletions(-)
+
+diff --git a/crates/brush-dataset/src/lib.rs b/crates/brush-dataset/src/lib.rs
+index 880f259..e5b4316 100644
+--- a/crates/brush-dataset/src/lib.rs
++++ b/crates/brush-dataset/src/lib.rs
+@@ -126,7 +126,9 @@ pub struct Dataset {
+ /// grid of `n x n` cells of `cell` metres from `origin`, indexed `[i * n + j]` with
+ /// `i = clamp(trunc((x - origin.x) / cell))` (east) and `j` likewise (north). Optionally,
+ /// splats larger than `max_scale` metres on any axis are pruned while
+-/// `scale_prune_from <= iter < scale_prune_until`.
++/// `scale_prune_from <= iter < scale_prune_until`, and splats taller than `max_vertical` metres
++/// (vertical 1-sigma extent, train_rgb.py's `too_tall`) from `vertical_prune_from` and once more
++/// after the last step.
+ #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+ pub struct PruneBounds {
+     pub centre: [f32; 2],
+@@ -142,6 +144,10 @@ pub struct PruneBounds {
+     pub scale_prune_from: u32,
+     #[serde(default)]
+     pub scale_prune_until: u32,
++    #[serde(default)]
++    pub max_vertical: Option<f32>,
++    #[serde(default)]
++    pub vertical_prune_from: u32,
+ }
+ 
+ impl Dataset {
+diff --git a/crates/brush-process/src/train_stream.rs b/crates/brush-process/src/train_stream.rs
+index e7b52a2..59c6b3b 100644
+--- a/crates/brush-process/src/train_stream.rs
++++ b/crates/brush-process/src/train_stream.rs
+@@ -366,6 +366,13 @@ pub(crate) async fn train_stream(
+                 .map_err(anyhow::Error::msg)?
+                 .0;
+         }
++        if prune_every > 0 && iter + 1 == training_steps {
++            splats = trainer
++                .prune_tall(iter + 1, splats)
++                .await
++                .map_err(anyhow::Error::msg)?
++                .0;
++        }
+         slot.set(0, splats.clone());
+         let refine_dur = refine_start.elapsed();
+ 
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index f8a5726..106a814 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -503,11 +503,29 @@ impl SplatTrainer {
+     /// train.py's bounds pruning (`--prune-bounds-every`): removes Gaussians outside the bounds,
+     /// with their optimiser state, refine statistics (when gathered since the last refine) and
+     /// 3D-filter floor; nothing replaces them. Errors if no Gaussian would remain.
+-    pub async fn prune_bounds(&mut self, iter: u32, mut splats: Splats) -> Result<(Splats, u32), String> {
++    pub async fn prune_bounds(&mut self, iter: u32, splats: Splats) -> Result<(Splats, u32), String> {
+         let mask = match &self.prune_bounds {
+             Some(b) => outside_prune_bounds(&splats, b, iter),
+             None => return Ok((splats, 0)),
+         };
++        self.prune_mask(iter, splats, mask).await
++    }
++
++    /// train_rgb.py's pass after the last step: only the too-tall rule.
++    pub async fn prune_tall(&mut self, iter: u32, splats: Splats) -> Result<(Splats, u32), String> {
++        let mask = match self.prune_bounds.as_ref().and_then(|b| b.max_vertical) {
++            Some(max_vertical) => vertical_extent(&splats).greater_elem(max_vertical),
++            None => return Ok((splats, 0)),
++        };
++        self.prune_mask(iter, splats, mask).await
++    }
++
++    async fn prune_mask(
++        &mut self,
++        iter: u32,
++        mut splats: Splats,
++        mask: Tensor<1, Bool>,
++    ) -> Result<(Splats, u32), String> {
+         let n = splats.num_splats();
+         let keep = mask.bool_not().argwhere_async().await;
+         let kept = keep.dims()[0] as u32;
+@@ -989,9 +1007,29 @@ fn outside_prune_bounds(splats: &Splats, b: &PruneBounds, iter: u32) -> Tensor<1
+     {
+         out = out.bool_or(splats.scales().greater_elem(max_scale).any_dim(1).squeeze_dim(1));
+     }
++    if let Some(max_vertical) = b.max_vertical
++        && iter >= b.vertical_prune_from
++    {
++        out = out.bool_or(vertical_extent(splats).greater_elem(max_vertical));
++    }
+     out
+ }
+ 
++/// Vertical 1-sigma extent: |row 2 of R(q) * scales| (train_rgb.py's `too_tall`).
++fn vertical_extent(splats: &Splats) -> Tensor<1> {
++    let q = splats.rotations();
++    let norm = (q.clone() * q.clone()).sum_dim(1).sqrt().clamp_min(1e-12);
++    let q = q / norm;
++    let c = |k: i32| -> Tensor<1> { q.clone().slice(s![.., k..k + 1]).squeeze_dim(1) };
++    let (w, x, y, z) = (c(0), c(1), c(2), c(3));
++    let s = splats.scales();
++    let sc = |k: i32| -> Tensor<1> { s.clone().slice(s![.., k..k + 1]).squeeze_dim(1) };
++    let r0 = (x.clone() * z.clone() - w.clone() * y.clone()) * 2.0 * sc(0);
++    let r1 = (y.clone() * z + w * x.clone()) * 2.0 * sc(1);
++    let r2 = ((x.clone() * x + y.clone() * y) * -2.0 + 1.0) * sc(2);
++    (r0.clone() * r0 + r1.clone() * r1 + r2.clone() * r2).sqrt()
++}
++
+ /// Sample a background color: base + uniform noise in [-strength, +strength], clamped to [0, 1].
+ fn sample_background_color<R: rand::Rng + ?Sized>(
+     base: glam::Vec3,
+@@ -1117,6 +1155,8 @@ mod websplat_tests {
+             max_scale: None,
+             scale_prune_from: 0,
+             scale_prune_until: 0,
++            max_vertical: None,
++            vertical_prune_from: 0,
+         }));
+         let (s, _) = trainer.step(batch(), splats(&device).train()).await;
+         let (s, removed) = trainer.prune_bounds(100, s.valid()).await.unwrap();
+@@ -1146,6 +1186,8 @@ mod websplat_tests {
+             max_scale: None,
+             scale_prune_from: 0,
+             scale_prune_until: 0,
++            max_vertical: None,
++            vertical_prune_from: 0,
+         }
+     }
+ 
+@@ -1175,6 +1217,36 @@ mod websplat_tests {
+         assert_eq!(m.moment_1.dims()[0] as u32, s.num_splats());
+     }
+ 
++    // train_rgb.py's too_tall: vertical 1-sigma extent from the rotated scales
++    #[tokio::test]
++    async fn too_tall_pruning() {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig { prune_bounds_every: 100, total_train_iters: 3000, ..Default::default() };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        trainer.set_prune_bounds(Some(PruneBounds {
++            max_vertical: Some(1.0),
++            vertical_prune_from: 1500,
++            ..cylinder(10.0)
++        }));
++        let h = std::f32::consts::FRAC_1_SQRT_2 * 2.0; // unnormalised 90 degrees about x
++        let s = Splats::from_raw(
++            [0.0f32, 0.0, 5.0].repeat(3),
++            vec![1.0, 0.0, 0.0, 0.0, h, h, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
++            [0.1f32, 0.1, 2.0, 0.1, 2.0, 0.1, 5.0, 5.0, 0.1].iter().map(|v| v.ln()).collect(),
++            vec![0.0; 9],
++            vec![0.0; 3],
++            SplatRenderMode::Default,
++            &device,
++        );
++        let (s, removed) = trainer.prune_bounds(1400, s).await.unwrap();
++        assert_eq!(removed, 0, "kept before vertical_prune_from");
++        let (kept, removed) = trainer.prune_bounds(1500, s.clone()).await.unwrap();
++        assert_eq!((kept.num_splats(), removed), (1, 2), "tall and rotated-tall pruned, flat kept");
++        let (kept, removed) = trainer.prune_tall(100, s).await.unwrap();
++        assert_eq!((kept.num_splats(), removed), (1, 2), "the final pass ignores the start step");
++    }
++
+     #[tokio::test]
+     async fn prune_that_empties_the_model_fails() {
+         let device: Device = brush_cube::test_helpers::test_device().await.into();
+-- 
+2.53.0
+

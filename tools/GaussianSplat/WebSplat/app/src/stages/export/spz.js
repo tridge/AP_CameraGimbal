@@ -229,7 +229,7 @@ export const decompressSpz = gunzip;
 
 // Decode error bounds: half a quantisation step plus Spark's staging before it quantises
 // (measured: up to 0.56 steps otherwise): half a float16 ulp of the value entering the quantiser,
-// for log scales also two float32 ulps (Spark's exp/ln round trip), and for SH coefficients also
+// for log scales and alpha also two float32 ulps (Spark's float32 exp/ln and sigmoid), and for SH coefficients also
 // half of 1/128 (8-bit staging).
 // Rotation: smallest-three, 9 bits over [0, sqrt(1/2)] per component: each stored component is
 // within e = 0.5 sqrt(1/2)/511 + 2^-12 (staging), the largest (>= 1/2) is rebuilt from the norm
@@ -319,7 +319,8 @@ export function spzErrors(src, dec, fractionalBits) {
       add('sh0', Math.abs(d - dec.sh0[j]), f16HalfUlp(d) + f16HalfUlp(rgb) / 0.15);
     }
     const a = sigmoid(src.opacities[i]);
-    add('alpha', Math.abs(a - sigmoid(dec.opacities[i])), f16HalfUlp(a));
+    // Spark's float32 sigmoid can put a float16 tie on either side (1920 orbit: a = 0.5 - 2^-13)
+    add('alpha', Math.abs(a - sigmoid(dec.opacities[i])), f16HalfUlp(a) + 2 * f32Ulp(a));
     let dot = 0;
     let ns = 0;
     let nd = 0;

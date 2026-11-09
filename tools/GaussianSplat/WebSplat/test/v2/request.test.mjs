@@ -65,6 +65,11 @@ test('optional fields may be absent or null', () => {
   assert.equal(validateRequest(variant((o) => (o.view = null))).view, null);
   assert.equal(validateRequest(variant((o) => (o.title = '   '))).title, null);
   assert.equal(validateRequest(variant((o) => (o.hfov = 32))).hfov, 32);
+  assert.equal(validateRequest(base()).radius, null);
+  assert.equal(validateRequest(variant((o) => (o.radius = null))).radius, null);
+  assert.equal(validateRequest(variant((o) => (o.radius = 700))).radius, 700);
+  assert.equal(validateRequest(base()).max_height, null);
+  assert.equal(validateRequest(variant((o) => (o.max_height = 60))).max_height, 60);
 });
 
 const rejects = [
@@ -96,6 +101,11 @@ const rejects = [
   ['title type', (o) => (o.title = 5), /request title: must be a string/],
   ['title length', (o) => (o.title = 'x'.repeat(121)), /request title: longer than 120/],
   ['view camera key', (o) => (o.view.camera.heading = 1), /request view.camera: unknown key/],
+  ['radius low', (o) => (o.radius = 5), /request radius: 5 is outside/],
+  ['radius high', (o) => (o.radius = 20000), /request radius: 20000 is outside/],
+  ['radius string', (o) => (o.radius = '700'), /request radius: must be a finite number/],
+  ['max_height low', (o) => (o.max_height = 0.5), /request max_height: 0.5 is outside/],
+  ['max_height NaN', (o) => (o.max_height = NaN), /request max_height: must be a finite/],
 ];
 for (const [name, edit, re] of rejects) {
   test(`rejects: ${name}`, () => {
@@ -125,6 +135,8 @@ test('requestKey: stable, 16 hex digits, only output-affecting fields', async ()
     (o) => (o.hfov = 30),
     (o) => (o.view = null),
     (o) => (o.view.fov_deg = 50),
+    (o) => (o.radius = 700),
+    (o) => (o.max_height = 60),
   ])
     assert.notEqual(await requestKey(validateRequest(variant(edit))), k);
   // a fixed value: changing the identity's canonical form would orphan existing jobs
@@ -135,6 +147,19 @@ test('requestKey: stable, 16 hex digits, only output-affecting fields', async ()
     'target',
     'view',
   ]);
+  // radius joins the identity only when given (older job ids keep their keys)
+  assert.equal(await requestKey(validateRequest(variant((o) => (o.radius = null)))), k);
+  assert.equal(await requestKey(validateRequest(variant((o) => (o.max_height = null)))), k);
+  assert.equal(
+    requestIdentity(validateRequest(variant((o) => (o.max_height = 60)))).max_height,
+    60,
+  );
+  const withRadius = requestIdentity(validateRequest(variant((o) => (o.radius = 700))));
+  assert.equal(withRadius.radius, 700);
+  assert.notEqual(
+    await requestKey(validateRequest(variant((o) => (o.radius = 700)))),
+    await requestKey(validateRequest(variant((o) => (o.radius = 710)))),
+  );
 });
 
 // index.json-like frames: pts in ticks

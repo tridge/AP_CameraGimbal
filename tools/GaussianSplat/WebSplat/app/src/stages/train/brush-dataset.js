@@ -7,7 +7,10 @@
 //   init.ply           train.py init_params: points, SH DC (v - 0.5) / SH_C0, kNN log scales,
 //                      opacity logit(0.1), uniform [0, 1) quaternions (seeded; not torch's draws)
 //   eval_views.txt     the 'test' split (frozen holdouts)
-//   bounds.json        train.py's spatial pruning region and gsplat's too-big rule
+//   bounds.json        train.py's spatial pruning region and gsplat's too-big rule (RGB: and
+//                      train_rgb.py's too-tall rule)
+import { parsePlyHeader } from '../export/ply.js';
+
 export const SH_C0 = 0.28209479177387814;
 
 // float16 bits -> float32 (exact)
@@ -334,7 +337,58 @@ export function boundsJson(dataset, ceiling) {
     max_scale: s.prune_scale3d * dataset.training.scene_scale,
     scale_prune_from: s.reset_every + 1,
     scale_prune_until: s.refine_stop_iter,
+    // RGB (train_rgb.py): taller than max_vertical from vertical_prune_from
+    ...(b.max_vertical > 0
+      ? { max_vertical: b.max_vertical, vertical_prune_from: b.vertical_prune_from }
+      : {}),
   };
+}
+
+/** train_rgb.py's too-tall pass on a Brush PLY (bytes): rows whose vertical 1-sigma extent
+ * |row 2 of R(q) * exp(scales)| exceeds maxVertical are dropped, the rest kept byte for byte.
+ * For a run accepted before its last step, where the fork's own final pass does not run.
+ * Returns {bytes, removed}. */
+export function pruneTallPly(bytes, maxVertical) {
+  const h = parsePlyHeader(bytes);
+  const off = (name) => {
+    const p = h.props.find((q) => q.name === name);
+    if (!p || p.type !== 'float') throw new Error(`PLY has no float ${name}`);
+    return p.offset;
+  };
+  const [r0, r1, r2, r3, s0, s1, s2] = [
+    'rot_0',
+    'rot_1',
+    'rot_2',
+    'rot_3',
+    'scale_0',
+    'scale_1',
+    'scale_2',
+  ].map(off);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const keep = [];
+  for (let i = 0, at = h.start; i < h.count; i++, at += h.stride) {
+    const f = (o) => dv.getFloat32(at + o, true);
+    let [w, x, y, z] = [f(r0), f(r1), f(r2), f(r3)];
+    const n = Math.max(Math.hypot(w, x, y, z), 1e-12);
+    [w, x, y, z] = [w / n, x / n, y / n, z / n];
+    const a = 2 * (x * z - w * y) * Math.exp(f(s0));
+    const b = 2 * (y * z + w * x) * Math.exp(f(s1));
+    const c = (1 - 2 * (x * x + y * y)) * Math.exp(f(s2));
+    if (Math.hypot(a, b, c) <= maxVertical) keep.push(at);
+  }
+  const removed = h.count - keep.length;
+  if (!removed) return { bytes, removed };
+  if (!keep.length) throw new Error(`the too-tall pass would remove all ${h.count} Gaussians`);
+  const head = new TextDecoder('latin1')
+    .decode(bytes.subarray(0, h.start))
+    .replace(/^element vertex \d+$/m, `element vertex ${keep.length}`);
+  const headBytes = Uint8Array.from(head, (ch) => ch.charCodeAt(0));
+  const out = new Uint8Array(headBytes.length + keep.length * h.stride);
+  out.set(headBytes);
+  keep.forEach((at, k) =>
+    out.set(bytes.subarray(at, at + h.stride), headBytes.length + k * h.stride),
+  );
+  return { bytes: out, removed };
 }
 
 function fmt(x) {
