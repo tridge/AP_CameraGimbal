@@ -402,7 +402,8 @@ async function main() {
   if (params.has('selectMode')) config.selectMode = params.get('selectMode'); // same output, any mode
   // stand-in inputs (stage 6 and the export-test set): ?standin=URL of {id: {files: {name: url}}}
   if (params.get('standin')) {
-    const r = await fetch(params.get('standin'));
+    // relative to the page's URL, not the release <base>
+    const r = await fetch(new URL(params.get('standin'), location.href));
     if (!r.ok) throw new Error(`standin: HTTP ${r.status}`);
     const urls = await r.json();
     for (const v of Object.values(urls)) {

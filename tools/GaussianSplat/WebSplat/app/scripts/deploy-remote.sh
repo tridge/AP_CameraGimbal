@@ -15,7 +15,9 @@ cd "$base"
 new=releases/$release.partial
 [[ -d $new && -f $new/root-index.html ]] || { echo "no complete upload at $base/$new" >&2; exit 1; }
 live() { if [[ -e current ]]; then basename "$(readlink -f current)"; fi; }
-prev=$(live)
+# the release index.html serves; differs from current only if a switch died between the renames
+served() { if [[ -f index.html ]]; then sed -n 's#.*<base href="\./releases/\([^/"]*\)/".*#\1#p' index.html | head -1; fi; }
+prev=$(live) prev_served=$(served)
 mv -T "$new" "releases/$release"
 cp "releases/$release/root-index.html" "index.html.$release"
 mv -f "index.html.$release" index.html
@@ -25,6 +27,6 @@ find releases -mindepth 1 -maxdepth 1 -name '*.partial' -mmin +1440 -exec rm -rf
 now=$(live)
 find releases -mindepth 1 -maxdepth 1 -type d ! -name '*.partial' -printf '%f\n' | sort | head -n "-$keep" |
   while IFS= read -r old; do
-    [[ $old == "$now" || $old == "$prev" ]] || rm -rf -- "releases/$old"
+    [[ $old == "$now" || $old == "$prev" || $old == "$prev_served" ]] || rm -rf -- "releases/$old"
   done
 echo "current -> releases/$now (replaced ${prev:-nothing})"
