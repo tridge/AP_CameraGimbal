@@ -140,7 +140,7 @@ def main():
             st['rgb_res'] = gui.add_slider('Render width', 320, max_width, 32, min(960, max_width))
             st['rgb_cams'] = gui.add_checkbox('Show training cameras', False)
         with gui.add_folder('Display', visible=not rgb_mode):
-            st['cmap'] = gui.add_dropdown('Colormap', NAMES, initial_value='ironbow')
+            st['cmap'] = gui.add_dropdown('Colormap', NAMES, initial_value='whitehot')
             st['lo'] = gui.add_slider('Min C', tmin0, tmax0, 0.5, tmin0)
             st['hi'] = gui.add_slider('Max C', tmin0, tmax0, 0.5, min(tmax0, tmin0 + 40))
             st['auto'] = gui.add_checkbox('Auto range', True)
