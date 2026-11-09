@@ -55,6 +55,9 @@ const color = {
   exclusion: Color.RED,
   footprint: Color.YELLOW,
   finding: Color.MAGENTA,
+  dimTrack: Color.LIGHTGRAY.withAlpha(0.35),
+  look: Color.fromCssColorString('#56d8c1').withAlpha(0.85),
+  splatTarget: Color.fromCssColorString('#ffb85b'),
 };
 export class ReviewMap {
   constructor(
@@ -91,6 +94,10 @@ export class ReviewMap {
     this.logEntities = [];
     this.flightEntities = [];
     this.findingEntities = [];
+    this.dimEntities = [];
+    this.splatEntities = [];
+    this.lookPoints = null;
+    this.pickHandler = null;
     this.viewer = new Viewer(container, {
       animation: false,
       timeline: false,
@@ -154,6 +161,12 @@ export class ReviewMap {
     const handler = this.viewer.screenSpaceEventHandler;
     const originalClick = handler.getInputAction(ScreenSpaceEventType.LEFT_CLICK);
     handler.setInputAction((event) => {
+      if (this.pickHandler) {
+        const pick = this.pickHandler;
+        this.setPickHandler(null);
+        pick(this.pickGround(event.position));
+        return;
+      }
       const hit = this.pickVideoTrack(event.position);
       if (hit) onTrackSeek(hit.pts)?.catch?.(this.onStatus);
       else originalClick?.(event);
@@ -197,32 +210,54 @@ export class ReviewMap {
       this.onPointerHeight({ heightAmslM: null, reason: 'waiting for pointer to stop' });
       return;
     }
+    // at() queues missing meshes; their callback samples the current pointer,
+    // never a stale latitude/longitude captured before an asynchronous load.
+    const { lat, lon, heightAmslM, reason } = this.pickGround(this.pointerPosition, 'pointer');
+    this.onPointerHeight(
+      lat === undefined ? { heightAmslM, reason } : { lat, lon, heightAmslM, reason },
+    );
+  }
+  /** Globe position under a canvas point with its terrain height (m AMSL, null if unknown). */
+  pickGround(screen, subject = 'point') {
     const scene = this.viewer.scene;
-    if (scene.mode === SceneMode.MORPHING) {
-      this.onPointerHeight({ heightAmslM: null, reason: 'map changing mode' });
-      return;
-    }
-    const ray = this.viewer.camera.getPickRay(this.pointerPosition);
+    if (scene.mode === SceneMode.MORPHING)
+      return { heightAmslM: null, reason: 'map changing mode' };
+    const ray = this.viewer.camera.getPickRay(screen);
     const hit =
       ray &&
       (scene.globe.pick(ray, scene) ||
-        this.viewer.camera.pickEllipsoid(this.pointerPosition, scene.globe.ellipsoid));
-    if (!hit) {
-      this.onPointerHeight({ heightAmslM: null, reason: 'pointer outside terrain' });
-      return;
-    }
+        this.viewer.camera.pickEllipsoid(screen, scene.globe.ellipsoid));
+    if (!hit) return { heightAmslM: null, reason: `${subject} outside terrain` };
     const position = Cartographic.fromCartesian(hit),
       lat = CesiumMath.toDegrees(position.latitude),
       lon = CesiumMath.toDegrees(position.longitude),
       heightAmslM = this.terrain.at(lat, lon);
-    // at() queues missing meshes; their callback samples the current pointer,
-    // never a stale latitude/longitude captured before an asynchronous load.
-    this.onPointerHeight({
+    return {
       lat,
       lon,
       heightAmslM,
       reason: finite(heightAmslM) ? null : this.terrain.lastIssue?.reason || 'terrain unavailable',
-    });
+    };
+  }
+  /** The next left click calls handler(pickGround result) instead of seeking; null cancels. */
+  setPickHandler(handler) {
+    this.pickHandler = handler || null;
+    this.viewer.scene.canvas.style.cursor = this.pickHandler ? 'crosshair' : '';
+  }
+  /** 3D camera position (m AMSL) and vertical FOV, or null outside 3D. */
+  cameraPose() {
+    const scene = this.viewer.scene,
+      camera = this.viewer.camera;
+    if (scene.mode !== SceneMode.SCENE3D) return null;
+    const c = camera.positionCartographic,
+      fovy = camera.frustum.fovy;
+    if (!c || !finite(fovy)) return null;
+    return {
+      lat: CesiumMath.toDegrees(c.latitude),
+      lon: CesiumMath.toDegrees(c.longitude),
+      alt_amsl: c.height - this.offset,
+      fov_deg: CesiumMath.toDegrees(fovy),
+    };
   }
   render() {
     this.viewer.scene.requestRender();
@@ -514,19 +549,32 @@ export class ReviewMap {
     commit();
     this.render();
   }
-  async setVideoTrack(frames, recordForFrame) {
+  setVideoTrack(frames, recordForFrame) {
+    return this.setTrackRange(frames, recordForFrame);
+  }
+  /** Draw (and seek on) only `frames`, built before decimation so a short range always draws;
+   * dimOthers with allFrames also draws the whole track dimmed, without seeking. */
+  async setTrackRange(frames, recordForFrame, { dimOthers = false, allFrames = null } = {}) {
     this.trackController?.abort();
     const controller = new AbortController();
     this.trackController = controller;
     this.videoTrack = [];
+    // small tracks build synchronously, as before
+    const large = (list) => list.length > 20000;
+    const slow = (list) =>
+      buildVideoTrackAsync(list.slice(), recordForFrame, 4000, controller.signal);
     try {
-      const track =
-        frames.length > 20000
-          ? await buildVideoTrackAsync(frames.slice(), recordForFrame, 4000, controller.signal)
-          : buildVideoTrack(frames, recordForFrame);
+      const track = large(frames) ? await slow(frames) : buildVideoTrack(frames, recordForFrame);
+      const whole = !(dimOthers && allFrames)
+        ? null
+        : large(allFrames)
+          ? await slow(allFrames)
+          : buildVideoTrack(allFrames, recordForFrame);
       if (controller.signal.aborted) return false;
       this.clearEntities(this.flightEntities);
+      this.clearEntities(this.dimEntities);
       this.clearTemperatureTrack();
+      if (whole) this.drawTrack(whole, this.dimEntities, color.dimTrack, true);
       this.trackLimited = !!track.limited;
       this.videoTrack = track.map((p) => ({ ...p, world: this.position(p.lat, p.lon, p.altMsl) }));
       this.trackTemperatureRange = trackTemperatureRange(track);
@@ -537,6 +585,51 @@ export class ReviewMap {
       if (e.name === 'AbortError') return false;
       throw e;
     }
+  }
+  setLookPoints(points) {
+    if (this.lookPoints) this.viewer.scene.primitives.remove(this.lookPoints);
+    this.lookPoints = null;
+    if (points?.length) {
+      this.lookPoints = this.viewer.scene.primitives.add(new PointPrimitiveCollection());
+      for (const p of points)
+        this.lookPoints.add({
+          position: this.position(p.lat, p.lon, p.altMsl + 1),
+          color: color.look,
+          pixelSize: 4,
+          disableDepthTestDistance: Infinity,
+        });
+    }
+    this.render();
+  }
+  /** Splat target marker {lat, lon, altAmsl, groundAmsl} with a line up from the terrain. */
+  setSplatTarget(target) {
+    this.clearEntities(this.splatEntities);
+    if (target && [target.lat, target.lon, target.altAmsl].every(finite)) {
+      const top = this.position(target.lat, target.lon, target.altAmsl);
+      this.splatEntities.push(
+        this.viewer.entities.add({
+          position: top,
+          point: {
+            pixelSize: 11,
+            color: color.splatTarget,
+            outlineColor: Color.BLACK,
+            outlineWidth: 2,
+            disableDepthTestDistance: Infinity,
+          },
+        }),
+      );
+      if (finite(target.groundAmsl) && target.groundAmsl !== target.altAmsl)
+        this.splatEntities.push(
+          this.viewer.entities.add({
+            polyline: {
+              positions: [this.position(target.lat, target.lon, target.groundAmsl), top],
+              width: 2,
+              material: color.splatTarget,
+            },
+          }),
+        );
+    }
+    this.render();
   }
   clearTemperatureTrack() {
     if (this.temperatureTrack) this.viewer.scene.primitives.remove(this.temperatureTrack);
@@ -775,6 +868,10 @@ export class ReviewMap {
     this.trackController?.abort();
     this.videoProjection.clear();
     this.clearEntities(this.flightEntities);
+    this.clearEntities(this.dimEntities);
+    this.clearEntities(this.splatEntities);
+    this.setLookPoints(null);
+    this.setPickHandler(null);
     this.clearTemperatureTrack();
     this.clearEntities(this.findingEntities);
     for (const piece of this.footprintPieces) piece.show = false;
