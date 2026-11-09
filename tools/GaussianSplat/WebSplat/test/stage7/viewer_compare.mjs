@@ -38,7 +38,8 @@ export async function compareViewer(page, ref) {
   const shot = await page.screenshot({
     clip: { x: 0, y: 0, width: ref.width, height: ref.height },
   });
-  const lit = shot.length > 20000; // a black PNG of this size compresses to a few kB
+  const litPixels = await countLit(page, shot);
+  const lit = litPixels >= 100; // not the black image of a float target that cannot be filtered
   const readout = Number(hover.match(/(-?[\d.]+) °C/)?.[1]);
   const tp = tolerance(ref, ref.peak_c);
   const tr = tolerance(ref, ref.argmax_c);
@@ -60,6 +61,25 @@ export async function compareViewer(page, ref) {
     approx,
     notice,
     lit,
+    litPixels,
     errors: { peakC: peak - ref.peak_c, readoutC: readout - ref.argmax_c },
   };
+}
+
+// pixels of a screenshot (PNG) with any channel above 16, decoded in the page
+async function countLit(page, png) {
+  return page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) > 16) n++;
+    return n;
+  }, png.toString('base64'));
 }

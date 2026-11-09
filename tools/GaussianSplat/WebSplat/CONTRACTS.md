@@ -361,7 +361,8 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   description, camera{position,target,fov_deg}, up, target, origin, rasterize_mode, temperature_scale,
   hotspot, colormap, display_range_c`, Python `json.dumps` text; `rasterize_mode` "classic": gsplat
   classic, as trained), `splat.spz` = Spark `transcodeSpz` of that PLY (`maxSh` 3, SPZ v3, 12
-  fractional bits, antialiased flag cleared for classic, gzip with a fixed header; the stage
+  fractional bits, antialiased flag cleared for classic, gzip with a fixed header holding the PLY's
+  apcg_splat JSON in an `AP` FEXTRA subfield, `viewer/spz-meta.mjs`; the stage
   encodes it in chunks of 131072 Gaussians, which gives Spark's whole-file bytes), `meta.json` = the same info plus
   `downloads{ply,spz}` (bytes), `json.dumps(indent=1)`. Start camera: `export_web.start_camera` from
   the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
@@ -478,6 +479,7 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
 
 ## Change log
 
+- v1.5.2 (2026-11-09): `splat.spz` embeds the apcg_splat JSON in its gzip header.
 - v1.5.1 (2026-11-09): stage 6 as written: `train.json` `trainer`, `brush_config`, `resumed`;
   checkpoint parameters raw and taken at a batch boundary; `state.json` fields.
 - v1.5 (2026-11-08): stage 6 output as the export consumes it (`train.json`, Brush PLY or WSSP);

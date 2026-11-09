@@ -2,6 +2,9 @@
 // built dist/ as deployed), by every route a user or the app takes:
 //   file     the open-a-file page with the JS splat.ply (metadata from the PLY header)
 //   url_spz  ?url=splat.spz&meta=meta.json
+//   spz_embedded, file_spz  the SPZ alone (?url with no sidecar, the open-a-file page): its
+//            metadata from the gzip header; and the metadata precedence, an SPZ without it, and
+//            Spark's decode of the SPZ with and without it (the same splat data)
 //   site     an export_web.py site page (window.SPLAT) holding the JS splat.spz and meta.json
 //   embed    the test page: export in a worker, result in the embedded viewer (postMessage), from
 //            the start camera and the opposite side, PLY and SPZ, and a meta.json without
@@ -10,6 +13,7 @@
 // own temperature readout at every Gaussian centre. compare_views.py checks them.
 //   node viewer_check.mjs WEB JS OUT [--port 8797]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { withSpzMeta } from '../../../viewer/spz-meta.mjs';
 import { args, env } from '../harness/lib/env.mjs';
 import { capture, launchLocal } from '../harness/lib/browser.mjs';
 import { serve } from '../harness/lib/serve.mjs';
@@ -24,6 +28,22 @@ const expected = JSON.parse(readFileSync(`${js}/expected.json`, 'utf8'));
 const meta = JSON.parse(readFileSync(`${js}/meta.json`, 'utf8'));
 const W = expected.width;
 const H = expected.height;
+
+// SPZs with no sidecar: with the metadata (bare/splat.spz) and without (bare/plain.spz); beside
+// a meta.json of another title (sidecar/), which the embedded metadata overrides
+const spzBytes = readFileSync(`${js}/splat.spz`);
+for (const d of ['bare', 'sidecar']) mkdirSync(`${web}/${d}`, { recursive: true });
+writeFileSync(`${web}/bare/splat.spz`, spzBytes);
+writeFileSync(`${web}/bare/plain.spz`, withSpzMeta(spzBytes, null));
+// metadata longer than Spark's 1 KiB file-type probe chunks
+writeFileSync(
+  `${web}/bare/big.spz`,
+  withSpzMeta(spzBytes, JSON.stringify({ ...meta, description: 'd'.repeat(60000) })),
+);
+writeFileSync(`${web}/sidecar/splat.spz`, spzBytes);
+writeFileSync(`${web}/sidecar/plain.spz`, withSpzMeta(spzBytes, null));
+writeFileSync(`${web}/sidecar/meta.json`, JSON.stringify({ ...meta, title: 'sidecar title' }));
+writeFileSync(`${web}/sidecar/given.json`, JSON.stringify({ ...meta, title: 'given title' }));
 
 const server = await serve(web, port);
 const profile = `${env('WEBSPLAT_DATA')}/chrome-profiles/stage7a`;
@@ -148,6 +168,56 @@ try {
     await shoot(page, page.mainFrame(), 'site_start', 'start', { spz: true });
     await page.close();
   }
+  // the SPZ alone: metadata from its gzip header
+  {
+    const page = await newPage('spz_embedded');
+    await page.goto(`${base}/viewer/index.html?url=../bare/splat.spz`);
+    await prepare(page.mainFrame(), range);
+    await shoot(page, page.mainFrame(), 'spz_embedded_start', 'start', { spz: true });
+    await page.close();
+  }
+  {
+    const page = await newPage('file_spz');
+    await page.goto(`${base}/viewer/index.html`);
+    await page.setInputFiles('#file', `${web}/bare/splat.spz`);
+    await prepare(page.mainFrame(), range);
+    await shoot(page, page.mainFrame(), 'file_spz_start', 'start', { spz: true });
+    await page.close();
+  }
+  // precedence: given meta, then the file's own, then a sidecar; no metadata: an RGB splat
+  {
+    const want = meta.title.replace(/\s+/g, ' ');
+    const S = `${web}/sidecar`;
+    for (let [q, title, thermal, files] of [
+      ['url=../sidecar/splat.spz&meta=../sidecar/given.json', 'given title', true],
+      ['url=../sidecar/splat.spz', want, true],
+      ['url=../sidecar/plain.spz', 'sidecar title', true],
+      ['url=../bare/plain.spz', '/bare/plain.spz', false],
+      // the open-a-file page with a .json chosen too
+      ['', want, true, [`${S}/splat.spz`, `${S}/given.json`]],
+      ['', 'given title', true, [`${S}/plain.spz`, `${S}/given.json`]],
+    ]) {
+      // not captured: the sidecar lookup's 404s are expected here
+      const page = await browser.context.newPage();
+      if (files) q = `file ${files.map((f) => f.split('/').pop()).join(' + ')}`;
+      page.on('pageerror', (e) => fail(`metadata ?${q}: page error ${e.message}`));
+      await page.goto(`${base}/viewer/index.html${files ? '' : `?${q}`}`);
+      if (files) await page.setInputFiles('#file', files);
+      await page.waitForFunction(
+        () => !document.getElementById('panel').hidden && document.getElementById('status').hidden,
+        null,
+        { timeout: 30000 },
+      );
+      const got = await page.evaluate(() => ({
+        title: document.title,
+        thermal: !document.getElementById('thermal-controls').hidden,
+      }));
+      const ok = got.title === title && got.thermal === thermal;
+      if (!ok) fail(`metadata ?${q}: ${JSON.stringify(got)}`);
+      else console.log(`PASS metadata ?${q}: ${JSON.stringify(got)}`);
+      await page.close();
+    }
+  }
   // embed: worker export, then the embedded viewer
   {
     const page = await newPage('embed');
@@ -182,6 +252,23 @@ try {
     await page.evaluate((mm) => window.openResult('splat.spz', mm), m);
     await prepare(frame, range);
     await shoot(page, frame, 'embed_spz_start', 'start', { spz: true });
+    // Spark's decode in the browser: the same splat data with and without the metadata
+    const dec = {};
+    for (const f of ['bare/splat.spz', 'bare/plain.spz', 'bare/big.spz']) {
+      dec[f] = await page.evaluate((u) => window.sparkDecode(u), `../${f}`);
+    }
+    results.sparkDecode = dec;
+    const [a, ...rest] = Object.values(dec);
+    if (
+      rest.some((b) => JSON.stringify(a) !== JSON.stringify(b)) ||
+      a.packed.numSplats !== meta.gaussians
+    ) {
+      fail(`Spark decodes the SPZ with metadata differently: ${JSON.stringify(dec)}`);
+    } else {
+      console.log(
+        `PASS Spark (browser) decodes the SPZ with metadata as without: ${JSON.stringify(a)}`,
+      );
+    }
     await page.close();
   }
 } catch (e) {

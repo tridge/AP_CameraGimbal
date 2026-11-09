@@ -136,9 +136,9 @@ export async function plyPass(opts) {
 // Pass 2: the SPZ, Spark-exact in chunks. Spark quantises each Gaussian on its own, so it encodes
 // SPZ_CHUNK Gaussians of the written PLY at a time; each chunk's planar sections go to their
 // places in the uncompressed file (raw sink), each chunk is decoded and checked against its PLY
-// rows (spzErrors), and the raw file is then gzipped as a stream (fixed gzip header, as
-// ply2spz.mjs) and read back to verify. Memory: one chunk, not the splat. Returns {spzSize, spz
-// (merged spzErrors with version, fractionalBits, antialiased)}.
+// rows (spzErrors), and the raw file is then gzipped as a stream (fixed gzip header with the PLY's
+// apcg_splat JSON, as ply2spz.mjs) and read back to verify. Memory: one chunk, not the splat.
+// Returns {spzSize, spz (merged spzErrors with version, fractionalBits, antialiased)}.
 export const SPZ_CHUNK = 131072;
 
 // directions (Fibonacci sphere) at which emitted temperatures are compared
@@ -275,7 +275,8 @@ export async function spzPass(opts) {
   stop();
   spz.truncate(0);
   let spzSize = 0;
-  for await (const p of gzipFixedStream(pieces())) {
+  const metaText = ph.comments.find((c) => c.startsWith('apcg_splat '));
+  for await (const p of gzipFixedStream(pieces(), metaText?.slice('apcg_splat '.length) ?? null)) {
     stop();
     spz.write(p, spzSize);
     spzSize += p.length;
