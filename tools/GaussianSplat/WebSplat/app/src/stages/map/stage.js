@@ -1,5 +1,6 @@
 // Stage 5 definition (pipeline/registry.js): telemetry-seeded mapping (sfm.py --mapper prior)
-// with per-round checkpoints. config.map: {thresholds, priorSigma, maxIterations}.
+// with per-round checkpoints. config.map: {thresholds, priorSigma, maxIterations, camera
+// (SIMPLE_RADIAL, RADIAL or PINHOLE)}.
 import { defineStage } from '../../pipeline/registry.js';
 
 export const MAP_VERSION = 1;

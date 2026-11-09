@@ -1,6 +1,6 @@
 /** Stage 5 worker (workers/runtime.js protocol): sfm.py's prior mapping with the colmap-wasm fork,
  * in this worker. msg: {selectDir, featuresDir, matchDir, outDir, map: {thresholds, priorSigma,
- * maxIterations}, checkpoint, ckptBase, firstCheckpointGeneration}. Writes outDir/final/
+ * maxIterations, camera}, checkpoint, ckptBase, firstCheckpointGeneration}. Writes outDir/final/
  * {cameras,images,points3D,rigs,frames}.bin and outDir/model.json. A checkpoint after every
  * round holds the state the next round starts from (poses, camera, PRNG), so a resumed run gives
  * the same model. Progress: rounds, fractional within a round (triangulation, then BA iterations).
@@ -34,7 +34,10 @@ function outOfMemory(e, images, geometry) {
 serveStage(async (msg, api) => {
   const t0 = performance.now();
   api.phase('load');
-  const o = { ...PRIOR_MAP_DEFAULTS, ...(msg.map ?? {}) };
+  // `camera` is the model; a `cameraModel` key was ignored before it existed and still is, so
+  // jobs that carried one keep the SIMPLE_RADIAL outputs their stage key stands for
+  const { cameraModel: _, ...map } = msg.map ?? {};
+  const o = { ...PRIOR_MAP_DEFAULTS, ...map };
   const nr = o.thresholds.length;
   const info = await readJson(`${msg.selectDir}/frames.json`);
   const features = decodeFeatures(
@@ -63,7 +66,19 @@ serveStage(async (msg, api) => {
     onLog: (text, level) => level === 'warn' && api.log(text, 'warn'),
   });
   const loadMs = performance.now() - t0;
-  const camera = cameraFromFrames(info);
+  const camera = cameraFromFrames(info, o.camera);
+  // a checkpoint of another camera model (older ones: SIMPLE_RADIAL) cannot be resumed
+  if (
+    start &&
+    ((start.camera ?? 'SIMPLE_RADIAL') !== camera.model ||
+      start.params.length !== camera.params.length)
+  ) {
+    api.log(
+      `the checkpoint is for another camera model than ${camera.model}: mapping from the start`,
+      'warn',
+    );
+    start = null;
+  }
   let generation = msg.firstCheckpointGeneration;
   let lastPost = 0;
   let phase = null;
@@ -96,6 +111,7 @@ serveStage(async (msg, api) => {
           () =>
             writeJson(`${msg.ckptBase}${g}/state.json`, {
               ...s,
+              camera: camera.model,
               poses: Array.from(s.poses),
               params: Array.from(s.params),
             }),

@@ -1,10 +1,12 @@
 // RGB scene preparation (prepare/rgb-scene.js) on a synthetic COLMAP model with SIMPLE_RADIAL
-// distortion: intrinsics, undistorted targets against an independent OpenCV-equivalent map and
-// bilinear reference, point colours from the observations, bounds and training settings.
+// (and RADIAL) distortion: intrinsics, undistorted targets against an independent
+// OpenCV-equivalent map and bilinear reference, point colours from the observations, bounds and
+// training settings.
 // usage (WebSplat directory): node --test test/v2/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareRgbScene } from '../../app/src/stages/prepare/rgb-scene.js';
+import { boundsJson } from '../../app/src/stages/train/brush-dataset.js';
 
 const W = 64,
   H = 48,
@@ -88,14 +90,15 @@ for (let i = -4; i <= 4; i++)
 // a far point outside the radius
 points.push([500, 0, 0]);
 
-function model() {
+// COLMAP model id 2 SIMPLE_RADIAL [f, cx, cy, k1], 3 RADIAL [f, cx, cy, k1, k2]
+function model(id = 2, params = [F, CX, CY, K1]) {
   const cams = new Bin();
   cams.u64(1);
   cams.u32(1);
-  cams.i32(2); // SIMPLE_RADIAL
+  cams.i32(id);
   cams.u64(W);
   cams.u64(H);
-  for (const v of [F, CX, CY, K1]) cams.f64(v);
+  for (const v of params) cams.f64(v);
   const imgs = new Bin();
   imgs.u64(centres.length);
   centres.forEach((C, k) => {
@@ -141,14 +144,15 @@ const image = (k) => {
 };
 
 // cv2.initUndistortRectifyMap (newK = K) and float bilinear remap with a black border
-function reference(k) {
+function reference(k, k2 = 0) {
   const src = image(k);
   const out = new Float64Array(W * H * 3);
   for (let i = 0; i < H; i++)
     for (let j = 0; j < W; j++) {
       const xn = (j - CX) / F,
         yn = (i - CY) / F;
-      const d = 1 + K1 * (xn * xn + yn * yn);
+      const r2 = xn * xn + yn * yn;
+      const d = 1 + K1 * r2 + k2 * r2 * r2;
       const sx = F * xn * d + CX,
         sy = F * yn * d + CY;
       const x0 = Math.floor(sx),
@@ -235,4 +239,93 @@ test('RGB scene preparation with SIMPLE_RADIAL distortion', async () => {
   const dist = Math.hypot(10, 5, 60 - 0);
   assert.ok(Math.abs(ds.training.scene_scale - 10 * Math.max(0.5, (16 * dist) / F)) < 0.5);
   assert.equal(res.ceiling.length, ds.bounds.ceiling.n ** 2);
+  // train_rgb.py's too_tall: max(1, max_scale / 2) from half way; Brush gets it in bounds.json
+  assert.equal(ds.bounds.max_vertical, Math.max(1, ds.training.scene_scale / 20));
+  assert.equal(ds.bounds.vertical_prune_from, 15000);
+  const bj = boundsJson(ds, res.ceiling);
+  assert.equal(bj.max_vertical, ds.bounds.max_vertical);
+  assert.equal(bj.vertical_prune_from, 15000);
+  // the gsplat too-big window is unchanged (train_rgb.py: reset_every < step < refine_stop_iter)
+  assert.deepEqual([bj.scale_prune_from, bj.scale_prune_until], [3001, 15000]);
+  // thermal datasets have no vertical rule
+  const { max_vertical: _, vertical_prune_from: __, ...thermalBounds } = ds.bounds;
+  const tj = boundsJson({ ...ds, bounds: thermalBounds }, res.ceiling);
+  assert.ok(!('max_vertical' in tj) && !('vertical_prune_from' in tj));
+  // max_vertical 0 keeps tall Gaussians
+  const off = await prepareRgbScene(
+    { info, model: model(), readRgb: async (pos) => image(pos), writeTarget: () => {} },
+    { holdout: 2, radius: 50, max_vertical: 0 },
+  );
+  assert.equal(off.dataset.bounds.max_vertical, null);
+  assert.ok(!('max_vertical' in boundsJson(off.dataset, off.ceiling)));
+});
+
+test('max_height caps the initial points and the ceiling above the target', async () => {
+  // the target 1 m above takeoff: points (z up to 2) above 1 + 0.5 go, and so does the ceiling
+  const info = {
+    width: W,
+    height: H,
+    target_enu: [0, 0, 1],
+    frames: centres.map((_, k) => ({ name: `0000${k}.png` })),
+  };
+  const io = { info, model: model(), readRgb: async (pos) => image(pos), writeTarget: () => {} };
+  const all = await prepareRgbScene(io, { holdout: 2, radius: 50 });
+  const res = await prepareRgbScene(io, { holdout: 2, radius: 50, max_height: 0.5 });
+  const kept = points.filter((X) => Math.hypot(X[0], X[1]) < 50 && X[2] <= 1.5).length;
+  assert.ok(kept < all.dataset.points.count);
+  assert.equal(res.dataset.points.count, kept);
+  assert.ok(Math.max(...res.ceiling) <= 1.5);
+  assert.ok(Math.max(...all.ceiling) > 1.5);
+  assert.equal(res.dataset.bounds.z_max, 1.5);
+  assert.equal(boundsJson(res.dataset, res.ceiling).ceiling.every((z) => z <= 1.5), true);
+});
+
+test("centre 'target': the radius, points and bounds about the target, not the model median", async () => {
+  const info = {
+    width: W,
+    height: H,
+    target_enu: [6, 3, 0],
+    frames: centres.map((_, k) => ({ name: `0000${k}.png` })),
+  };
+  const io = { info, model: model(), readRgb: async (pos) => image(pos), writeTarget: () => {} };
+  const res = await prepareRgbScene(io, { holdout: 2, radius: 4, centre: 'target' });
+  // the grid points within 4 m of (6, 3): itself and its four 3 m neighbours
+  assert.equal(res.dataset.points.count, 5);
+  for (let k = 0; k < 5; k++)
+    assert.ok(Math.hypot(res.points[6 * k] - 6, res.points[6 * k + 1] - 3) < 4);
+  assert.deepEqual(res.dataset.bounds.centre, [6, 3]);
+  const med = await prepareRgbScene(io, { holdout: 2, radius: 4 });
+  assert.deepEqual(med.dataset.bounds.centre, [0, 0]);
+  await assert.rejects(prepareRgbScene(io, { radius: 4, centre: 'middle' }), /centre middle/);
+});
+
+test('RGB scene preparation with RADIAL distortion (sfm.py --camera-model RADIAL)', async () => {
+  const K2 = -0.2;
+  const info = { width: W, height: H, frames: centres.map((_, k) => ({ name: `0000${k}.png` })) };
+  const targets = [];
+  const res = await prepareRgbScene(
+    {
+      info,
+      model: model(3, [F, CX, CY, K1, K2]),
+      readRgb: async (pos) => image(pos),
+      writeTarget: (n, bytes) => targets.push([n, bytes.slice()]),
+    },
+    { holdout: 2, radius: 50 },
+  );
+  assert.deepEqual(res.dataset.undistortion.from, {
+    model: 'RADIAL',
+    params: [F, CX, CY, K1, K2],
+  });
+  for (const [n, bytes] of targets) {
+    const ref = reference(n, K2);
+    const plain = reference(n);
+    let worst = 0,
+      apart = 0;
+    for (let i = 0; i < ref.length; i++) {
+      worst = Math.max(worst, Math.abs(bytes[i] - ref[i]));
+      apart = Math.max(apart, Math.abs(ref[i] - plain[i]));
+    }
+    assert.ok(worst <= 2, `image ${n}: worst ${worst}`);
+    assert.ok(apart > 3, 'k2 changes the undistortion');
+  }
 });

@@ -53,6 +53,8 @@ const request = (over = {}) => ({
   // near the orbit's hot spot (CONTRACTS.md's proposal example)
   target: { lat: -35.5799111, lon: 148.9066524, alt_amsl: 1010.4, refine: true },
   hfov: null,
+  radius: 300,
+  max_height: 40,
   view: { camera: { lat: -35.5785, lon: 148.9066524, alt_amsl: 1150 }, fov_deg: 45 },
   title: 'orbit from the viewer',
   ...over,
@@ -238,6 +240,14 @@ const scenarios = {
         m.config.request.view.fov_deg === 45,
     );
     check(
+      'radius and max_height: identity and config.prepare',
+      m.config.request.radius === 300 &&
+        m.config.request.max_height === 40 &&
+        m.config.prepare?.radius === 300 &&
+        m.config.prepare?.max_height === 40,
+      JSON.stringify(m.config.prepare),
+    );
+    check(
       'config.proposal.range',
       m.config.proposal.range.end.offset === frames[180].offset && !('hfov' in m.config.proposal),
     );
@@ -256,7 +266,9 @@ const scenarios = {
     const summary = await page.textContent('#request-summary');
     check(
       'summary shown',
-      /From the video viewer/.test(summary) && /captured/.test(summary),
+      /From the video viewer/.test(summary) &&
+        /captured/.test(summary) &&
+        /radius 300 m; at most 40 m above the target/.test(summary),
       summary,
     );
     await runToSelect(page);

@@ -409,6 +409,12 @@ async function fromViewer(nonce, remembered) {
           proposal,
           export: exportConfig,
         };
+        const prepare = {};
+        if (request.radius != null) prepare.radius = request.radius;
+        if (request.max_height != null) prepare.max_height = request.max_height;
+        // rgb: the radius is about the request's target (thermal's always is)
+        if (request.kind === 'rgb') prepare.centre = 'target';
+        if (Object.keys(prepare).length) config.prepare = prepare;
         const existed = await exists(jobDir(jobId));
         const j = await Job.open(jobId, { source, config });
         try {
@@ -485,6 +491,8 @@ function showRequestSummary() {
     (range ? ` (frames ${range.start}..${range.end}, ${range.frames} frames)` : '') +
     `; target ${t.lat.toFixed(6)}, ${t.lon.toFixed(6)} at ${t.alt_amsl.toFixed(1)} m AMSL` +
     (t.refine ? ' (refined to the hot spot)' : ' (as picked)') +
+    (r.radius != null ? `; radius ${r.radius} m` : '') +
+    (r.max_height != null ? `; at most ${r.max_height} m above the target` : '') +
     `; start view ${r.view ? 'captured' : r.kind === 'rgb' ? 'default (the middle view)' : 'default (the hottest view)'}` +
     (r.rgb ? `; processing width ${r.rgb.width} px.` : '.');
 }

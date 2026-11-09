@@ -6,7 +6,7 @@
  */
 import { readCameras, readImages, readPoints3D } from './colmap-model.js';
 import { undistortMaps } from './opencv.js';
-import { TRAIN_DEFAULTS, canopyCeiling, training } from './scene.js';
+import { TRAIN_DEFAULTS, canopyCeiling, capCeiling, training } from './scene.js';
 import { median } from '../select/numeric.js';
 
 const f = Math.fround;
@@ -19,6 +19,9 @@ export const RGB_SCENE_DEFAULTS = {
   ceiling_cell: 5.0,
   ceiling_margin: 5.0,
   max_scale: null, // null: radius / 100 or 16 ground pixels at the median camera distance
+  max_vertical: null, // null: max(1, max_scale / 2); 0 keeps tall Gaussians
+  max_height: null, // m above the target (frames.target_enu); null: no cap
+  centre: 'median', // bounds about 'median' (train_rgb.py: the model's median point) or 'target'
   max_pixels: 500 * 1280 * 720,
 };
 export const RGB_TRAIN_DEFAULTS = {
@@ -111,16 +114,17 @@ export async function prepareRgbScene(io, options = {}) {
   const { width: W, height: H } = cam;
   if (W !== info.width || H !== info.height)
     throw new Error(`camera ${W}x${H} differs from the frames ${info.width}x${info.height}`);
-  let fx, fy, cx, cy, k1;
-  if (cam.model === 'SIMPLE_RADIAL') (([fx, cx, cy, k1] = cam.params), (fy = fx));
-  else if (cam.model === 'PINHOLE') (([fx, fy, cx, cy] = cam.params), (k1 = null));
+  let fx, fy, cx, cy, k1, k2;
+  if (cam.model === 'SIMPLE_RADIAL') (([fx, cx, cy, k1] = cam.params), (fy = fx), (k2 = 0));
+  else if (cam.model === 'RADIAL') (([fx, cx, cy, k1, k2] = cam.params), (fy = fx));
+  else if (cam.model === 'PINHOLE') (([fx, fy, cx, cy] = cam.params), (k1 = k2 = 0));
   else throw new Error(`unsupported camera model ${cam.model}`);
   const K = [
     [fx, 0, cx],
     [0, fy, cy],
     [0, 0, 1],
   ];
-  const maps = k1 ? undistortMaps(fx, fy, cx, cy, k1, W, H) : null;
+  const maps = k1 || k2 ? undistortMaps(fx, fy, cx, cy, k1, W, H, k2) : null;
   const { images: all } = readImages(io.model.images);
   for (const im of all)
     if (!pos.has(im.name)) throw new Error(`model image ${im.name} is not in frames.json`);
@@ -139,16 +143,23 @@ export async function prepareRgbScene(io, options = {}) {
       `, ${test.size} held out`,
   );
 
-  // initial points: within radius (horizontally) of the median model point
+  // initial points: within radius (horizontally) of the median model point, or of the target
+  // (a request's radius is about its target)
   const pts = readPoints3D(io.model.points3D);
   if (!pts.count) throw new Error('the model has no points');
   const axis = (a) => median(Array.from({ length: pts.count }, (_, p) => pts.xyz[3 * p + a]));
-  const centre = [axis(0), axis(1), axis(2)];
+  if (o.centre !== 'median' && o.centre !== 'target') throw new Error(`centre ${o.centre}`);
+  const centre = o.centre === 'target' ? [...info.target_enu] : [axis(0), axis(1), axis(2)];
+  // a request's max_height caps the points and the ceiling at the target's height + max_height
+  const cap = o.max_height != null ? info.target_enu[2] + o.max_height : Infinity;
   const keep = [];
   for (let p = 0; p < pts.count; p++)
-    if (Math.hypot(pts.xyz[3 * p] - centre[0], pts.xyz[3 * p + 1] - centre[1]) < o.radius)
+    if (
+      Math.hypot(pts.xyz[3 * p] - centre[0], pts.xyz[3 * p + 1] - centre[1]) < o.radius &&
+      pts.xyz[3 * p + 2] <= cap
+    )
       keep.push(p);
-  if (!keep.length) throw new Error(`no model points within ${o.radius} m of the model centre`);
+  if (!keep.length) throw new Error(`no model points within ${o.radius} m of the ${o.centre}`);
   const near = new Float64Array(keep.length * 3);
   keep.forEach((p, k) => near.set(pts.xyz.subarray(3 * p, 3 * p + 3), 3 * k));
   const zs = Float64Array.from(keep, (p) => pts.xyz[3 * p + 2]).sort();
@@ -158,6 +169,9 @@ export async function prepareRgbScene(io, options = {}) {
       ? canopyCeiling(near, centre, o.radius, o.ceiling_cell, o.ceiling_margin, top)
       : null;
   if (ceiling) log(`height ceiling: max ${top.toFixed(1)} m above takeoff`);
+  const grid = ceiling ? ceiling.grid : Float32Array.of(1e9);
+  const zCap = { z_max: top };
+  if (o.max_height != null) capCeiling(grid, zCap, info.target_enu[2], o.max_height, log);
 
   // one pass over the registered images: point colours from their observations, targets of the
   // chosen ones
@@ -204,7 +218,11 @@ export async function prepareRgbScene(io, options = {}) {
   const extent = Math.max(...centres.map((c) => Math.hypot(...c.map((v, a) => v - mean[a]))));
   const groundPx = median(centres.map((c) => Math.hypot(...c.map((v, a) => v - centre[a])))) / fx;
   const maxScale = o.max_scale ?? Math.max(o.radius / 100, 16 * groundPx);
-  log(`${keep.length} initial points; pruning Gaussians larger than ${maxScale.toFixed(1)} m`);
+  const maxVertical = o.max_vertical ?? Math.max(1, maxScale / 2);
+  log(
+    `${keep.length} initial points; pruning Gaussians larger than ${maxScale.toFixed(1)} m, ` +
+      `taller than ${maxVertical.toFixed(1)} m`,
+  );
   const train = training({ ...o, max_scale: maxScale }, extent, 1.0);
   const zMin = zs[0] - o.radius; // train_rgb.py has no floor
   const dataset = {
@@ -214,11 +232,11 @@ export async function prepareRgbScene(io, options = {}) {
     width: W,
     height: H,
     K,
-    undistortion: k1
+    undistortion: maps
       ? {
           from: { model: cam.model, params: cam.params },
           method:
-            'cv2.initUndistortRectifyMap(K, [k1,0,0,0], newK=K) + remap INTER_LINEAR, BORDER_CONSTANT, on RGB8',
+            'cv2.initUndistortRectifyMap(K, [k1,k2,0,0], newK=K) + remap INTER_LINEAR, BORDER_CONSTANT, on RGB8',
         }
       : null,
     images: images.map((im, k) => ({
@@ -233,7 +251,10 @@ export async function prepareRgbScene(io, options = {}) {
       centre: [centre[0], centre[1]],
       radius: o.radius,
       z_min: zMin,
-      z_max: top,
+      z_max: zCap.z_max,
+      // train_rgb.py's too_tall: from half way, every refine period to the end, and after it
+      max_vertical: maxVertical > 0 ? maxVertical : null,
+      vertical_prune_from: Math.floor(o.iterations / 2),
       ceiling: ceiling
         ? { origin: ceiling.origin, cell: ceiling.cell, n: ceiling.n, file: 'ceiling.f32' }
         : {
@@ -255,7 +276,7 @@ export async function prepareRgbScene(io, options = {}) {
   return {
     dataset,
     points,
-    ceiling: ceiling ? ceiling.grid : Float32Array.of(1e9),
+    ceiling: grid,
     timings: { totalMs: Math.round(performance.now() - T0) },
   };
 }

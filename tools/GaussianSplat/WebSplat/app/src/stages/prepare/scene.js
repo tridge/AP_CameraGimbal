@@ -27,6 +27,7 @@ export const SCENE_DEFAULTS = {
   height_margin: 15.0,
   ceiling_cell: 5.0,
   ceiling_margin: 5.0,
+  max_height: null, // m above the target (a request's cap on the ceiling); null: none
 };
 export const TRAIN_DEFAULTS = {
   iterations: 30000,
@@ -235,6 +236,16 @@ function chooseImages(images, frames, o, target, log) {
     limit,
     skipped: Object.fromEntries(Object.entries(skipped).map(([k, v]) => [k, names(v)])),
   };
+}
+
+/** A request's max_height: the ceiling grid and z_max no higher than base + max_height (in
+ * place). Pruning then removes Gaussians above it to the end of training, as the ceiling. */
+export function capCeiling(grid, bounds, base, maxHeight, log = () => {}) {
+  if (maxHeight == null) return;
+  const cap = base + maxHeight;
+  for (let i = 0; i < grid.length; i++) if (grid[i] > cap) grid[i] = cap;
+  if (bounds.z_max > cap) bounds.z_max = cap;
+  log(`ceiling capped at ${maxHeight} m above the target (${cap.toFixed(1)} m)`);
 }
 
 /** train.canopy_ceiling over near points (Float64Array xyz [n*3]) */
@@ -462,6 +473,7 @@ export async function prepareScene(io, options = {}) {
     o.ceiling_margin,
     bounds.z_max,
   );
+  capCeiling(ceiling.grid, bounds, target[2], o.max_height, log);
   const sortedGrid = Float64Array.from(ceiling.grid).sort();
   log(
     `scene bounds: radius ${bounds.radius.toFixed(0)} m, z ${bounds.z_min.toFixed(1)} .. ` +

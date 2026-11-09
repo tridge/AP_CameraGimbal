@@ -16,13 +16,13 @@
 // terminate it with this worker. Any GPU error, shader error or device loss fails the stage.
 import { serveStage } from '../../workers/runtime.js';
 import { readFile, readJson, remove, writeFile, writeJson } from '../../storage/opfs.js';
-import { RGB_CAP, brushConfig, writeBrushDataset } from './brush-dataset.js';
+import { RGB_CAP, brushConfig, pruneTallPly, writeBrushDataset } from './brush-dataset.js';
 import { plyToWssp, wsspHeader, wsspToPly } from './params.js';
 import { apcgComment, trainInfo } from '../export/meta.js';
 import { previewPly } from './preview.js';
 
 export const TRAINER =
-  'Brush 1388f74 + WebSplat patches (brush-patches/brush 0001-0016), CubeCL 467522442c7b + 0001';
+  'Brush 1388f74 + WebSplat patches (brush-patches/brush 0001-0017), CubeCL 467522442c7b + 0001';
 
 async function deflate(bytes) {
   const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
@@ -269,7 +269,19 @@ serveStage(async (msg, api) => {
             evalViews.length = 0;
             evalViews.push(...m.views.map((v) => v.name));
           } else if (m.type === 'ply') {
-            await writeFile(`${msg.outDir}/splat.ply`, m.bytes);
+            let bytes = m.bytes;
+            // the fork's final too-tall pass runs after the last step only: an accepted stop
+            // gets it here (the eval renders above are from before it)
+            if (doneIter < total && dataset.bounds.max_vertical > 0) {
+              const pruned = pruneTallPly(bytes, dataset.bounds.max_vertical);
+              bytes = pruned.bytes;
+              gaussians -= pruned.removed;
+              api.log(
+                `final too-tall pass (accepted stop): ${pruned.removed} Gaussians taller than ` +
+                  `${dataset.bounds.max_vertical.toFixed(1)} m removed`,
+              );
+            }
+            await writeFile(`${msg.outDir}/splat.ply`, bytes);
             worker.postMessage({ type: 'dispose' });
           } else if (m.type === 'disposed') {
             if (!m.ok) return fail(new Error(`training run invalid: ${m.reason}`));
