@@ -655,7 +655,10 @@ const scenarios = {
     await page.evaluate(() => window.websplat.shutdown());
     const mf = await manifest(page);
     const sel = mf.config.select;
-    check('rgb jobs: fewer SIFT features', mf.config.features?.maxNumFeatures === 4096);
+    check(
+      'rgb jobs: 8192 SIFT features and RADIAL',
+      mf.config.features?.maxNumFeatures === 8192 && mf.config.map?.camera === 'RADIAL',
+    );
     check(
       'rgb select config from the form',
       sel?.width === 640 && sel.budget === 500 && !('rotation' in sel),

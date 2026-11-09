@@ -135,7 +135,8 @@ try {
     'select config from the request',
     m.config.select?.width === width &&
       m.config.select?.budget === 500 &&
-      m.config.features?.maxNumFeatures === 4096,
+      m.config.features?.maxNumFeatures === 8192 &&
+      m.config.map?.camera === 'RADIAL',
     JSON.stringify(m.config.select),
   );
   const sel = m.stages.select?.result;

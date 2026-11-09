@@ -34,7 +34,7 @@ import {
   writeFile,
 } from './storage/opfs.js';
 import { renderStages } from './ui/stage-list.js';
-import { RGB_MAX_FEATURES } from './stages/features/sift.js';
+import { RGB_CAMERA, RGB_MAX_FEATURES } from './stages/features/sift.js';
 import { showResult } from './ui/result.js';
 import { trainActions } from './ui/train-actions.js';
 
@@ -638,8 +638,12 @@ async function main() {
     }
     config.standin = { ...config.standin, ...urls };
   }
-  // RGB frames are feature-rich: fewer keypoints keep mapping inside its 4 GB wasm heap
-  if (name === 'rgb') config.features ??= { maxNumFeatures: RGB_MAX_FEATURES };
+  // RGB defaults, set once when the job is first opened: jobs made with the earlier defaults
+  // (4096 features, SIMPLE_RADIAL) keep them
+  if (name === 'rgb' && !config.features) {
+    config.features = { maxNumFeatures: RGB_MAX_FEATURES };
+    config.map = { camera: RGB_CAMERA, ...config.map };
+  }
   config.export ??= {
     title: params.get('title') ?? (job.manifest.source?.name ?? 'splat').replace(/\.[^.]*$/, ''),
   };
