@@ -38,11 +38,21 @@ def _ephemeral_start():
         return 32768
 
 
+def _candidate():
+    end = _ephemeral_start()
+    if end - 20000 >= 1000:
+        return random.randrange(20000, end)
+    # no room below the ephemeral range: let the kernel pick
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 def port(kind=socket.SOCK_STREAM):
     """A free localhost port below the kernel's ephemeral range, so outgoing connections cannot
     take it before the simulator binds it; never the same port twice in one run."""
     for _ in range(1000):
-        candidate = random.randrange(20000, _ephemeral_start())
+        candidate = _candidate()
         if candidate in _issued:
             continue
         try:
@@ -66,13 +76,20 @@ def stop(process):
             process.wait(timeout=5)
 
 
+def _log_tail(log):
+    if not log:
+        return ""
+    tail = "".join(pathlib.Path(log).read_text(errors="replace").splitlines(True)[-40:])
+    return f"; {log}:\n{tail}" if tail else ""
+
+
 def ready(path, process, log=None):
     until = time.monotonic() + 10
     while not path.exists():
         if process.poll() is not None:
-            tail = "".join(pathlib.Path(log).read_text(errors="replace").splitlines(True)[-40:]) if log else ""
-            raise AssertionError(f"exited with {process.returncode} before {path.name}" + (f"; {log}:\n{tail}" if tail else ""))
-        assert time.monotonic() < until, path
+            raise AssertionError(f"exited with {process.returncode} before {path.name}" + _log_tail(log))
+        if time.monotonic() >= until:
+            raise AssertionError(f"timed out waiting for {path}" + _log_tail(log))
         time.sleep(0.02)
 
 

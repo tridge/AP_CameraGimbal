@@ -120,10 +120,10 @@ network_gateway = 192.0.2.1
         gimbal = subprocess.Popen([sys.executable, str(REPO / 'sitl/gimbal_sim.py'),
             '--backend', args.backend, '--port', str(gimbal_port), '--ready-file', str(gimbal_ready)],
             stdout=log('gimbal.log'), stderr=subprocess.STDOUT)
-        ready(gimbal_ready, gimbal)
+        ready(gimbal_ready, gimbal, directory / 'gimbal.log')
         camera = subprocess.Popen([str(args.build / 'camera-app'), '--backend', args.backend], env=env,
                                    stdout=log('camera.log'), stderr=subprocess.STDOUT)
-        ready(camera_ready, camera)
+        ready(camera_ready, camera, directory / 'camera.log')
         local_endpoint = f'udpout:127.0.0.1:{mav_udp}' if mav_udp else f'tcp:127.0.0.1:{mav_port}'
         fc = mavutil.mavlink_connection(local_endpoint, source_system=42, source_component=1)
         def feed():
