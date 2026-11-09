@@ -222,8 +222,9 @@ async function main() {
       const u = post.material.uniforms;
       u.lo.value = lo;
       u.hi.value = Math.max(hi, lo + 0.1);
-      u.bg.value = bg !== null && bg > lo && bg < u.hi.value ? bg : 0;
-      u.knee.value = u.bg.value ? 1 : 0;
+      const knee = bg !== null && bg > lo && bg < u.hi.value;
+      u.bg.value = knee ? bg : 0;
+      u.knee.value = knee ? 1 : 0;
       u.gmin.value = sceneLo !== null && sceneLo < lo ? sceneLo : lo - 10;
       const h = u.hi.value.toFixed(1);
       if (u.glory.value && u.knee.value) {
@@ -408,7 +409,7 @@ async function main() {
   // a view of the whole splat from the south, 50 degrees up, robust to outlying Gaussians
   function fitView() {
     const xs = [[], [], []];
-    const step = Math.max(1, Math.floor(mesh.packedSplats.numSplats / 50000));
+    const step = Math.max(1, Math.floor(mesh.numSplats / 50000));
     const v = new THREE.Vector3();
     mesh.forEachSplat((i, centre) => {
       if (i % step) return;
