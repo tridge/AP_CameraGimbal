@@ -149,3 +149,7 @@ code {
   color: #ffb347;
   font-size: 13px;
 }
+#ceiling-controls input[type='range'] {
+  display: block;
+  width: 100%;
+}
