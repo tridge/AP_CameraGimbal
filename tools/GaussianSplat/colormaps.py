@@ -10,7 +10,13 @@ _STOPS = {
                 (1.0, (252, 255, 164))],
     'rainbow': [(0.0, (0, 0, 128)), (0.2, (0, 0, 255)), (0.4, (0, 255, 255)), (0.6, (255, 255, 0)),
                 (0.8, (255, 0, 0)), (1.0, (255, 255, 255))],
+    # the colour ramp of the video viewer's GloryHot; viewers draw values below the threshold in grey
+    'gloryhot': [(0.0, (20, 0, 200)), (0.2, (0, 150, 255)), (0.4, (0, 220, 120)), (0.6, (255, 235, 0)),
+                 (0.8, (255, 110, 0)), (1.0, (255, 0, 0))],
 }
+
+# colormaps that show values below the colour range in grey
+GREY_BELOW = {'gloryhot'}
 
 NAMES = list(_STOPS)
 
