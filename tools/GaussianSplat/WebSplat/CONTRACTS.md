@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.5 (2026-11-08). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.7 (2026-11-09). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -96,6 +96,10 @@ re-selects the file and it must match `size` and `hash` before any stage re-read
   (null without hot frames; then `lookAt` is where the optical axes converge); `target_alt` null =
   use the hot spot. On failure `{"format","version","error":"…"}`. `notes` explain choices and
   telemetry gaps. The confirmed values become the job's `config.select`.
+- The stage's manifest `result` also holds `range` (`{start, end, frames}`, a request's range
+  resolved to packet-order indices; null without a request) and `homeAltitude` (the
+  whole-recording takeoff altitude, recorded even when the proposal fails; null if no frame has
+  a relative altitude). With `config.proposal.range` the proposal covers only those frames.
 - Accept: raw pixel equality (sha256 of each frame's `u16` bytes) with `splat_common.decode_frames`
   (`frame.to_ndarray(format='gray16le')`), identical `meta` and `pts`.
 
@@ -218,6 +222,12 @@ COLMAP; rigs/frames files optional) under `model/<name>/`, plus `model/model.jso
   set. Images: name = frame name, pose `cam_from_world` (qvec w,x,y,z; tvec), image ids 1..N in
   frames order. Points3D tracks are `(image_id, point2D_idx)` with `point2D_idx` the stage 3
   keypoint index; the track graph before BA uses the same structure.
+- Memory: the mapper runs in a 4 GB WebAssembly heap. Above 6M verified matches, each image keeps
+  the same deterministic subset of its keypoints in every pair (fraction sqrt(6M / matches)) and
+  only matches between kept keypoints are mapped; pairs left with fewer than 15 are dropped. The
+  stage result records `matches` and `keptKeypoints` (1 when nothing was dropped); thermal jobs
+  stay far below the limit. Running out of memory anyway fails the stage with a message naming
+  the images and matches.
 - Names: `model/telemetry/` (initial, no points), `model/final/`. Reference:
   `$WEBSPLAT_DATA/ref/work/colmap/sparse/final` (37959 points, 185255 observations, f
   1503.948, k1 -0.0972).
@@ -364,8 +374,131 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   fractional bits, antialiased flag cleared for classic, gzip with a fixed header holding the PLY's
   apcg_splat JSON in an `AP` FEXTRA subfield, `viewer/spz-meta.mjs`; the stage
   encodes it in chunks of 131072 Gaussians, which gives Spark's whole-file bytes), `meta.json` = the same info plus
-  `downloads{ply,spz}` (bytes), `json.dumps(indent=1)`. Start camera: `export_web.start_camera` from
+  `downloads{ply,spz}` (bytes), `json.dumps(indent=1)`. With `config.export.view` (a request's
+  captured view) the start camera is `position` = the view camera in `frames.origin` ENU, `target`
+  = the export target, `fov_deg` = `view.fov_deg`, the distance from the target clamped to
+  [1, 8] x `dataset.bounds.radius` along the same direction (unclamped, with a warning, if the
+  radius is not positive). With `config.export.target` `"picked"` the export target is
+  `frames.target_enu`, also when prepare found a hot spot. Otherwise: start camera `export_web.start_camera` from
   the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
+
+## RGB sources (stage set `rgb`)
+
+RGB recordings (H.264/HEVC in MPEG-TS or MP4, pose telemetry from MISB ST 0601 KLV or APCG SEI)
+run the `rgb` stage set: its own ingest, select and prepare stages (stage versions `rgb-1`),
+then the thermal features, match, map, train and export stages, which read the formats below.
+Native references: `extract_ts_frames.py`, `sfm.py`, `train_rgb.py`, `export_web.py`. Job ids
+start `rgb-`. Coordinates and frame naming follow the conventions above (`'%05d.png' % index`,
+ENU about the target, up from the takeoff altitude).
+
+- **1 (`websplat.ingest-rgb` v1, `ingest/index.json`)**: `{format, version, source, container
+  ("mpegts" | "mp4"), track {codec, width, height, timescale}, frames [{index, pts, keyframe,
+  offset, size, telemetry}], warnings}`. Frames are the video track's packets in file order from
+  the viewer's demuxer (`containers.js`): MPEG-TS `offset` = the first TS packet of the frame's
+  PES, `size` = its elementary-stream bytes, `pts` the demuxer's `timestampTicks` (90 kHz PES
+  PTS, unwrapped across the 33-bit wrap); MP4 the sample's offset, size and track timescale.
+  `telemetry` = the viewer's normalised record (`normalizeTelemetry`) reduced to `{utc_us, position {lat_e7, lon_e7, alt_amsl_m, alt_relative_m}, vehicle_attitude,
+  gimbal_attitude, hfov_deg, offset_ms, source}` (`offset_ms`: distance of a KLV sample matched
+  by nearest timestamp). Its `gimbal_attitude` (earth-frame roll/pitch, yaw relative to the
+  vehicle) gives `extract_ts_frames.py`'s `camera_rotation` through the thermal `cameraRotation`.
+  A frame has a pose when its position, platform attitude and sensor roll/pitch are finite
+  (sensor yaw may be absent); others are skipped. Longitudes are taken within 180 degrees of the
+  local origin's, so a flight across the antimeridian stays in one frame.
+  Stage result: `kind: "rgb"`, `range` (as thermal), `homeAltitude` and `homeAltitudeRule`: with
+  relative altitude (APCG SEI) the thermal rule; without (KLV) the first record's GPS altitude,
+  as `extract_ts_frames.py`. `ingest/proposal.json` (`kind: "rgb"`): `proposal {lat, lon,
+  target_alt: 0, hfov}` where the optical axes meet the takeoff-height plane (the standalone
+  form only).
+- **2 (`websplat.frames` v1 with `kind: "rgb"`)**: `frames.json` with `width`/`height` the
+  processing size (`select.width`, height scaled with the aspect kept), `K` from the HFOV
+  (request `hfov`, else the recording's, else 70), `rotation_deg` 0, `origin`, `target_enu`,
+  `frames [{index, name, utc_us, media_s, position, rotation}]` and `selection {version, options,
+  source_size, counts, step, selected, decoder}`; no temperatures. `features.u8` `[N, H, W]` grey
+  (cv2 BGR2GRAY weights) for SIFT; `rgb.u8` `[N, H, W, 3]` RGB8. Options (`config.select`):
+  `lat, lon, target_alt` (above takeoff), `hfov`, `width`, `start, end`, `fps` (3), `min_height`
+  (5 m, above the target: KLV recordings may start airborne, so takeoff height cannot be relied
+  on), `max_offset_ms` (200), `margin` (0.1), `max_range` (2000), `budget` (500 for requests and
+  the standalone form: every ceil(n / budget)-th of the frames that see the target; RGB frames
+  bring far more matches than thermal ones and mapping runs in a 4 GB WebAssembly heap: 168
+  frames at 8192 features took 1.6 GB, 361 frames ran out). Selection: in packet order, a
+  frame at least 1/fps after the last kept one, with a pose, telemetry within `max_offset_ms` and
+  the camera `min_height` above the target, then the target projected inside the margin and
+  nearer than `max_range`. Decoding: WebCodecs where the browser has the codec, else the viewer's
+  FFmpeg core on one keyframe group per batch (each group decoded once), scaled with area
+  averaging.
+- **3-5**: unchanged formats on the grey images; one SIMPLE_RADIAL camera seeded from `K` at the
+  processing width. RGB jobs set `config.features = {maxNumFeatures: 4096}` (half of `sfm.py`'s
+  8192) for the same memory reason. Mapping that runs out of memory fails with a message naming
+  the images and matches.
+- **5b (`websplat.dataset` v1 with `kind: "rgb"`)**: `train_rgb.py`'s setup: images undistorted to
+  the pinhole `K` (initUndistortRectifyMap + remap INTER_LINEAR, constant border, on RGB8),
+  `targets.u8` `[n, H, W, 3]`; images: every registered one, evenly thinned to at most
+  `max_pixels / (W H)` (500 x 1280 x 720 pixels: Brush keeps them in memory), every 25th held out
+  (`holdout`); points `points.f32` `[count, 6]` (x, y, z, r, g, b in 0..1): model points within
+  `radius` (200 m) of the model's median point, coloured as the mean of up to three of their
+  observations; bounds `{centre, radius, z_min (lowest point - radius: no floor), z_max, ceiling}`
+  with `train_rgb.py`'s height ceiling; `training` as `train.py`'s structure with `train_rgb.py`'s
+  values (SH degree 1, SSIM 0.2, cap 3M, grow_grad2d 0.0008, `max_scale` radius / 100 or 16
+  ground pixels); no `scale`, `hotspot` null.
+- **6**: the Brush input images are 8-bit RGB PNGs (Brush's stock colour loss; the fork's numeric
+  targets are off), `init.ply` coloured from the points; Brush's `max-splats` is the dataset cap
+  limited per GPU class (desktop 3M, laptop 2M, integrated 1M, unknown 1.5M). Eval renders and the
+  preview hold channel 0 (red) only.
+- **7**: the PLY keeps the trained colours; header and `meta.json` info is `export_web.py`'s rgb
+  form `{kind: "rgb", gaussians, sh_degree, title, description, camera, up, target, origin,
+  rasterize_mode}`; target `frames.target_enu`; start camera from the captured view, else the
+  middle view (`export_web.start_camera`). The stage result has `kind`.
+- **Request**: `kind: "rgb"` with `rgb: {width}` selects this set (see below).
+
+## Job request (`websplat.request` v1)
+
+What the video viewer's Create splat hands to WebSplat (PLAN-v2.md). Heights are metres AMSL.
+
+```json
+{"format":"websplat.request","version":1,
+ "source":{"name":"flight2_thermal.mkv","size":123456789,"lastModified":1762600000000},
+ "range":{"timescale":1000,
+          "start":{"pts":1234,"offset":40960,"size":81234,"index":12},
+          "end":{"pts":56789,"offset":98765432,"size":80111,"index":3456}},
+ "target":{"lat":-35.1234567,"lon":149.1234567,"alt_amsl":612.4,"refine":true},
+ "hfov":null,
+ "view":{"camera":{"lat":-35.12,"lon":149.12,"alt_amsl":700.0},"fov_deg":60.0},
+ "title":"flight2_thermal"}
+```
+
+- `kind`: `"thermal"` (default when absent) or `"rgb"`; an rgb request also carries
+  `rgb: {width}` (integer in [64, 16384], at most the recording's width, checked by select) and
+  must have `target.refine` false; a thermal request has no `rgb`. Ingest fails if the
+  recording is not of that kind.
+- Validation (`app/src/request.js` `validateRequest`) is strict: known keys only, finite numbers,
+  lat in [-90, 90], lon in [-180, 180], heights in [-500, 9000], `hfov` and `view.fov_deg` in
+  [10, 120] degrees, `range.start.pts <= range.end.pts`, integer `pts`, `offset` >= 0 and
+  `size` >= 1, `timescale` > 0, `refine` boolean, `title` <= 120 characters. Optional: `hfov`,
+  `view`, `title` (absent or null), `source.lastModified`, endpoint `index`. A rejection names
+  the field.
+- `range.start` / `end`: the first and last frame (inclusive) as packet identity from the shared
+  demuxer: `pts` = `timestampTicks` in track `timescale`, packet `offset` and `size`; `index` is a
+  hint only. Ingest finds each endpoint in its frame list by offset, checks size, pts and
+  timescale, and requires strictly increasing pts within the range; a mismatch fails ingest.
+- `target.refine`: true lets selection's hot spot search refine the target; false makes it
+  authoritative (`locate_hotspot` false, export target `"picked"`).
+- `view.camera` is the start camera position; it looks at the export target; `fov_deg` vertical.
+- Identity (`requestIdentity`): `{range: {timescale, start, end: {pts, offset, size}}, target,
+  hfov, view}`, plus `kind: "rgb"` and `rgb` for rgb requests (thermal identities keep this form);
+  `requestKey` = the first 16 hex digits of its canonical-JSON hash. A request job is
+  `<kind>-<source hash, 16 hex>-<requestKey>`.
+- Handover (window messages, same origin; local development pages also accept any
+  `http://localhost:*` / `http://127.0.0.1:*` origin): the viewer opens
+  `<websplat>/?request=<nonce>` (32 hex digits); WebSplat posts `{type:"websplat.ready", nonce}`
+  to its opener after the device check (or `{type:"websplat.rejected", nonce, reason}` if the
+  check failed) and waits 30 s for `{type:"websplat.request", nonce, request, file}` from the
+  opener (other sources, origins, types and nonces are ignored). It then validates, checks the
+  File's name and size against `source`, copies the File into OPFS while hashing it (staged under
+  `incoming/<nonce>` with the Web Lock `websplat-incoming-<nonce>`, then moved to the job's
+  `source/source.mkv`), saves the job and posts exactly one of `{type:"websplat.accepted", nonce,
+  job}` or `{type:"websplat.rejected", nonce, reason}`. The page URL then becomes `?job=<id>`.
+  An existing job with that id but another stored identity is refused; a different title
+  updates `config.export.title` (re-runs export only).
 
 ## Job manifest (`websplat.manifest` v1)
 
@@ -393,6 +526,18 @@ Manifest:
    "error":null}},
  "checksum":"sha256:… of the JSON with checksum set to \"\""}
 ```
+
+Config keys (`config`): `proposal` (ingest; a request adds `range` = `request.range` and `hfov`),
+`select` (selection options; a request job's are derived from the request and ingest's result:
+`lat`, `lon`, `target_alt` = `alt_amsl - homeAltitude`, `locate_hotspot` = `refine`, `rotation`
+and `hfov` from the request or proposal, `start`/`end` = the resolved range, `step` =
+`max(1, ceil(frames / 1000))`, and with `refine` false `margin` = -0.25 (the picked target may
+project up to a quarter frame outside the image, as telemetry poses can be tens of metres off;
+measured 34 m on the orbit); an rgb request's: `lat`, `lon`, `target_alt`, `hfov`, `width`,
+`start`/`end`, `budget` 500), `features` (`maxNumFeatures`; RGB jobs 4096), `export` (`title`, `description`, `view` = `request.view`,
+`target` = `"picked"` when `refine` is false), `request` (a request job's identity plus
+`source{name,size}`; in no stage's `configKeys`: display and reopen checks only), `standin`, and
+run-time knobs (`speed`, `ckptMs`, `selectMode`, `rgbDecoder`: `auto` | `webcodecs` | `software`).
 
 Rules:
 - **Stage key** = canonical-JSON hash of `{id, version, config: {key: value or null for each
@@ -478,6 +623,16 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
   import from `tools/viewer/src` (allowed by `app/vite.config.js`).
 
 ## Change log
+
+- v1.7 (2026-11-09): RGB sources: the `rgb` stage set (`websplat.ingest-rgb` v1, frames and
+  dataset `kind: "rgb"`, RGB training input and export); request `kind` and `rgb.width`.
+  Mapping memory: matches above 6M are thinned by a consistent keypoint subset (map result
+  `matches`, `keptKeypoints`); RGB jobs use 4096 SIFT features and a 500-frame budget. The SPZ
+  check allows Spark's float16 staging of both the colour coefficient and the colour.
+
+- v1.6 (2026-11-09): `websplat.request` v1 (job request from the video viewer and its handover);
+  `config.request`, `config.proposal.range`, `config.export.view` and `config.export.target`;
+  ingest result `range` and `homeAltitude` (additive; stage versions unchanged).
 
 - v1.5.2 (2026-11-09): `splat.spz` embeds the apcg_splat JSON in its gzip header.
 - v1.5.1 (2026-11-09): stage 6 as written: `train.json` `trainer`, `brush_config`, `resumed`;

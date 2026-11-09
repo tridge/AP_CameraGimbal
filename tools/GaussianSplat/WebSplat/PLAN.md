@@ -233,8 +233,8 @@ what to splat. The viewer selects; WebSplat computes.
   RGB `.ts` recordings as sources.
 
 Phasing: v2 = range, target and height, view capture and Go in /video/, plus job description
-and range-only ingest in WebSplat. v3 = coverage ring and snap to orbit, splat in the 3D map,
-RGB sources.
+and range-only ingest in WebSplat, and RGB sources; detailed in PLAN-v2.md. v3 = coverage ring
+and snap to orbit, splat in the 3D map.
 
 ## Risks
 

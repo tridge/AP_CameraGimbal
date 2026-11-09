@@ -27,6 +27,28 @@ nothing is uploaded. The splat shows temperature, and you can view it in the pag
    the recording was not copied into browser storage, the page asks you to choose it again.
 4. When it finishes, the result view shows the splat with temperatures, and offers the downloads.
 
+## RGB recordings
+
+The camera's RGB recordings (MPEG-TS or MP4 with the telemetry embedded, as MISB KLV or the
+camera's own metadata) make colour splats. Choose the `.ts`/`.mp4` file on the page (or use
+**Create splat** in the video viewer, which also picks the processing width: smaller is faster
+and needs less GPU memory; 1280 is the default). The steps are the same; there is no hot spot, so
+the target is where the camera looked (or what you chose in the viewer).
+
+## Starting from the video viewer
+
+In the video viewer (https://plot.ardupilot.org/video/), open the thermal recording, press
+**Create splat**, choose the time range, target and (optionally) the start view, and press **Go**.
+WebSplat opens in a new tab with the recording and the choices already made, copies the recording
+into browser storage and starts at once (no proposal form). Reloading that tab resumes the same
+job; the same choices made again in the viewer open the same job.
+
+For development, `node test/v2/serve.mjs` serves the viewer build (`tools/viewer/dist`) at
+`/video/` and the WebSplat build (`app/dist`) at `/websplat/` on one origin, as on the server.
+Tests: `node --test test/v2/*.test.mjs` (requests, RGB selection and formats),
+`node test/v2/handover.mjs` (the handover through the page, with a stub viewer; no GPU work) and
+`node test/v2/rgb-page.mjs` (an RGB job handed over and run, by default to selection).
+
 ## Expected times (a 3.5 minute, 201-frame orbit)
 
 | | laptop (RTX laptop GPU) | desktop (RTX 4070-class) |
