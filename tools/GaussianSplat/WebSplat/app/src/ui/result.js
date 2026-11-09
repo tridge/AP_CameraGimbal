@@ -117,6 +117,18 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
     ),
   );
   const total = snapshot.stages.reduce((a, s) => a + s.elapsedMs, 0);
+  const stopped = r.stoppedEarly
+    ? [
+        el('p', {
+          id: 'result-stopped',
+          className: 'warn',
+          textContent:
+            `Training was stopped early and accepted: ` +
+            `${r.stoppedEarly.iterations.toLocaleString('en')} of ` +
+            `${r.stoppedEarly.iterations_planned.toLocaleString('en')} iterations.`,
+        }),
+      ]
+    : [];
   section
     .querySelector('#result-summary')
     .replaceChildren(
@@ -130,6 +142,7 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
               `${r.temperatureC[0].toFixed(1)} to ${r.temperatureC[1].toFixed(1)} °C (display ` +
               `${r.displayRangeC[0]} to ${r.displayRangeC[1]} °C); rendered as trained (${r.rasterizeMode}).`,
       ),
+      ...stopped,
       el(
         'p',
         { className: 'note' },

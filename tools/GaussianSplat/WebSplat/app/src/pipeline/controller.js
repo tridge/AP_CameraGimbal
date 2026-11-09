@@ -32,6 +32,33 @@ export class Controller extends EventTarget {
     this.run = 0; // identifies the current stage run; stale publications are refused
     this.lastSave = 0;
     this.storageError = null;
+    this.channels = new Map(); // stage id -> command channel of its running worker
+  }
+
+  // a command to a running stage's worker (e.g. train 'preview'); rejects when none runs
+  command(id, name, data) {
+    const ch = this.channels.get(id);
+    if (!ch?.request) return Promise.reject(new Error(`${id} is not running`));
+    return ch.request(name, data);
+  }
+
+  // stop and accept: the stage ends with what it has (train: the iterations done so far). Recorded
+  // in the manifest (record.accept) before the stage completes, so a reload in between finishes it
+  // the same way (from its checkpoint); a stopped stage needs a checkpoint and completes on the
+  // next start.
+  async acceptEarly(id) {
+    const r = this.record(id);
+    if (r.state === 'done') throw new Error(`${id} is already done`);
+    const running = this.channels.get(id)?.request;
+    if (!running && !r.checkpoint) throw new Error(`${id} has no checkpoint to accept`);
+    // a running worker refuses before training has started
+    if (running) await this.command(id, 'finish');
+    const iteration = running ? (r.progress?.done ?? 0) : (r.checkpoint.done ?? 0);
+    // in the write queue: a checkpoint publication in flight holds an older copy of the record
+    await this.job.transact(id, (rec) => {
+      rec.accept = { iteration, at: new Date().toISOString() };
+    });
+    this.emit();
   }
 
   record(id) {
@@ -94,7 +121,8 @@ export class Controller extends EventTarget {
     for (const def of this.stages) {
       const r = this.record(def.id);
       const upstreamReset = def.inputs.some((i) => reset.has(i));
-      const hasData = r.state === 'done' || r.checkpoint;
+      // an acceptance is state too: a changed key must drop it even without a checkpoint
+      const hasData = r.state === 'done' || r.checkpoint || r.accept;
       if (!hasData && !upstreamReset) continue;
       const stale = upstreamReset || r.version !== def.version || r.key !== (await this.key(def));
       if (stale) {
@@ -201,6 +229,8 @@ export class Controller extends EventTarget {
       const r = this.record(def.id);
       prevTimings = { workMs: 0, ...(r.timings ?? prevTimings) };
       generation = job.nextGeneration(def.id);
+      const channel = {};
+      this.channels.set(def.id, channel);
       let ckptGeneration = generation;
       const estimate = def.estimate(this.config, this.envNow());
       clock = new StageClock(estimate);
@@ -251,6 +281,7 @@ export class Controller extends EventTarget {
         config: this.config,
         env: this.env,
         signal,
+        accept: r.accept ?? null,
         jobDir: job.dir,
         sourceFile: this.sourceFile,
         outDir: job.path(def.id, 'gen', generation),
@@ -280,7 +311,7 @@ export class Controller extends EventTarget {
               env: this.env,
               ...msg,
             },
-            { signal, handlers, ...opts },
+            { signal, handlers, channel, ...opts },
           ),
       };
 
@@ -298,7 +329,8 @@ export class Controller extends EventTarget {
         progress: {
           ...r.progress,
           reported: r.progress.done,
-          done: r.progress.total ?? r.progress.done,
+          // stopped early (accepted): the count reached, not the planned total
+          done: result?.stopped_early ? r.progress.done : (r.progress.total ?? r.progress.done),
         },
       });
       this.events.push({ t: Date.now(), stage: def.id, state: 'done' });
@@ -321,6 +353,7 @@ export class Controller extends EventTarget {
       return false;
     } finally {
       this.clocks.delete(def.id);
+      this.channels.delete(def.id);
     }
   }
 

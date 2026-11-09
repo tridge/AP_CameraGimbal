@@ -25,7 +25,13 @@ nothing is uploaded. The splat shows temperature, and you can view it in the pag
    **Stop** at any time and **Resume** later, also after closing the tab or reloading: finished
    stages are kept, and the long ones (mapping, training) continue from their last checkpoint. If
    the recording was not copied into browser storage, the page asks you to choose it again.
+   While training, **Preview** shows the splat trained so far in the viewer (training goes on;
+   **Refresh** for a newer one), and **Stop and accept** ends training there and exports what it
+   has (the result says how many iterations it had). A stopped job can preview and accept its
+   last checkpoint.
 4. When it finishes, the result view shows the splat with temperatures, and offers the downloads.
+   The viewer's **Ceiling** slider hides Gaussians above a height (floaters); the PLY can be
+   downloaded without them.
 
 ## RGB recordings
 
@@ -46,8 +52,9 @@ job; the same choices made again in the viewer open the same job.
 For development, `node test/v2/serve.mjs` serves the viewer build (`tools/viewer/dist`) at
 `/video/` and the WebSplat build (`app/dist`) at `/websplat/` on one origin, as on the server.
 Tests: `node --test test/v2/*.test.mjs` (requests, RGB selection and formats),
-`node test/v2/handover.mjs` (the handover through the page, with a stub viewer; no GPU work) and
-`node test/v2/rgb-page.mjs` (an RGB job handed over and run, by default to selection).
+`node test/v2/handover.mjs` (the handover through the page, with a stub viewer; no GPU work),
+`node test/v2/rgb-page.mjs` (an RGB job handed over and run, by default to selection) and
+`node test/v2/train-actions.mjs --out DIR [--kind rgb]` (preview, stop and accept, ceiling).
 
 ## Expected times (a 3.5 minute, 201-frame orbit)
 

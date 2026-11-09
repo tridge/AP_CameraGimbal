@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.7 (2026-11-09). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.8 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -360,6 +360,23 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   points). v1 resumes from params only: optimiser moments, refine statistics and data order
   restart; the step count (LR and SH schedules, refine window) continues from `iteration`; the
   3D-filter floor is recomputed from the restored positions.
+- **Stop and accept** (`controller.acceptEarly`): training ends early and the stage completes as
+  usual (eval renders, `splat.ply`) with the iterations done. `train.json` then has `iterations` =
+  the iterations run, `iterations_planned` and `stopped_early: true`; the stage result always has
+  `iterations`, `iterations_planned` and `stopped_early`; the manifest record's `progress.done` is
+  the count reached. The acceptance is recorded in the train record as `accept: {iteration, at}`
+  (written before the stage completes; a running worker is told first and refuses before training
+  has started). A later attempt of the stage with `accept` set (a reload before it completed, or
+  an accept while stopped) ends right after its checkpoint (it asks Brush for one step from the
+  restored parameters; Brush reports steps in small groups, 5 measured, so `iterations` is a few
+  more than `checkpoint.done`), or without a checkpoint at `accept.iteration`. A stopped
+  stage can only be accepted with a checkpoint. A done stage under its key is not run again; a
+  config or input change resets the record (and with it `accept`) as for any stage.
+- **Preview**: the running train worker answers the command `preview` (host `{type:'command'}` /
+  worker `{type:'reply'}`, `workers/host.js`) with the current splat (Brush `exportPly` at a batch
+  boundary) in the export's PLY form (`stages/train/preview.js`: colours or temperature scale,
+  start camera from `config.export`); a stopped job previews its checkpoint's `params.bin` the
+  same way (3D-filter floor not baked). Nothing is written to OPFS.
 - Exported PLY: exactly train.py `save_ply`: binary little-endian, one `vertex` element of f32
   properties `x y z nx ny nz f_dc_0..2 f_rest_0..(3K-4) opacity scale_0..2 rot_0..3`, normals 0,
   `f_rest` channel-major (`shN.transpose(0,2,1)`), quaternion normalised w,x,y,z, header
@@ -381,6 +398,10 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   radius is not positive). With `config.export.target` `"picked"` the export target is
   `frames.target_enu`, also when prepare found a hot spot. Otherwise: start camera `export_web.start_camera` from
   the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
+
+- Training stopped early: the PLY header info and `meta.json` add `stopped_early: {iterations,
+  iterations_planned}` (absent otherwise, so full runs keep export_web.py's bytes); the export
+  result has `stoppedEarly` (the same, or null).
 
 ## RGB sources (stage set `rgb`)
 
@@ -623,6 +644,10 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
   import from `tools/viewer/src` (allowed by `app/vite.config.js`).
 
 ## Change log
+
+- v1.8 (2026-11-10): Stop and accept (train record `accept`, `train.json` and result
+  `iterations_planned` / `stopped_early`, export info `stopped_early`, export result
+  `stoppedEarly`); training preview command. Additive; stage versions unchanged.
 
 - v1.7 (2026-11-09): RGB sources: the `rgb` stage set (`websplat.ingest-rgb` v1, frames and
   dataset `kind: "rgb"`, RGB training input and export); request `kind` and `rgb.width`.
