@@ -2,13 +2,15 @@
 //
 // Site pages (export_web.py) set window.SPLAT = {meta, splat, colormaps}. Without it the page is
 // the open-a-file viewer: a local file (never uploaded), or ?url=FILE[&meta=META.json], or (in a
-// same-origin iframe, ?embed=1) bytes posted by the parent page.
+// same-origin iframe, ?embed=1) bytes posted by the parent page. Without a meta.json, PLY and SPZ
+// files carry their own (PLY header, SPZ gzip header: spz-meta.mjs), else a sidecar .json is used.
 // meta.rasterize_mode 'classic' selects gsplat classic rendering (no mip opacity compensation).
 // Thermal splats hold the scaled temperature in every channel; it is blended over black into a
 // float (or half-float) target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+import { spzMeta } from '../spz-meta.mjs';
 import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
 
 // render size caps (pixels): integrated GPUs struggle at full HiDPI resolution
@@ -73,6 +75,22 @@ async function fetchBytes(url, label) {
   return out;
 }
 
+// the metadata beside a splat that does not carry its own (not a PLY): NAME.json, then the
+// directory's meta.json (export_web.py's layout); null if neither is there
+async function sidecarMeta(url) {
+  if (extension(url.pathname) === 'ply') return null;
+  const base = url.pathname.replace(/\.[^./]*$/, '');
+  for (const path of [`${base}.json`, url.pathname.replace(/[^/]*$/, 'meta.json')]) {
+    try {
+      const r = await fetch(new URL(path, url));
+      if (r.ok) return await r.json();
+    } catch {
+      // not there, or not readable cross-origin
+    }
+  }
+  return null;
+}
+
 async function getJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
@@ -94,6 +112,11 @@ function plyMeta(bytes) {
     }
   }
   return null;
+}
+
+// the file's own metadata: a PLY header line or an SPZ's gzip header (spz-meta.mjs)
+function embeddedMeta(bytes) {
+  return plyMeta(bytes) ?? spzMeta(bytes);
 }
 
 function extension(name) {
@@ -568,10 +591,12 @@ async function main() {
     needSplat = needPost = false;
   });
 
-  async function openBytes(bytes, name, m) {
+  // metadata: m (given, or the site's meta.json), else the file's own, else sidecar() (a .json
+  // beside it or chosen with it)
+  async function openBytes(bytes, name, m, sidecar = null) {
     if ($('open-panel')) $('open-panel').hidden = true;
     $('panel').hidden = false;
-    await show(bytes, name, m || (extension(name) === 'ply' ? plyMeta(bytes) : null));
+    await show(bytes, name, m || embeddedMeta(bytes) || (sidecar && (await sidecar())));
   }
 
   if (cfg) {
@@ -581,23 +606,27 @@ async function main() {
     return;
   }
 
-  // open-a-file viewer: files are read in the browser, nothing is uploaded
-  const openFile = async (file) => {
-    if (!FORMATS.includes(extension(file.name))) {
-      setStatus(`${file.name}: not a splat file (${FORMATS.join(', ')})`);
+  // open-a-file viewer: files are read in the browser, nothing is uploaded. A .json chosen with
+  // the splat is its metadata (export_web.py's meta.json) if the file carries none
+  const openFiles = async (files) => {
+    const list = [...files];
+    const file = list.find((f) => FORMATS.includes(extension(f.name)));
+    if (!file) {
+      setStatus(`${list.map((f) => f.name).join(', ')}: not a splat file (${FORMATS.join(', ')})`);
       return;
     }
+    const json = list.find((f) => extension(f.name) === 'json');
     setStatus(`Reading ${file.name}…`);
-    await openBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+    const sidecar = json ? async () => JSON.parse(await json.text()) : null;
+    await openBytes(new Uint8Array(await file.arrayBuffer()), file.name, null, sidecar);
   };
   for (const input of document.querySelectorAll('input[type=file]')) {
-    input.onchange = (e) => e.target.files[0] && openFile(e.target.files[0]).catch(fail);
+    input.onchange = (e) => e.target.files.length && openFiles(e.target.files).catch(fail);
   }
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => {
     e.preventDefault();
-    const f = e.dataTransfer.files[0];
-    if (f) openFile(f).catch(fail);
+    if (e.dataTransfer.files.length) openFiles(e.dataTransfer.files).catch(fail);
   });
   // embedding: a same-origin parent posts {type: 'apcg-splat-open', bytes, name, meta}; bytes
   // may be a Blob or File (read here, so the parent need not hold the file in memory)
@@ -625,7 +654,7 @@ async function main() {
     const u = new URL(params.get('url'), location.href);
     if (!['https:', 'http:'].includes(u.protocol)) throw new Error('url must be http or https');
     const m = params.get('meta') ? await getJson(new URL(params.get('meta'), location.href)) : null;
-    await openBytes(await fetchBytes(u, 'Downloading splat…'), u.pathname, m);
+    await openBytes(await fetchBytes(u, 'Downloading splat…'), u.pathname, m, () => sidecarMeta(u));
   } else {
     $('open-panel').hidden = false;
   }

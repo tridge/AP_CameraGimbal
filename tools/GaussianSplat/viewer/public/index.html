@@ -21,12 +21,14 @@
         The file is read on this device and never uploaded; rendering uses your own GPU.
       </p>
       <label class="button"
-        >Choose splat file <input id="file" type="file" accept=".ply,.spz,.splat,.ksplat,.sog"
+        >Choose splat file <input id="file" type="file" multiple accept=".ply,.spz,.splat,.ksplat,.sog,.json"
       /></label>
       <p class="note">
         Or drop a file onto this page. Thermal splats from ArduPilot's GaussianSplat tools show
-        temperatures; other splats show in colour. A file on a web server that allows cross-origin
-        requests can be linked as <code>?url=https://…/splat.spz</code>.
+        temperatures; other splats show in colour. Their .ply and .spz files carry their own
+        metadata; for an older .spz, choose or drop its .json metadata with it. A file on a web
+        server that allows cross-origin requests can be linked as
+        <code>?url=https://…/splat.spz</code>; an older one's metadata is found beside it.
       </p>
       <h2>Samples</h2>
       <ul class="samples">
@@ -80,7 +82,7 @@
       </div>
       <button id="reset" type="button">Reset view</button>
       <label class="button small"
-        >Open another <input id="file2" type="file" accept=".ply,.spz,.splat,.ksplat,.sog"
+        >Open another <input id="file2" type="file" multiple accept=".ply,.spz,.splat,.ksplat,.sog,.json"
       /></label>
       <p class="note">Drag to orbit, right-drag to pan, scroll to zoom. Rendered on your device.</p>
     </div>
