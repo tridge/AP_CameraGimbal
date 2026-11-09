@@ -1053,13 +1053,30 @@ dialog details {
   background: #ffb85b40;
   border-radius: 2px;
 }
+/* range brackets: [ at the start, ] at the end; the band itself lets clicks seek */
 .splat-handle {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--accent);
+  top: -3px;
+  bottom: -3px;
+  width: 7px;
+  border: 2px solid var(--accent);
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.splat-handle-start {
+  border-right: none;
+  margin-left: -2px;
+}
+.splat-handle-end {
+  border-left: none;
+  margin-left: -5px;
+}
+.splat-handle:focus-visible,
+.splat-handle.dragging {
+  outline: none;
+  box-shadow: 0 0 0 2px #ffb85b66;
 }
 .splat-panel {
   max-height: 45%;
@@ -1089,6 +1106,15 @@ dialog details {
 #splat-create[aria-pressed='true'] {
   background: #4c697b;
   border-color: #7994a5;
+}
+.splat-height-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.splat-height-label input {
+  width: 120px;
+  accent-color: var(--accent);
 }
 .splat-label {
   min-width: 44px;

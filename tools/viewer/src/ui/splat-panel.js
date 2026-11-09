@@ -5,11 +5,14 @@ import {
   deepFreeze,
   defaultRgbWidth,
   defaultTitle,
+  footprintRadius,
   handoverMessage,
   handoverUrl,
   lookPoints,
   LONG_RANGE_FRAMES,
+  MAX_RADIUS,
   medianPoint,
+  MIN_RADIUS,
   newNonce,
   rangeFrames,
   READY_TIMEOUT_MS,
@@ -17,16 +20,16 @@ import {
   rgbWidthOptions,
   rgbWorkload,
   RGB_DEFAULT_WIDTH,
-  viewFromCamera,
 } from '../domain/splat-request.js';
 
 export function splatPanelLayout() {
   return `<section id="splat-panel" class="splat-panel" aria-label="Create a splat" hidden>
 <div class="splat-row splat-title-row"><strong>Create a splat</strong><span id="splat-range-summary" class="muted"></span></div>
-<div class="splat-row" role="group" aria-label="Splat time range"><span class="splat-label">Range</span><span id="splat-start" class="splat-value">—</span><button id="splat-set-start" type="button">Set start here</button><span id="splat-end" class="splat-value">—</span><button id="splat-set-end" type="button">Set end here</button><label><input id="splat-whole" type="checkbox"> Show whole flight</label></div>
+<div class="splat-row" role="group" aria-label="Splat time range"><span class="splat-label">Range</span><span id="splat-start" class="splat-value">—</span><span class="muted">to</span><span id="splat-end" class="splat-value">—</span><span class="muted">(drag the brackets on the timeline)</span><label><input id="splat-whole" type="checkbox"> Show whole flight</label></div>
 <div class="splat-row" role="group" aria-label="Splat target"><span class="splat-label">Target</span><label>Lat <input id="splat-lat" type="number" step="0.0000001" min="-90" max="90"></label><label>Lon <input id="splat-lon" type="number" step="0.0000001" min="-180" max="180"></label><label>Height <input id="splat-alt" type="number" step="0.1"> m AMSL</label><button id="splat-alt-down" type="button" aria-label="Lower target 1 m (shift: 10 m)" title="Lower 1 m (shift: 10 m)">−</button><button id="splat-alt-up" type="button" aria-label="Raise target 1 m (shift: 10 m)" title="Raise 1 m (shift: 10 m)">+</button><button id="splat-pick" type="button" aria-pressed="false">Pick on map</button><label id="splat-refine-label"><input id="splat-refine" type="checkbox" checked> Refine to the hot spot</label></div>
+<div class="splat-row" role="group" aria-label="Splat area"><span class="splat-label">Area</span><label id="splat-radius-label">Radius <input id="splat-radius" type="number" min="10" max="10000" step="10"> m</label><label class="splat-height-label">Max height <input id="splat-max-height" type="range" min="${MAX_HEIGHT_MIN}" max="${MAX_HEIGHT_AUTO}" step="5" value="${MAX_HEIGHT_AUTO}" aria-describedby="splat-max-height-value"></label><output id="splat-max-height-value" class="splat-value"></output></div>
 <div id="splat-rgb-row" class="splat-row" role="group" aria-label="RGB processing width" hidden><span class="splat-label">Width</span><select id="splat-rgb-width" aria-label="Processing width"></select><span id="splat-rgb-estimate" class="muted"></span></div>
-<div class="splat-row" role="group" aria-label="Splat start view"><span class="splat-label">View</span><span id="splat-view" class="splat-value">WebSplat default (hottest training view)</span><button id="splat-use-view" type="button">Use this view</button><button id="splat-clear-view" type="button" disabled>Clear</button></div>
+<div class="splat-row"><span class="splat-label">View</span><span id="splat-view" class="muted">The splat opens from the 3D map's view when you press Go.</span></div>
 <div class="splat-row"><label class="splat-title-label">Title <input id="splat-title" type="text" maxlength="120"></label></div>
 <p id="splat-warnings" class="note splat-warnings"></p>
 <p id="splat-status" class="note splat-status" role="status"></p>
@@ -35,8 +38,17 @@ export function splatPanelLayout() {
 }
 
 export function splatBandLayout() {
-  return '<div id="splat-band" class="splat-band" aria-hidden="true" hidden><span class="splat-band-fill"></span><span class="splat-handle"></span><span class="splat-handle"></span></div>';
+  return '<div id="splat-band" class="splat-band" hidden><span class="splat-band-fill"></span><span id="splat-handle-start" class="splat-handle splat-handle-start" role="slider" tabindex="0" aria-label="Splat range start"></span><span id="splat-handle-end" class="splat-handle splat-handle-end" role="slider" tabindex="0" aria-label="Splat range end"></span></div>';
 }
+
+// max height slider: 5-300 m above the target; its top end is Auto (WebSplat's canopy ceiling)
+export const MAX_HEIGHT_MIN = 5;
+export const MAX_HEIGHT_MAX = 300;
+const MAX_HEIGHT_AUTO = MAX_HEIGHT_MAX + 5;
+// track and look points follow a dragged handle after this pause
+const DRAG_SETTLE_MS = 300;
+// request view camera heights (m AMSL) WebSplat accepts
+const VIEW_HEIGHT = [-500, 9000];
 
 const STATUS = {
   blocked: 'The browser blocked the WebSplat tab; allow pop-ups for this site and press Go again.',
@@ -129,19 +141,15 @@ export class SplatPanel {
     const $ = this.$;
     $('splat-create').onclick = () => (this.active ? this.close() : this.open());
     $('splat-cancel').onclick = () => this.close();
-    $('splat-set-start').onclick = () => this.setEndpoint('start');
-    $('splat-set-end').onclick = () => this.setEndpoint('end');
+    for (const which of ['start', 'end']) this.bindHandle(which, $(`splat-handle-${which}`));
+    $('splat-max-height').oninput = () => this.render();
     $('splat-whole').onchange = () => this.refreshTrack();
     for (const id of ['splat-lat', 'splat-lon', 'splat-alt'])
       $(id).onchange = () => this.editTarget();
+    $('splat-radius').onchange = () => this.editRadius();
     $('splat-alt-down').onclick = (e) => this.nudge(e.shiftKey ? -10 : -1);
     $('splat-alt-up').onclick = (e) => this.nudge(e.shiftKey ? 10 : 1);
     $('splat-pick').onclick = () => this.setPicking(!this.picking);
-    $('splat-use-view').onclick = () => this.captureView();
-    $('splat-clear-view').onclick = () => {
-      this.view = null;
-      this.render();
-    };
     $('splat-go').onclick = () => this.go();
     $('splat-rgb-width').onchange = () => this.render();
   }
@@ -150,7 +158,8 @@ export class SplatPanel {
     this.range = null;
     this.target = null;
     this.targetAuto = true;
-    this.view = null;
+    this.radius = null;
+    this.radiusAuto = true;
     this.picking = false;
     this.points = [];
     this.loading = false;
@@ -219,22 +228,84 @@ export class SplatPanel {
     this.lookTimer = null;
     this.setPicking(false);
     this.$('splat-panel').hidden = true;
+    clearTimeout(this.settleTimer);
+    this.settleTimer = null;
     this.$('splat-band').hidden = true;
     this.$('splat-create').setAttribute('aria-pressed', 'false');
     this.map?.setLookPoints(null);
     this.map?.setSplatTarget(null);
   }
-  setEndpoint(which) {
-    const frame = this.env.current();
-    if (!frame) return;
-    if (which === 'start') {
-      this.startPts = frame.pts;
-      if (this.endPts < frame.pts) this.endPts = frame.pts;
-    } else {
-      this.endPts = frame.pts;
-      if (this.startPts > frame.pts) this.startPts = frame.pts;
+  /** Moves a range end to the frame nearest pts (the other end follows if crossed). */
+  setEndpoint(which, pts) {
+    const frames = this.env.frames();
+    if (!frames.length || !finite(pts)) return false;
+    let lo = 0,
+      hi = frames.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (frames[mid].pts < pts) lo = mid + 1;
+      else hi = mid;
     }
-    this.update();
+    if (lo > 0 && pts - frames[lo - 1].pts < frames[lo].pts - pts) lo--;
+    const at = frames[lo].pts;
+    if ((which === 'start' ? this.startPts : this.endPts) === at) return false;
+    if (which === 'start') {
+      this.startPts = at;
+      if (this.endPts < at) this.endPts = at;
+    } else {
+      this.endPts = at;
+      if (this.startPts > at) this.startPts = at;
+    }
+    return true;
+  }
+  /** Range ends moved: range text and band at once, track and look points once settled. */
+  moved(settleMs = DRAG_SETTLE_MS) {
+    this.range = rangeFrames(this.env.frames(), this.startPts, this.endPts);
+    // the automatic target belongs to the old range: Go waits for the new one
+    if (this.targetAuto) this.target = null;
+    this.render();
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      this.update();
+    }, settleMs);
+  }
+  /** A timeline bracket: drag it, or focus it and use the arrow keys (shift: 10 frames). */
+  bindHandle(which, handle) {
+    const ptsAt = (clientX) => {
+      const rect = this.$('splat-band').getBoundingClientRect();
+      const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+      return this.env.origin() + fraction * this.env.extent();
+    };
+    handle.onpointerdown = (e) => {
+      if (!this.active || e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add('dragging');
+      handle.focus();
+    };
+    handle.onpointermove = (e) => {
+      if (handle.hasPointerCapture(e.pointerId) && this.setEndpoint(which, ptsAt(e.clientX)))
+        this.moved();
+    };
+    const release = (e) => {
+      if (!handle.hasPointerCapture(e.pointerId)) return;
+      handle.releasePointerCapture(e.pointerId);
+      handle.classList.remove('dragging');
+      if (this.settleTimer !== null) this.moved(0);
+    };
+    handle.onpointerup = release;
+    handle.onpointercancel = release;
+    handle.onkeydown = (e) => {
+      const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+      if (!this.active || !step || !this.range) return;
+      e.preventDefault();
+      e.stopPropagation(); // not also a playback step
+      const frames = this.env.frames(),
+        index = which === 'start' ? this.range.start : this.range.end,
+        next = Math.max(0, Math.min(frames.length - 1, index + step * (e.shiftKey ? 10 : 1)));
+      if (this.setEndpoint(which, frames[next].pts)) this.moved();
+    };
   }
   /** Range changed: track, look points, default target and display. */
   update() {
@@ -306,6 +377,13 @@ export class SplatPanel {
     this.heightPending = false;
     this.render();
   }
+  /** A typed radius is kept; an empty field goes back to the footprint default. */
+  editRadius() {
+    const value = this.$('splat-radius').valueAsNumber;
+    this.radiusAuto = !finite(value);
+    if (!this.radiusAuto) this.radius = Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, value));
+    this.render();
+  }
   nudge(metres) {
     if (!this.target) return;
     this.target = { ...this.target, alt_amsl: this.target.alt_amsl + metres };
@@ -336,15 +414,33 @@ export class SplatPanel {
     );
     this.render();
   }
-  captureView() {
+  /** The 3D map's camera as the splat's start view; null in 2D (WebSplat's default view). */
+  currentView() {
     const pose = this.map?.cameraPose();
-    if (!pose) return this.status('Switch the map to 3D to capture a view.');
-    this.view = {
-      camera: { lat: pose.lat, lon: pose.lon, alt_amsl: pose.alt_amsl },
-      fov_deg: pose.fov_deg,
+    return pose
+      ? { camera: { lat: pose.lat, lon: pose.lon, alt_amsl: pose.alt_amsl }, fov_deg: pose.fov_deg }
+      : null;
+  }
+  /** The start view for Go, or null with a note when the map's view cannot be one. */
+  viewForGo() {
+    const view = this.currentView();
+    if (!view) return { view: null, note: '' };
+    const { alt_amsl } = view.camera;
+    if (
+      alt_amsl >= VIEW_HEIGHT[0] &&
+      alt_amsl <= VIEW_HEIGHT[1] &&
+      view.fov_deg >= 10 &&
+      view.fov_deg <= 120
+    )
+      return { view, note: '' };
+    return {
+      view: null,
+      note: `The 3D view (camera at ${Math.round(alt_amsl).toLocaleString()} m) cannot be a start view; WebSplat opens its default view. `,
     };
-    this.status('');
-    this.render();
+  }
+  maxHeight() {
+    const value = Number(this.$('splat-max-height').value);
+    return value > MAX_HEIGHT_MAX ? null : value;
   }
   status(text) {
     this.$('splat-status').textContent = text;
@@ -355,15 +451,8 @@ export class SplatPanel {
   render() {
     if (!this.active) return;
     const $ = this.$,
-      frames = this.env.frames(),
-      clock = this.env.clock,
-      origin = this.env.origin();
-    const at = (pts) => {
-      const range = rangeFrames(frames, pts, pts);
-      return `${clock(pts - origin)}${range ? ` · #${range.start + 1}` : ''}`;
-    };
-    $('splat-start').textContent = finite(this.startPts) ? at(this.startPts) : '—';
-    $('splat-end').textContent = finite(this.endPts) ? at(this.endPts) : '—';
+      frames = this.env.frames();
+    this.renderRangeText();
     const range = this.range;
     if (range) {
       const first = frames[range.start],
@@ -376,7 +465,7 @@ export class SplatPanel {
         $('splat-rgb-estimate').textContent =
           `${w.frames.toLocaleString()} frames × ${w.width}×${w.height} ≈ ${Math.round(w.megapixels).toLocaleString()} Mpx`;
       }
-    } else $('splat-range-summary').textContent = 'No frames in range';
+    }
     const focused = document.activeElement;
     const show = (id, value, digits) => {
       if (focused !== $(id)) $(id).value = finite(value) ? value.toFixed(digits) : '';
@@ -384,16 +473,15 @@ export class SplatPanel {
     show('splat-lat', this.target?.lat, 7);
     show('splat-lon', this.target?.lon, 7);
     show('splat-alt', this.target?.alt_amsl, 1);
+    if (this.radiusAuto) this.radius = footprintRadius(frames, range, this.env.record, this.target);
+    show('splat-radius', this.radius, 0);
+    $('splat-radius').title = this.radiusAuto
+      ? 'Area kept around the target (m): the ground width the camera sees, from its distance and FOV'
+      : 'Area kept around the target (m); clear to use the ground width the camera sees';
     $('splat-alt-down').disabled = $('splat-alt-up').disabled = !this.validTarget();
-    if (this.view && this.validTarget()) {
-      const v = viewFromCamera(this.view.camera, this.target);
-      $('splat-view').textContent =
-        `Bearing ${v.bearingDeg.toFixed(0)}° · elevation ${v.elevationDeg.toFixed(0)}° · ${v.distanceM.toFixed(0)} m from target`;
-    } else
-      $('splat-view').textContent = this.view
-        ? 'Captured; set a target to see its bearing'
-        : `WebSplat default (${this.rgb ? 'middle' : 'hottest'} training view)`;
-    $('splat-clear-view').disabled = !this.view;
+    const maxHeight = this.maxHeight();
+    $('splat-max-height-value').textContent =
+      maxHeight === null ? 'Auto (above the tree tops)' : `${maxHeight} m above the target`;
     const warnings = [];
     if (!this.points.length)
       warnings.push(
@@ -423,10 +511,29 @@ export class SplatPanel {
           lon: this.target.lon,
           altAmsl: this.target.alt_amsl,
           groundAmsl: this.env.elevation.at(this.target.lat, this.target.lon),
+          radiusM: this.radius,
+          maxHeightM: maxHeight,
         }
       : null;
     this.map?.setSplatTarget(target);
     this.renderBand();
+  }
+  renderRangeText() {
+    const $ = this.$,
+      frames = this.env.frames(),
+      origin = this.env.origin();
+    const at = (pts) => {
+      const range = rangeFrames(frames, pts, pts);
+      return `${this.env.clock(pts - origin)}${range ? ` · #${range.start + 1}` : ''}`;
+    };
+    $('splat-start').textContent = finite(this.startPts) ? at(this.startPts) : '—';
+    $('splat-end').textContent = finite(this.endPts) ? at(this.endPts) : '—';
+    if (!this.range) $('splat-range-summary').textContent = 'No frames in range';
+    for (const which of ['start', 'end']) {
+      const handle = $(`splat-handle-${which}`),
+        pts = which === 'start' ? this.startPts : this.endPts;
+      handle.setAttribute('aria-valuetext', finite(pts) ? at(pts) : '');
+    }
   }
   get rgb() {
     return this.source?.kind === 'rgb';
@@ -461,7 +568,8 @@ export class SplatPanel {
   }
   go() {
     let request;
-    const file = this.env.file();
+    const file = this.env.file(),
+      { view, note } = this.viewForGo();
     try {
       if (!file) throw new Error('No recording is open.');
       request = deepFreeze(
@@ -474,7 +582,9 @@ export class SplatPanel {
           target: this.target,
           refine: this.$('splat-refine').checked,
           hfov: this.env.hfov(),
-          view: this.view,
+          radius: this.radius,
+          maxHeight: this.maxHeight(),
+          view,
           title: this.$('splat-title').value,
         }),
       );
@@ -491,8 +601,8 @@ export class SplatPanel {
       release: this.env.releaseDownload,
       onState: (state, text) => {
         // the latest handover owns the panel status; all report to the status bar
-        if (!handover || [...this.handovers].at(-1) === handover) this.status(text);
-        this.env.onStatus?.(text);
+        if (!handover || [...this.handovers].at(-1) === handover) this.status(note + text);
+        this.env.onStatus?.(note + text);
         if (handover?.done) this.handovers.delete(handover);
       },
     });

@@ -601,7 +601,9 @@ export class ReviewMap {
     }
     this.render();
   }
-  /** Splat target marker {lat, lon, altAmsl, groundAmsl} with a line up from the terrain. */
+  /** Splat target marker {lat, lon, altAmsl, groundAmsl, radiusM, maxHeightM} with a line up
+   * from the terrain, and the kept area: a ring of radiusM at the target height, or with
+   * maxHeightM a translucent cylinder from the target height up to the cap. */
   setSplatTarget(target) {
     this.clearEntities(this.splatEntities);
     if (target && [target.lat, target.lon, target.altAmsl].every(finite)) {
@@ -628,6 +630,24 @@ export class ReviewMap {
             },
           }),
         );
+      if (finite(target.radiusM) && target.radiusM > 0) {
+        const height = finite(target.maxHeightM) ? target.maxHeightM : 0;
+        this.splatEntities.push(
+          this.viewer.entities.add({
+            position: this.position(target.lat, target.lon, target.altAmsl + height / 2),
+            cylinder: {
+              length: Math.max(height, 0.1),
+              topRadius: target.radiusM,
+              bottomRadius: target.radiusM,
+              material: color.splatTarget.withAlpha(height ? 0.12 : 0.06),
+              outline: true,
+              outlineColor: color.splatTarget,
+              numberOfVerticalLines: height ? 16 : 0,
+              slices: 96,
+            },
+          }),
+        );
+      }
     }
     this.render();
   }

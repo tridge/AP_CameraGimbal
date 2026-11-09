@@ -14,6 +14,13 @@ export const RGB_DEFAULT_WIDTH = 1280;
 export const RGB_FPS = 3;
 // WebSplat's RGB_FRAME_BUDGET
 export const RGB_FRAME_BUDGET = 500;
+// prepare's radius about the target (m): WebSplat accepts [10, 10000]; the default is clamped
+export const MIN_RADIUS = 10;
+export const MAX_RADIUS = 10000;
+export const DEFAULT_RADIUS_RANGE = [100, 2000];
+// cap on the kept height, metres above the target: WebSplat accepts [1, 10000]
+export const MIN_MAX_HEIGHT = 1;
+export const MAX_MAX_HEIGHT = 10000;
 const RAD = Math.PI / 180,
   DEG = 180 / Math.PI;
 
@@ -176,6 +183,29 @@ export function medianPoint(points) {
   };
 }
 
+/** Default splat radius: the ground width the camera sees across its view (2 d tan(HFOV / 2))
+ * at the median camera-to-target distance d and median HFOV of up to max sampled frames in the
+ * range. Seen from all round an orbit, frames reach about that far from the target. Rounded to
+ * 10 m and clamped to DEFAULT_RADIUS_RANGE; null without poses or a FOV. */
+export function footprintRadius(frames, range, recordForFrame, target, max = MAX_LOOK_POINTS) {
+  if (!range || ![target?.lat, target?.lon, target?.alt_amsl].every(finite)) return null;
+  const distances = [],
+    fovs = [];
+  for (const i of sampleIndices(range.start, range.end, max)) {
+    const record = recordForFrame(frames[i]),
+      pose = validPose(record);
+    if (!pose || !validFov(record.hfov_deg)) continue;
+    distances.push(
+      viewFromCamera({ lat: pose.lat, lon: pose.lon, alt_amsl: pose.altitude }, target).distanceM,
+    );
+    fovs.push(record.hfov_deg);
+  }
+  if (!distances.length) return null;
+  const width = 2 * median(distances) * Math.tan((median(fovs) * RAD) / 2);
+  const [lo, hi] = DEFAULT_RADIUS_RANGE;
+  return Math.min(hi, Math.max(lo, Math.round(width / 10) * 10));
+}
+
 /** Camera position seen from the target: bearing (deg from north), elevation (deg), distance (m). */
 export function viewFromCamera(camera, target) {
   const a = 6378137,
@@ -226,6 +256,8 @@ export function buildRequest({
   target,
   refine = true,
   hfov,
+  radius,
+  maxHeight,
   view,
   title,
 }) {
@@ -257,6 +289,8 @@ export function buildRequest({
     hfov: hfov ?? null,
   };
   if (kind === 'rgb') request.rgb = { width: rgbWidth };
+  if (finite(radius)) request.radius = Math.round(radius);
+  if (finite(maxHeight)) request.max_height = maxHeight;
   if (view)
     request.view = {
       camera: {
@@ -317,7 +351,20 @@ export function validateRequest(value) {
   object(
     value,
     'request',
-    ['format', 'version', 'kind', 'source', 'range', 'target', 'hfov', 'rgb', 'view', 'title'],
+    [
+      'format',
+      'version',
+      'kind',
+      'source',
+      'range',
+      'target',
+      'hfov',
+      'rgb',
+      'radius',
+      'max_height',
+      'view',
+      'title',
+    ],
     ['format', 'version', 'source', 'range', 'target'],
   );
   if (value.format !== REQUEST_FORMAT)
@@ -373,6 +420,15 @@ export function validateRequest(value) {
       throw new RequestError('request.rgb.width', 'must be an integer in [64, 16384]');
     result.rgb = { width: rgb.width };
   } else if (value.rgb !== undefined) throw new RequestError('request.rgb', 'only allowed for rgb');
+  if (value.radius !== undefined)
+    result.radius = number(value.radius, 'request.radius', MIN_RADIUS, MAX_RADIUS);
+  if (value.max_height !== undefined)
+    result.max_height = number(
+      value.max_height,
+      'request.max_height',
+      MIN_MAX_HEIGHT,
+      MAX_MAX_HEIGHT,
+    );
   if (value.view !== undefined) {
     const view = object(value.view, 'request.view', ['camera', 'fov_deg']);
     result.view = {
