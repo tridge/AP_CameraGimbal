@@ -57,6 +57,18 @@ export function rotZ(a) {
 }
 
 /** Flat-earth ENU frame about an origin; adequate over a few km. */
+/** lon, shifted by 360 degrees if that brings it within 180 of lon0 (unchanged otherwise, so
+ * frames away from the antimeridian keep their exact values). */
+export function nearLon(lon, lon0) {
+  if (lon - lon0 > 180) return lon - 360;
+  if (lon - lon0 < -180) return lon + 360;
+  return lon;
+}
+
+/** a longitude in [-180, 180) */
+export const normLon = (lon) =>
+  lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180;
+
 export class LocalFrame {
   constructor(lat, lon, alt) {
     this.lat = lat;

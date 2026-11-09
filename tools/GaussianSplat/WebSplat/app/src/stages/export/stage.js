@@ -1,7 +1,8 @@
 // Stage 7 definition (pipeline/registry.js): the downloads (splat.ply, splat.spz, meta.json, as
 // export_web.py makes them) from stage 6's trained splat, streamed (stream.js). Two workers in
 // turn: the PLY, then the SPZ (Spark in chunks, checked chunk by chunk) and meta.json.
-// config.export: {title, description}.
+// config.export: {title, description, view (a request's captured start view), target ('picked':
+// the selection's target, not prepare's hot spot)}.
 import { defineStage } from '../../pipeline/registry.js';
 import { remove } from '../../storage/opfs.js'; // retries while a worker's handle is released
 
@@ -29,6 +30,8 @@ export const exportStage = defineStage({
       trainDir: ctx.input('train').dir,
       title: ctx.config.export?.title ?? 'Thermal splat',
       description: ctx.config.export?.description ?? '',
+      view: ctx.config.export?.view ?? null,
+      targetPolicy: ctx.config.export?.target ?? null,
     };
     const t0 = performance.now();
     const ply = await ctx.runWorker(worker, { ...dirs, pass: 'ply' });
@@ -43,13 +46,14 @@ export const exportStage = defineStage({
     const train = ctx.input('train').result ?? {};
     const s = ply.info.temperature_scale;
     return {
+      kind: ply.info.kind,
       title: dirs.title,
       trainStandin: !!train.standin, // made from a stand-in's splat, not stage 6's training
       gaussians: ply.count,
       shDegree: ply.info.sh_degree,
       input: ply.input,
-      temperatureC: [s.t0_c, s.t1_c],
-      displayRangeC: ply.info.display_range_c,
+      temperatureC: s ? [s.t0_c, s.t1_c] : null,
+      displayRangeC: ply.info.display_range_c ?? null,
       rasterizeMode: ply.info.rasterize_mode,
       files: { 'splat.ply': ply.plySize, 'splat.spz': fin.spzSize, 'meta.json': fin.metaSize },
       spz: fin.spz,

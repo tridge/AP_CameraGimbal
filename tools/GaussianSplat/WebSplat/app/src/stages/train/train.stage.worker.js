@@ -1,4 +1,5 @@
-// Stage 6 worker: thermal training with the Brush fork from stage 5b's dataset.
+// Stage 6 worker: training with the Brush fork from stage 5b's dataset (thermal numeric targets,
+// or RGB images through Brush's stock colour path).
 // msg: {prepareDir, selectDir, outDir, pkgURL, options, checkpoint, ckptBase, firstCheckpointGeneration}
 //   options: {checkpointEvery (iterations, default 5000), previewEvery (default 2000),
 //             growthGradThreshold, meanNoiseWeight, refineEvery}
@@ -10,7 +11,7 @@
 // terminate it with this worker. Any GPU error, shader error or device loss fails the stage.
 import { serveStage } from '../../workers/runtime.js';
 import { readFile, readJson, remove, writeFile, writeJson } from '../../storage/opfs.js';
-import { brushConfig, writeBrushDataset } from './brush-dataset.js';
+import { RGB_CAP, brushConfig, writeBrushDataset } from './brush-dataset.js';
 import { plyToWssp, wsspHeader, wsspToPly } from './params.js';
 import { apcgComment, trainInfo } from '../export/meta.js';
 
@@ -48,15 +49,19 @@ serveStage(async (msg, api) => {
   api.phase('load');
   const dataset = await readJson(`${msg.prepareDir}/dataset.json`);
   const frames = await readJson(`${msg.selectDir}/frames.json`);
+  const rgb = dataset.kind === 'rgb';
   const px = dataset.width * dataset.height;
   const targets = await readFile(`${msg.prepareDir}/${dataset.targets.file}`);
+  const targetBytes = rgb ? px * 3 : px * 2;
   const buf = async (f) => (await readFile(`${msg.prepareDir}/${f}`)).arrayBuffer();
   const brushDir = `${msg.outDir}/brush`;
   await writeBrushDataset(dataset, {
     points: new Float32Array(await buf(dataset.points.file)),
     ceiling: new Float32Array(await buf(dataset.bounds.ceiling.file)),
-    readTargets: async (i) =>
-      new Uint16Array(await targets.slice(i * px * 2, (i + 1) * px * 2).arrayBuffer()),
+    readTargets: async (i) => {
+      const b = await targets.slice(i * targetBytes, (i + 1) * targetBytes).arrayBuffer();
+      return rgb ? new Uint8Array(b) : new Uint16Array(b);
+    },
     write: (path, data) => writeFile(`${brushDir}/${path}`, data),
     deflate,
     signal: { throwIfAborted: () => api.throwIfStopped() },
@@ -80,6 +85,9 @@ serveStage(async (msg, api) => {
     growthGradThreshold: opt.growthGradThreshold,
     meanNoiseWeight: opt.meanNoiseWeight,
     refineEvery: opt.refineEvery,
+    maxSplats: rgb
+      ? Math.min(dataset.training.options.cap, RGB_CAP[msg.env?.gpuClass] ?? RGB_CAP.unknown)
+      : null,
   });
   const datasetMs = performance.now() - t0;
   api.progress(startIter, total, { gaussians: null });
@@ -94,7 +102,8 @@ serveStage(async (msg, api) => {
   let gaussians = null;
   let trainMs = null;
   let checkpoints = 0;
-  const previewView = dataset.images.find((im) => im.split === 'test' && im.hot)?.name;
+  // RGB: Brush's eval renders return channel 0 only, so the preview is the red channel in grey
+  const previewView = dataset.images.find((im) => im.split === 'test' && (rgb || im.hot))?.name;
   const evalViews = dataset.images.filter((im) => im.split === 'test').map((im) => im.name);
   try {
     return await new Promise((resolve, reject) => {
@@ -182,11 +191,19 @@ serveStage(async (msg, api) => {
             for (const v of m.views)
               await writeFile(`${msg.outDir}/eval/${v.name}.f32`, new Uint8Array(v.data.buffer));
             // train.py's splat.ply header
-            const info = trainInfo({
-              target: dataset.hotspot?.enu ?? frames.target_enu,
-              scale: dataset.scale,
-              origin: frames.origin,
-            });
+            const info = rgb
+              ? {
+                  kind: 'rgb',
+                  up: [0, 0, 1],
+                  target: frames.target_enu,
+                  origin: frames.origin,
+                  rasterize_mode: 'classic',
+                }
+              : trainInfo({
+                  target: dataset.hotspot?.enu ?? frames.target_enu,
+                  scale: dataset.scale,
+                  origin: frames.origin,
+                });
             worker.postMessage({ type: 'exportPly', comments: [apcgComment(info)] });
             evalViews.length = 0;
             evalViews.push(...m.views.map((v) => v.name));
@@ -202,7 +219,12 @@ serveStage(async (msg, api) => {
             fail(new Error(`training failed: ${m.reason}`));
           } else if (m.type === 'error') {
             // a snapshot refused because the run already failed: its 'failed' message names the cause
-            if (/^(Error: )?(no snapshot: run is failed|run failed (before|during) a snapshot)/.test(m.message)) return;
+            if (
+              /^(Error: )?(no snapshot: run is failed|run failed (before|during) a snapshot)/.test(
+                m.message,
+              )
+            )
+              return;
             fail(new Error(m.message.split('\n')[0]));
           } else if (m.type === 'gpuerror' || m.type === 'shaderError') {
             api.log(`${m.type}: ${m.message ?? m.messages?.join('; ')}`, 'error');

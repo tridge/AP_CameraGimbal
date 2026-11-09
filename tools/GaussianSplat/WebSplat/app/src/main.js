@@ -6,7 +6,25 @@ import { stageSet, stageSets } from './stages/index.js';
 import { Job, jobDir } from './storage/job.js';
 import { JobLockedError } from './storage/lock.js';
 import { ManifestError, loadManifest, saveManifest } from './storage/manifest.js';
-import { hashBlob, hashJson } from './storage/hash.js';
+import { hashBlob, hashJson, stableStringify } from './storage/hash.js';
+import {
+  RGB_FRAME_BUDGET,
+  RequestError,
+  requestIdentity,
+  requestKey,
+  selectConfig,
+  validNonce,
+  validateRequest,
+} from './request.js';
+import {
+  HandoverError,
+  moveFile,
+  receiveRequest,
+  refuse,
+  removeStaleIncoming,
+  reply,
+  withStagedCopy,
+} from './handover.js';
 import {
   exists,
   list,
@@ -16,6 +34,7 @@ import {
   writeFile,
 } from './storage/opfs.js';
 import { renderStages } from './ui/stage-list.js';
+import { RGB_MAX_FEATURES } from './stages/features/sift.js';
 import { showResult } from './ui/result.js';
 
 const $ = (id) => document.getElementById(id);
@@ -121,6 +140,7 @@ function update() {
       ? 'Resume'
       : 'Start';
     $('stop').disabled = !snap.running;
+    showRequestSummary();
   }, 100);
 }
 
@@ -138,8 +158,22 @@ async function start() {
   await controller.start();
   for (;;) {
     if (controller.needs === 'select') {
-      const proposal = controller.results().ingest?.proposal;
-      job.manifest.config.select = await confirmProposal(proposal);
+      const ingest = controller.results().ingest;
+      const request = job.manifest.config.request;
+      try {
+        // a request job: the user chose the target in the viewer
+        job.manifest.config.select = request
+          ? selectConfig(request, ingest)
+          : await confirmProposal(
+              ingest?.proposal,
+              ingest?.range,
+              ingest?.kind === 'rgb' && ingest.track,
+            );
+      } catch (e) {
+        if (!(e instanceof RequestError)) throw e;
+        log(`cannot select frames: ${e.message}`, 'error');
+        break;
+      }
     } else if (controller.needs === 'train') {
       await chooseTrained();
     } else break;
@@ -232,10 +266,16 @@ async function sourceFor(job) {
   }
 }
 
-// choose a new recording: its hash names the job, so the same file resumes the same job
-async function chooseSource(name) {
+// a job id names its pipeline: rgb-<hash>... for RGB recordings, else thermal
+const pipelineOf = (jobId) => (jobId.startsWith('rgb-') ? 'rgb' : 'thermal');
+const RGB_FILE = /\.(ts|m2ts|mts|mp4|m4v|mov)$/i;
+
+// choose a new recording: its hash names the job, so the same file resumes the same job; an
+// MPEG-TS or MP4 makes an RGB splat, an MKV a thermal one
+async function chooseSource() {
   $('source').hidden = false;
   const file = await new Promise((r) => ($('file').onchange = () => r($('file').files[0])));
+  const name = RGB_FILE.test(file.name) ? 'rgb' : 'thermal';
   $('source-status').textContent = `reading ${file.name}…`;
   const hash = await hashBlob(file, { chunkedAlways: true });
   const source = {
@@ -263,11 +303,19 @@ async function chooseSource(name) {
 }
 
 // the selection options form, filled from ingest's proposal; resolves when the user continues
-function confirmProposal(proposal) {
+// (range: ingest's resolved request range, kept as start/end; rgb: the RGB track, which adds
+// the processing width and drops rotation)
+function confirmProposal(proposal, range = null, rgb = null) {
   const f = $('proposal-form');
   const p = proposal?.proposal ?? {};
   for (const k of ['lat', 'lon', 'target_alt', 'hfov']) f.elements[k].value = p[k] ?? '';
   f.elements.rotation.value = String(p.rotation ?? 0);
+  $('rotation-label').hidden = !!rgb;
+  $('width-label').hidden = !rgb;
+  if (rgb) {
+    f.elements.width.max = rgb.width;
+    f.elements.width.value = Math.min(1280, rgb.width);
+  }
   $('proposal-notes').replaceChildren(
     ...[...(proposal?.notes ?? []), ...(proposal?.error ? [proposal.error] : [])].map((n) =>
       Object.assign(document.createElement('li'), { textContent: n }),
@@ -282,15 +330,160 @@ function confirmProposal(proposal) {
       e.preventDefault();
       const v = (k) => (f.elements[k].value === '' ? null : Number(f.elements[k].value));
       $('proposal').hidden = true;
+      const r = range && { start: range.start, end: range.end };
+      if (rgb)
+        return resolve({
+          lat: v('lat'),
+          lon: v('lon'),
+          target_alt: v('target_alt') ?? 0,
+          hfov: v('hfov'),
+          width: v('width'),
+          budget: RGB_FRAME_BUDGET,
+          ...r,
+        });
       resolve({
         lat: v('lat'),
         lon: v('lon'),
         target_alt: v('target_alt'),
         rotation: v('rotation'),
         hfov: v('hfov'),
+        ...r,
       });
     };
   });
+}
+
+// ?request=<nonce>: the video viewer's Create splat hands over a request and its recording.
+// Returns {job, file}, or null after showing why not (the page then offers a file chooser).
+async function fromViewer(nonce, remembered) {
+  api.request = { state: 'waiting' };
+  $('request').hidden = false;
+  const status = (t) => ($('request-status').textContent = t);
+  status('Waiting for the video viewer…');
+  let msg;
+  try {
+    if (!validNonce(nonce)) throw new HandoverError('the request id in the address is not valid');
+    msg = await receiveRequest(nonce, { waitMs: num('requestWaitMs', 30000) });
+  } catch (e) {
+    if (!(e instanceof HandoverError)) throw e;
+    return handoverFailed(e.message, remembered);
+  }
+  const answer = (type, extra) => reply(msg.origin, { type, nonce, ...extra });
+  try {
+    const request = validateRequest(msg.data.request);
+    const file = msg.data.file;
+    if (!(file instanceof File)) throw new RequestError('no recording was handed over');
+    if (file.name !== request.source.name || file.size !== request.source.size)
+      throw new RequestError(
+        `the file handed over (${file.name}, ${file.size} bytes) is not the request's ` +
+          `${request.source.name} (${request.source.size} bytes)`,
+      );
+    api.request = { state: 'copying' };
+    await removeStaleIncoming();
+    const opened = await withStagedCopy(
+      file,
+      nonce,
+      async (staged) => {
+        const identity = requestIdentity(request);
+        const jobId = `${request.kind}-${staged.hash.split(':')[1].slice(0, 16)}-${await requestKey(request)}`;
+        const title = request.title ?? file.name.replace(/\.[^.]*$/, '');
+        const exportConfig = { title };
+        if (request.view) exportConfig.view = request.view;
+        if (!request.target.refine) exportConfig.target = 'picked';
+        const proposal = { range: identity.range };
+        if (request.hfov != null) proposal.hfov = request.hfov;
+        const source = {
+          format: 'websplat.source',
+          version: 1,
+          name: file.name,
+          size: file.size,
+          lastModified: file.lastModified,
+          hash: staged.hash,
+          copied: false,
+        };
+        const config = {
+          request: { ...identity, source: { name: file.name, size: file.size } },
+          proposal,
+          export: exportConfig,
+        };
+        const existed = await exists(jobDir(jobId));
+        const j = await Job.open(jobId, { source, config });
+        try {
+          const { source: _, ...stored } = j.manifest.config?.request ?? {};
+          if (stableStringify(stored) !== stableStringify(identity))
+            throw new RequestError(
+              `job ${jobId} already exists for a different request; delete it or change the request`,
+            );
+          if (!j.manifest.source.copied) {
+            status(`saving ${file.name}…`);
+            await moveFile(staged.path, `${j.dir}/source/source.mkv`);
+            j.manifest.source.copied = true;
+          }
+          // only the title may differ on reopen (re-runs export alone)
+          j.manifest.config.export = { ...j.manifest.config.export, title };
+          await j.save();
+          return j;
+        } catch (e) {
+          // a job made for this handover is removed again (no half-copied job is left)
+          if (existed) j.close();
+          else await j.destroy().catch(() => j.close());
+          throw e;
+        }
+      },
+      {
+        onProgress: (done, total) =>
+          status(`copying ${file.name} into browser storage: ${((100 * done) / total) | 0}%`),
+      },
+    );
+    params.delete('request');
+    params.set('job', opened.id);
+    history.replaceState(null, '', `?${params}`);
+    answer('websplat.accepted', { job: opened.id });
+    api.request = { state: 'accepted', job: opened.id };
+    $('request').hidden = true;
+    return { job: opened, file: await readFile(`${opened.dir}/source/source.mkv`) };
+  } catch (e) {
+    answer('websplat.rejected', { reason: e.message });
+    if (e instanceof JobLockedError || e instanceof ManifestError) {
+      $('request').hidden = true;
+      api.request = { state: 'rejected', error: e.message };
+      throw e;
+    }
+    return handoverFailed(e.message, remembered);
+  }
+}
+
+function handoverFailed(reason, remembered) {
+  api.request = { state: 'failed', error: reason };
+  $('request-status').textContent =
+    `Could not take over the splat request (${reason}). Open this from the video viewer's ` +
+    'Create splat again, or choose a recording below.';
+  const latest = localStorage.getItem(remembered);
+  $('request-latest').hidden = !latest;
+  $('request-latest').onclick = () => {
+    params.delete('request');
+    params.set('job', latest);
+    location.search = params.toString();
+  };
+  return null;
+}
+
+// a request job's summary under the job header
+function showRequestSummary() {
+  const r = job?.manifest.config?.request;
+  const el = $('request-summary');
+  el.hidden = !r;
+  if (!r) return;
+  const range = job.manifest.stages?.ingest?.result?.range;
+  const secs = (r.range.end.pts - r.range.start.pts) / r.range.timescale;
+  const t = r.target;
+  el.textContent =
+    `From the video viewer: ${secs.toFixed(1)} s of video` +
+    (range ? ` (frames ${range.start}..${range.end}, ${range.frames} frames)` : '') +
+    `; target ${t.lat.toFixed(6)}, ${t.lon.toFixed(6)} at ${t.alt_amsl.toFixed(1)} m AMSL` +
+    (t.refine ? ' (refined to the hot spot)' : ' (as picked)') +
+    `; start view ${r.view ? 'captured' : r.kind === 'rgb' ? 'default (the middle view)' : 'default (the hottest view)'}` +
+    (r.rgb ? `; processing width ${r.rgb.width} px.` : '.');
 }
 
 // re-reads the job through the production validator and re-hashes every published file
@@ -319,20 +512,24 @@ async function verifyJob(jobId) {
   };
 }
 
+const snapDone = () => controller.snapshot().stages.every((s) => s.state === 'done');
+
 async function main() {
   window.addEventListener('error', (e) => api.errors.push(String(e.message)));
   window.addEventListener('unhandledrejection', (e) =>
     api.errors.push(String(e.reason?.message ?? e.reason)),
   );
+  // tests only: storage faults in the page itself (?testFault= applies to the workers)
+  if (params.get('pageFault')) globalThis.websplatTestFault = JSON.parse(params.get('pageFault'));
   const powerPreference = params.get('adapter') === 'low-power' ? 'low-power' : 'high-performance';
   const device = await checkDevice({ powerPreference, smoke: params.get('smoke') !== '0' });
   api.device = device;
   showDevice(device);
 
   // test and development pipelines are only offered when the URL names one
-  const name = params.get('pipeline') ?? 'thermal';
+  let name = params.get('pipeline') ?? 'thermal';
   $('pipeline').closest('label').hidden = !params.has('pipeline');
-  const set = stageSet(name);
+  let set = stageSet(name);
   const noSource = name === 'dummy' || set?.source === false;
   for (const s of stageSets())
     $('pipeline').add(new Option(s.title, s.name, false, s.name === name));
@@ -342,14 +539,22 @@ async function main() {
     location.search = params.toString();
   };
   // the export-test set needs no WebGPU (the viewer is WebGL)
+  const nonce = noSource ? null : params.get('request');
   if (!set || (!device.ok && !noSource)) {
+    if (nonce) refuse(nonce, device.reason ?? 'this browser cannot run WebSplat');
     api.ready = true;
     return;
   }
-  const remembered = `websplat.job.${name}`;
+  // thermal and RGB jobs share the page's remembered job (the job id names its pipeline)
+  const remembered = `websplat.job.${noSource ? name : 'thermal'}`;
   let sourceFile = null;
+  let handedOver = false;
   try {
-    if (name === 'dummy') {
+    if (nonce) {
+      // ?request= takes precedence over ?job= and the remembered job
+      ({ job, file: sourceFile } = (await fromViewer(nonce, remembered)) ?? {});
+      handedOver = !!job;
+    } else if (name === 'dummy') {
       job = await Job.open(params.get('job') ?? 'dummy', {
         source: DUMMY_SOURCE,
         config: { dummySeed: num('seed', 0) },
@@ -368,8 +573,15 @@ async function main() {
     }
     if (!job) {
       api.ready = true; // waiting for a file
-      ({ job, file: sourceFile } = await chooseSource(name));
-    } else if (!noSource) {
+      ({ job, file: sourceFile } = await chooseSource());
+      if (params.has('request')) {
+        // a failed handover: this job is the user's own choice now
+        params.delete('request');
+        params.set('job', job.id);
+        history.replaceState(null, '', `?${params}`);
+        $('request').hidden = true;
+      }
+    } else if (!noSource && !sourceFile) {
       api.ready = true;
       sourceFile = await sourceFor(job);
     }
@@ -395,7 +607,11 @@ async function main() {
     return;
   }
   api.ready = false;
-  if (!noSource) localStorage.setItem(remembered, job.id);
+  if (!noSource) {
+    name = pipelineOf(job.id);
+    set = stageSet(name);
+    localStorage.setItem(remembered, job.id);
+  }
   // run-time knobs come from the URL; output-affecting config from the job
   const config = (job.manifest.config ??= {});
   Object.assign(config, { speed: num('speed', 1), ckptMs: num('ckptMs', 1500) });
@@ -411,6 +627,8 @@ async function main() {
     }
     config.standin = { ...config.standin, ...urls };
   }
+  // RGB frames are feature-rich: fewer keypoints keep mapping inside its 4 GB wasm heap
+  if (name === 'rgb') config.features ??= { maxNumFeatures: RGB_MAX_FEATURES };
   config.export ??= {
     title: params.get('title') ?? (job.manifest.source?.name ?? 'splat').replace(/\.[^.]*$/, ''),
   };
@@ -467,6 +685,8 @@ async function main() {
   // autostart begins a fresh job only; an interrupted one waits for Resume
   const fresh = controller.snapshot().stages.every((s) => s.state === 'waiting');
   if (params.get('autostart') === '1' && fresh) start();
+  // a handed-over request starts (or resumes) at once: the user pressed Go in the viewer
+  else if (handedOver && params.get('autostart') !== '0' && !snapDone()) start();
 }
 main().catch((e) => {
   console.error(e);

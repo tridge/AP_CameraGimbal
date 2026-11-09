@@ -238,7 +238,7 @@ function chooseImages(images, frames, o, target, log) {
 }
 
 /** train.canopy_ceiling over near points (Float64Array xyz [n*3]) */
-function canopyCeiling(near, centre, radius, cell, margin, deflt) {
+export function canopyCeiling(near, centre, radius, cell, margin, deflt) {
   const n = Math.ceil((2 * radius) / cell);
   const origin = [centre[0] - radius, centre[1] - radius];
   const count = near.length / 3;

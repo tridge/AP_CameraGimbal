@@ -47,6 +47,32 @@ export function quatWxyz(R) {
   return [q[3] / n, q[0] / n, q[1] / n, q[2] / n];
 }
 
+// matches the 4 GB wasm heap holds (5.3M took 1.6 GB with 168 images; 8M with 342 images grew
+// it to 4.15 GB)
+export const MAX_MATCHES = 6000000;
+const MIN_PAIR_MATCHES = 15;
+
+/** Above maxMatches, keep a deterministic subset of each image's keypoints (the same in every
+ * pair, so tracks stay whole) and the matches between kept keypoints. Returns {geometry, kept}
+ * (kept: the fraction of keypoints, 1 when nothing is dropped). */
+export function thinMatches(geometry, maxMatches = MAX_MATCHES) {
+  const total = geometry.reduce((n, e) => n + e.matches.length / 2, 0);
+  if (total <= maxMatches) return { geometry, kept: 1, total };
+  const kept = Math.sqrt(maxMatches / total);
+  const limit = kept * 2 ** 32;
+  const keep = (i, k) =>
+    Math.imul((i * 73856093) ^ Math.imul(k, 2654435761), 0x9e3779b1) >>> 0 < limit;
+  const out = geometry.map((e) => {
+    const m = e.matches;
+    const sel = [];
+    for (let q = 0; q < m.length; q += 2)
+      if (keep(e.i, m[q]) && keep(e.j, m[q + 1])) sel.push(m[q], m[q + 1]);
+    return { ...e, matches: Uint32Array.from(sel) };
+  });
+  // a pair left with fewer than COLMAP's minimum inliers is dropped
+  return { geometry: out.filter((e) => e.matches.length / 2 >= MIN_PAIR_MATCHES), kept, total };
+}
+
 // sfm.py's telemetry model (sparse/telemetry images.txt): cam_from_world with the quaternion
 // printed '%.12g' and the translation '%.9g'
 export function telemetryPose(frame) {

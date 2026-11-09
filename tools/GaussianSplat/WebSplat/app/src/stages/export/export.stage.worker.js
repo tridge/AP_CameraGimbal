@@ -1,9 +1,11 @@
 // Stage 7 worker (workers/runtime.js protocol), one pass per worker: msg.pass 'ply' | 'spz' with
-// {selectDir, prepareDir, trainDir, outDir, title, description} and, for 'spz', the PLY pass's
-// result (ply). Files are OPFS sync access handles (stream.js); 'spz' also writes meta.json.
+// {selectDir, prepareDir, trainDir, outDir, title, description, view, targetPolicy} and, for
+// 'spz', the PLY pass's result (ply). Files are OPFS sync access handles (stream.js); 'spz' also writes meta.json.
 import { serveStage } from '../../workers/runtime.js';
 import { dir, readJson } from '../../storage/opfs.js';
 import { metaPass, plyPass, spzPass } from './stream.js';
+import { exportInputs } from './export.js';
+import { viewCamera } from './view.js';
 
 async function handle(path, create) {
   const parts = path.split('/').filter(Boolean);
@@ -44,6 +46,13 @@ serveStage(async (msg, api) => {
       const frames = await readJson(`${msg.selectDir}/frames.json`);
       const input = await h(`${msg.trainDir}/${train.splat}`);
       const ply = await h(`${msg.outDir}/splat.ply`, true);
+      let camera = null; // the request's captured view, else plyPass's start camera
+      if (msg.view) {
+        const { target } = exportInputs(dataset, frames, msg.targetPolicy);
+        const v = viewCamera(msg.view, frames.origin, target, dataset.bounds?.radius);
+        if (v.note) api.log(v.note, 'warn');
+        camera = v.camera;
+      }
       api.phase('ply');
       const r = await plyPass({
         input,
@@ -52,6 +61,8 @@ serveStage(async (msg, api) => {
         title: msg.title,
         description: msg.description,
         rasterizeMode: train.rasterize_mode ?? 'classic',
+        targetPolicy: msg.targetPolicy,
+        camera,
         ply,
         progress: (d, n) => api.progress(d, 2 * n),
         throwIfStopped: () => api.throwIfStopped(),

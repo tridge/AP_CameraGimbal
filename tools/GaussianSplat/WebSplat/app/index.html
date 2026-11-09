@@ -10,8 +10,8 @@
   <body>
     <h1>WebSplat</h1>
     <p>
-      Turns a radiometric thermal recording with embedded telemetry into a thermal Gaussian splat on
-      your own GPU. Files are read locally and never uploaded.
+      Turns a radiometric thermal recording (or an RGB video) with embedded telemetry into a
+      Gaussian splat on your own GPU. Files are read locally and never uploaded.
     </p>
     <section id="device" class="panel">Checking WebGPU…</section>
     <section id="blocked" class="panel error" hidden>
@@ -21,10 +21,15 @@
       <span id="unreadable-text"></span>
       <button id="discard">Delete this job</button>
     </section>
+    <section id="request" class="panel" hidden>
+      <div id="request-status"></div>
+      <button id="request-latest" hidden>Open the latest job</button>
+    </section>
     <section id="source" class="panel" hidden>
       <div>
         <label
-          >Thermal recording (MKV with telemetry) <input id="file" type="file" accept=".mkv"
+          >Recording (thermal MKV, or RGB MPEG-TS/MP4, with telemetry)
+          <input id="file" type="file" accept=".mkv,.ts,.m2ts,.mp4"
         /></label>
         <label><input id="copy" type="checkbox" checked /> keep a copy in browser storage</label>
       </div>
@@ -39,7 +44,7 @@
           >target height above takeoff, m
           <input name="target_alt" type="number" step="any" placeholder="hot spot"
         /></label>
-        <label
+        <label id="rotation-label"
           >rotation
           <select name="rotation">
             <option>0</option>
@@ -49,6 +54,9 @@
           </select></label
         >
         <label>HFOV, deg <input name="hfov" type="number" step="any" /></label>
+        <label id="width-label" hidden
+          >processing width, px <input name="width" type="number" step="1" min="64"
+        /></label>
         <button type="submit">Continue</button>
         <ul id="proposal-notes"></ul>
       </form>
@@ -63,6 +71,7 @@
         <button id="stop" disabled>Stop</button>
         <button id="reset">Reset job</button>
       </div>
+      <div id="request-summary" hidden></div>
       <div id="storage"></div>
       <div id="hidden-warning" class="warn" hidden>
         This tab is hidden: the browser may slow down or stop the work until it is visible again.

@@ -314,7 +314,9 @@ export function spzErrors(src, dec, fractionalBits) {
       add('scales', Math.abs(sc - dec.scales[j]), f16HalfUlp(sc) + 2 * f32Ulp(sc));
       const d = sat(src.sh0[j], dcLo, dcHi, 'sh0');
       const rgb = 0.15 * d + 0.5;
-      add('sh0', Math.abs(d - dec.sh0[j]), Math.max(f16HalfUlp(d), f16HalfUlp(rgb) / 0.15));
+      // Spark stages both the coefficient and the colour as float16 (RGB splats reach the
+      // byte's rounding edges often enough to need both allowances)
+      add('sh0', Math.abs(d - dec.sh0[j]), f16HalfUlp(d) + f16HalfUlp(rgb) / 0.15);
     }
     const a = sigmoid(src.opacities[i]);
     add('alpha', Math.abs(a - sigmoid(dec.opacities[i])), f16HalfUlp(a));

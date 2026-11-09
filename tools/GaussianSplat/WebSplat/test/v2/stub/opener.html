@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>handover stub</title>
+  </head>
+  <body>
+    <!-- stands in for the video viewer's Create splat (handover.mjs) -->
+    <input id="file" type="file" />
+    <script>
+      window.messages = [];
+      // opts: {url (WebSplat page), nonce, request, reply: 'ok' | 'none' | 'wrongNonce', file}
+      window.openSplat = (opts) => {
+        const file = opts.file ?? document.getElementById('file').files[0];
+        const win = window.open(
+          `${opts.url}${opts.url.includes('?') ? '&' : '?'}request=${opts.nonce}`,
+        );
+        if (!win) return false;
+        addEventListener('message', (e) => {
+          if (e.source !== win) return;
+          messages.push({ origin: e.origin, data: e.data });
+          if (e.data?.type !== 'websplat.ready' || e.data.nonce !== opts.nonce) return;
+          const msg = { type: 'websplat.request', nonce: opts.nonce, request: opts.request, file };
+          if (opts.reply === 'wrongNonce') msg.nonce = 'f'.repeat(32);
+          if (opts.reply !== 'none') win.postMessage(msg, new URL(opts.url).origin);
+        });
+        return true;
+      };
+    </script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 // Stage 1 definition (pipeline/registry.js). Needs the source File as ctx.sourceFile.
-// config.proposal: {start, end, hotspot_min_c, hotspot_max_error, hfov} for the proposal; other
-// keys are ignored, so editing the target (config.select) does not re-run ingest.
+// config.proposal: {start, end, hotspot_min_c, hotspot_max_error, hfov} for the proposal, and a
+// request's range (websplat.request), resolved to frames here; other keys are ignored, so editing
+// the target (config.select) does not re-run ingest.
 import { defineStage } from '../../pipeline/registry.js';
 import { FFMPEG_VERSION } from '../../../../../../viewer/src/versions.js';
 import { INGEST_VERSION } from './ingest.js';
