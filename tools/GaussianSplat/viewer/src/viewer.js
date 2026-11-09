@@ -154,8 +154,14 @@ async function main() {
   controls.enableDamping = true;
 
   const ui = Object.fromEntries(
-    ['cmap', 'lo', 'hi', 'auto', 'stats', 'hover', 'up'].map((id) => [id, $(id)]),
+    ['cmap', 'lo', 'hi', 'auto', 'stats', 'rangeinfo', 'hover', 'up'].map((id) => [id, $(id)]),
   );
+  if (!ui.rangeinfo && ui.stats) {
+    // pages exported before the auto range had a knee
+    ui.rangeinfo = document.createElement('p');
+    ui.rangeinfo.className = 'note';
+    ui.stats.before(ui.rangeinfo);
+  }
   let colormaps = null;
   let lut = null;
   let post = null;
@@ -167,6 +173,8 @@ async function main() {
   let thermal = false;
   let toC = (v) => v;
   let home = null;
+  let sceneLo = null; // the last auto range's low: GloryHot's grey floor in a manual range
+  const greyBelow = (name) => name === 'gloryhot';
 
   function setLut(name) {
     const rows = colormaps[name];
@@ -175,15 +183,37 @@ async function main() {
       lut.image.data[4 * i + 3] = 255;
     }
     lut.needsUpdate = true;
-    needPost = true;
+    post.material.uniforms.glory.value = greyBelow(name) ? 1 : 0;
+    applyRange(ui.auto.checked ? autoBg : null);
   }
 
-  function applyRange() {
+  // bg > lo: the auto range's knee (lo..bg linear over the bottom 70% of the palette, bg..hi
+  // log-compressed into the top 30%, as drape_thermal.py); otherwise linear lo..hi
+  // GloryHot (grey below the colour range): grey lo..bg and colours bg..hi with the knee, else
+  // grey below lo and colours lo..hi
+  let autoBg = null;
+  function applyRange(bg = null) {
     const lo = parseFloat(ui.lo.value);
     const hi = parseFloat(ui.hi.value);
     if (Number.isFinite(lo) && Number.isFinite(hi)) {
-      post.material.uniforms.lo.value = lo;
-      post.material.uniforms.hi.value = Math.max(hi, lo + 0.1);
+      const u = post.material.uniforms;
+      u.lo.value = lo;
+      u.hi.value = Math.max(hi, lo + 0.1);
+      u.bg.value = bg !== null && bg > lo && bg < u.hi.value ? bg : 0;
+      u.knee.value = u.bg.value ? 1 : 0;
+      u.gmin.value = sceneLo !== null && sceneLo < lo ? sceneLo : lo - 10;
+      const h = u.hi.value.toFixed(1);
+      if (u.glory.value && u.knee.value) {
+        ui.rangeinfo.textContent = `Grey ${lo.toFixed(1)} to ${bg.toFixed(1)} °C, colours hotter up to ${h} °C.`;
+      } else if (u.glory.value) {
+        ui.rangeinfo.textContent = `Grey below ${lo.toFixed(1)} °C, colours up to ${h} °C.`;
+      } else if (u.knee.value) {
+        ui.rangeinfo.textContent =
+          `Colours: ${lo.toFixed(1)} to ${bg.toFixed(1)} °C over most of the scale, ` +
+          `hotter up to ${h} °C compressed into the top.`;
+      } else {
+        ui.rangeinfo.textContent = '';
+      }
       needPost = true;
     }
   }
@@ -214,8 +244,9 @@ async function main() {
     return Math.min(Math.max((buf[i] + buf[i + 1] + buf[i + 2]) / 3, 0), 1);
   }
 
-  // as view_splat.py: auto range is the 1%..99.9% of covered pixels (sampled); the peak is the
-  // hottest covered pixel (all of them: a small hot source can fall between samples)
+  // auto range: low is the 1% of covered pixels (sampled), the knee their 99.5% and high the
+  // hottest covered pixel (all of them: a small hot source can fall between samples), so the
+  // heat sources get the top of the palette instead of saturating it
   function autoRange() {
     const buf = readTarget(full, 0, 0, full.width, full.height);
     const temps = [];
@@ -227,17 +258,17 @@ async function main() {
       if (v > vmax) vmax = v;
       if (k % step === 0) temps.push(toC(Math.min(Math.max(v, 0), 1)));
     }
-    if (vmax > -Infinity) {
-      const peak = toC(Math.min(Math.max(vmax, 0), 1));
-      ui.stats.textContent = `peak ${floatTarget ? '' : '≈ '}${peak.toFixed(1)} °C in view`;
-    }
-    if (!temps.length) return; // too few covered pixels for a range
+    if (vmax === -Infinity || !temps.length) return; // nothing covered
+    const peak = toC(Math.min(Math.max(vmax, 0), 1));
+    ui.stats.textContent = `peak ${floatTarget ? '' : '≈ '}${peak.toFixed(1)} °C in view`;
     temps.sort((a, b) => a - b);
     const lo = temps[Math.floor(0.01 * (temps.length - 1))];
-    const p999 = temps[Math.floor(0.999 * (temps.length - 1))];
+    const bg = Math.max(temps[Math.floor(0.995 * (temps.length - 1))], lo + 1);
     ui.lo.value = lo.toFixed(1);
-    ui.hi.value = Math.max(p999, lo + 1).toFixed(1);
-    applyRange();
+    ui.hi.value = Math.max(peak, bg + 1).toFixed(1);
+    sceneLo = lo;
+    autoBg = bg;
+    applyRange(bg);
   }
 
   function setupThermal() {
@@ -283,17 +314,39 @@ async function main() {
           norm: { value: 1 },
           lo: { value: 0 },
           hi: { value: 1 },
+          bg: { value: 0 },
+          knee: { value: 0 },
+          glory: { value: 0 },
+          gmin: { value: 0 },
         },
         vertexShader: `in vec3 position; out vec2 uv;
           void main() { uv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
         fragmentShader: `precision highp float; uniform sampler2D src; uniform sampler2D lut;
-          uniform float t0, k, norm, lo, hi; in vec2 uv; out vec4 colour;
+          uniform float t0, k, norm, lo, hi, bg, knee, glory, gmin; in vec2 uv; out vec4 colour;
           void main() {
             vec4 s = texture(src, uv);
             float v = clamp((s.r + s.g + s.b) / 3.0, 0.0, 1.0);
             float t = t0 + k * (exp(v * norm) - 1.0);
-            float x = clamp((t - lo) / max(hi - lo, 0.1), 0.0, 1.0);
-            colour = vec4(texture(lut, vec2((x * 255.0 + 0.5) / 256.0, 0.5)).rgb * clamp(s.a, 0.0, 1.0), 1.0);
+            float x = knee > 0.5
+              ? (t <= bg ? 0.7 * (t - lo) / max(bg - lo, 0.1)
+                         : 0.7 + 0.3 * log(1.0 + (t - bg) / 8.0) / log(1.0 + max(hi - bg, 0.1) / 8.0))
+              : (t - lo) / max(hi - lo, 0.1);
+            bool grey = false;
+            float g = 0.0;
+            if (glory > 0.5) {
+              if (knee > 0.5) {
+                grey = t <= bg;
+                g = (t - lo) / max(bg - lo, 0.1);
+                x = (x - 0.7) / 0.3;
+              } else {
+                grey = t <= lo;
+                g = (t - gmin) / max(lo - gmin, 0.1);
+              }
+            }
+            x = clamp(x, 0.0, 1.0);
+            vec3 c = grey ? vec3(clamp(g, 0.0, 1.0) * 200.0 / 255.0)
+                          : texture(lut, vec2((x * 255.0 + 0.5) / 256.0, 0.5)).rgb;
+            colour = vec4(c * clamp(s.a, 0.0, 1.0), 1.0);
           }`,
         depthTest: false,
         depthWrite: false,
