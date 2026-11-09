@@ -7,6 +7,7 @@ viser. Open the printed URL; drag to orbit, right-drag to pan, scroll to zoom.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 import threading
@@ -271,17 +272,25 @@ def main():
             valid = alpha[0, ..., 0] > 0.5
             if valid.any():
                 tv = temp[valid]
-                q = torch.quantile(tv[::max(1, tv.numel() // 100000)], torch.tensor([0.01, 0.999], device='cuda'))
-                lo_c, p999, hi_c = float(q[0]), float(q[1]), float(tv.max())
+                q = torch.quantile(tv[::max(1, tv.numel() // 100000)], torch.tensor([0.01, 0.995], device='cuda'))
+                lo_c, bg_c, hi_c = float(q[0]), float(q[1]), float(tv.max())
             else:
-                lo_c, p999, hi_c = st['lo'].value, st['hi'].value, st['hi'].value
+                lo_c, bg_c, hi_c = st['lo'].value, st['hi'].value, st['hi'].value
             if st['auto'].value:
-                lo, hi = lo_c, max(p999, lo_c + 1)  # let hot spots saturate
+                # as the web viewer: 1%..99.5% over the bottom 70% of the palette, hotter up to the
+                # peak log-compressed into the top 30%, so heat sources stand out instead of saturating
+                lo = lo_c
+                bg = max(bg_c, lo + 1)
+                hi = max(hi_c, bg + 1)
+                x = torch.where(temp <= bg, 0.7 * (temp - lo) / (bg - lo),
+                                0.7 + 0.3 * torch.log1p((temp - bg).clamp(min=0) / 8) / math.log1p((hi - bg) / 8))
+                info = 'display %.1f..%.1f C, hotter to %.1f C in the top of the scale' % (lo, bg, hi)
             else:
                 lo, hi = st['lo'].value, max(st['hi'].value, st['lo'].value + 0.1)
-            x = ((temp - lo) / (hi - lo)).clamp(0, 1)
-            rgb = luts[st['cmap'].value][(x * 255).long()] * alpha[0]
-        st['stats'].value = 'peak %.1f C, display %.1f..%.1f C' % (hi_c, lo, hi)
+                x = (temp - lo) / (hi - lo)
+                info = 'display %.1f..%.1f C' % (lo, hi)
+            rgb = luts[st['cmap'].value][(x.clamp(0, 1) * 255).long()] * alpha[0]
+        st['stats'].value = 'peak %.1f C, %s' % (hi_c, info)
         client.scene.set_background_image((rgb.cpu().numpy() * 255).astype(np.uint8), format='jpeg',
                                           jpeg_quality=85)
 
