@@ -58,13 +58,17 @@ def main():
                     help='view-dependent colour degree; higher degrees go wild when seen from angles not flown')
     ap.add_argument('--holdout', type=int, default=25, help='hold out every Nth image (0 = none)')
     ap.add_argument('--radius', type=float, default=200.0, help='drop Gaussians further than this from the model centre (m)')
-    ap.add_argument('--max-vertical', type=float, default=1.0,
+    ap.add_argument('--max-vertical', type=float,
                     help='drop Gaussians whose vertical extent (1 sigma) exceeds this (m, 0 = keep); from above '
-                         'nothing limits it and they show as haze when viewed obliquely')
+                         'nothing limits it and they show as haze when viewed obliquely; default: 1 m or half '
+                         'the max scale, whichever is larger')
     ap.add_argument('--ceiling-cell', type=float, default=5.0, help='height ceiling grid cell (m)')
     ap.add_argument('--ceiling-margin', type=float, default=5.0,
                     help='drop Gaussians this far above the local top of the SfM points (m, 0 = no ceiling)')
     ap.add_argument('--cap', type=int, default=3000000, help='maximum number of Gaussians')
+    ap.add_argument('--max-scale', type=float,
+                    help='prune Gaussians larger than this (m); default: radius/100 or 16 ground pixels at '
+                         'the median camera distance, whichever is larger')
     ap.add_argument('--ssim-weight', type=float, default=0.2)
     ap.add_argument('--video-range', type=lambda v: [float(x) for x in v.split(',')],
                     help='only use frames between these video times, START,END in s')
@@ -132,7 +136,14 @@ def main():
     strategy = DefaultStrategy(refine_stop_iter=args.iterations // 2, reset_every=3000, absgrad=True,
                                grow_grad2d=0.0008, verbose=False)
     strategy.check_sanity(params, optimizers)
-    state = strategy.initialize_state(scene_scale=args.radius / 10)
+    if args.max_scale is None:
+        # from high up a ground pixel is tens of cm and the ground needs Gaussians of several metres
+        ground_px = float(np.median(np.linalg.norm(centres - centre, axis=1))) / K[0, 0]
+        args.max_scale = max(args.radius / 100, 16 * ground_px)
+    if args.max_vertical is None:
+        args.max_vertical = max(1.0, args.max_scale / 2)
+    print('pruning Gaussians larger than %.1f m, taller than %.1f m' % (args.max_scale, args.max_vertical), flush=True)
+    state = strategy.initialize_state(scene_scale=args.max_scale * 10)  # gsplat prunes above 0.1 scene_scale
     c = torch.tensor(centre, dtype=torch.float32, device=device)
     if ceiling is not None:
         ceil_grid = torch.from_numpy(ceiling['grid']).to(device)
