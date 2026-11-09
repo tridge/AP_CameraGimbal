@@ -53,6 +53,13 @@ async function go(page) {
   return tab;
 }
 
+// moves a timeline bracket with the arrow keys (shift: 10 frames)
+async function nudgeHandle(page, which, key, times = 1) {
+  const handle = page.locator(`#splat-handle-${which}`);
+  await handle.focus();
+  for (let i = 0; i < times; i++) await handle.press(key);
+}
+
 const held = (page) =>
   page.evaluate(async () =>
     (await navigator.locks.query()).held
@@ -87,10 +94,37 @@ test('range, target, view and Go hand the request and file to WebSplat', async (
   await expect(page.locator('#splat-range-summary')).toContainText('12 frames');
   await page.waitForFunction(() => window.fireViewer.map.lookPoints?.length === 12);
 
-  await seekNumber(page, 3);
-  await page.locator('#splat-set-start').click();
-  await seekNumber(page, 8);
-  await page.locator('#splat-set-end').click();
+  // the brackets: keyboard, then a drag that only redraws the track once released
+  await nudgeHandle(page, 'start', 'ArrowRight', 3);
+  await nudgeHandle(page, 'end', 'ArrowLeft', 3);
+  await expect(page.locator('#splat-range-summary')).toContainText('6 frames');
+  await expect(page.locator('#splat-start')).toContainText('#4');
+  await expect(page.locator('#splat-end')).toContainText('#9');
+  await page.waitForFunction(() => window.fireViewer.map.lookPoints?.length === 6);
+  await page.evaluate(() => {
+    const map = window.fireViewer.map,
+      original = map.setTrackRange.bind(map);
+    window.trackCalls = 0;
+    map.setTrackRange = (...args) => (window.trackCalls++, original(...args));
+  });
+  const endBox = await page.locator('#splat-handle-end').boundingBox();
+  const bandBox = await page.locator('#splat-band').boundingBox();
+  await page.mouse.move(endBox.x + endBox.width / 2, endBox.y + endBox.height / 2);
+  await page.mouse.down();
+  for (let k = 1; k <= 5; k++)
+    await page.mouse.move(
+      endBox.x + ((bandBox.x + bandBox.width - endBox.x) * k) / 5,
+      endBox.y + 5,
+    );
+  await expect(page.locator('#splat-end')).toContainText('#12');
+  // not redrawn on every move (only once settled: on release or after a pause)
+  expect(await page.evaluate(() => window.trackCalls)).toBeLessThan(2);
+  await page.mouse.up();
+  await page.waitForFunction(() => window.trackCalls >= 1);
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.trackCalls)).toBeLessThan(3);
+  await expect(page.locator('#splat-range-summary')).toContainText('9 frames');
+  await nudgeHandle(page, 'end', 'ArrowLeft', 3);
   await expect(page.locator('#splat-range-summary')).toContainText('6 frames');
   await expect(page.locator('#splat-band')).toBeVisible();
   await page.waitForFunction(() => {
@@ -104,10 +138,16 @@ test('range, target, view and Go hand the request and file to WebSplat', async (
   });
   await page.waitForFunction(() => window.fireViewer.map.lookPoints?.length === 6);
 
-  // the viewer keeps working: stepping frames does not leave splat mode
+  // the viewer keeps working: clicking the bar between the brackets seeks, stepping frames does
+  // not leave splat mode
+  const seekBox = await page.locator('#seek').boundingBox();
+  await page.mouse.click(seekBox.x + seekBox.width * 0.55, seekBox.y + seekBox.height / 2);
+  await page.waitForFunction(() => window.fireViewer.state.number >= 5);
+  await seekNumber(page, 8);
   await page.locator('#next').click();
   await page.waitForFunction(() => window.fireViewer.state.number === 9);
   await expect(page.locator('#splat-panel')).toBeVisible();
+  await expect(page.locator('#splat-range-summary')).toContainText('6 frames');
 
   // pick on the map: the click sets the target and does not seek
   await page.locator('#map-follow').uncheck();
@@ -126,10 +166,21 @@ test('range, target, view and Go hand the request and file to WebSplat', async (
   await page.locator('#splat-alt-up').click({ modifiers: ['Shift'] });
   await page.locator('#splat-alt-down').click();
   await expect(page.locator('#splat-alt')).toHaveValue('1370.0');
-  expect(await page.evaluate(() => window.fireViewer.map.splatEntities.length)).toBe(2);
+  // marker, line from the terrain and the area ring
+  expect(await page.evaluate(() => window.fireViewer.map.splatEntities.length)).toBe(3);
+  await expect(page.locator('#splat-max-height-value')).toContainText('Auto');
+  await page.locator('#splat-max-height').fill('60');
+  await expect(page.locator('#splat-max-height-value')).toHaveText('60 m above the target');
+  const area = await page.evaluate(() => {
+    const c = window.fireViewer.map.splatEntities[2].cylinder,
+      now = window.fireViewer.map.viewer.clock.currentTime;
+    return { length: c.length.getValue(now), radius: c.topRadius.getValue(now) };
+  });
+  expect(area.length).toBe(60);
+  expect(area.radius).toBeGreaterThanOrEqual(100);
 
-  await page.locator('#splat-use-view').click();
-  await expect(page.locator('#splat-view')).toContainText('Bearing');
+  // the view is the 3D map's when Go is pressed
+  await expect(page.locator('#splat-view')).toContainText("3D map's view");
   const camera = await page.evaluate(() => {
     const m = window.fireViewer.map,
       c = m.viewer.camera.positionCartographic;
@@ -142,6 +193,18 @@ test('range, target, view and Go hand the request and file to WebSplat', async (
   });
   await page.locator('#splat-title').fill('orbit test');
   await page.locator('#splat-refine').uncheck();
+  // radius: a typed value is kept; clearing it restores the footprint default
+  const radius = page.locator('#splat-radius');
+  const autoRadius = await radius.inputValue();
+  expect(Number(autoRadius)).toBeGreaterThanOrEqual(100);
+  await radius.fill('');
+  await radius.blur();
+  await expect(radius).toHaveValue(autoRadius);
+  await radius.fill('350');
+  await radius.blur();
+  await page.locator('#splat-alt-up').click();
+  await page.locator('#splat-alt-down').click();
+  await expect(radius).toHaveValue('350');
 
   const tab = await go(page);
   await expect(page.locator('#splat-status')).toContainText('Waiting for WebSplat');
@@ -197,8 +260,22 @@ test('range, target, view and Go hand the request and file to WebSplat', async (
   expect(message.file).toEqual({ name: 'thermal.mkv', size: expected.source.size, isFile: true });
   const r = message.request;
   expect(Object.keys(r).sort()).toEqual(
-    ['format', 'hfov', 'kind', 'range', 'source', 'target', 'title', 'version', 'view'].sort(),
+    [
+      'format',
+      'hfov',
+      'kind',
+      'max_height',
+      'radius',
+      'range',
+      'source',
+      'target',
+      'title',
+      'version',
+      'view',
+    ].sort(),
   );
+  expect(r.radius).toBe(350);
+  expect(r.max_height).toBe(60);
   expect(r.kind).toBe('thermal');
   expect(r.format).toBe(expected.format);
   expect(r.version).toBe(1);
@@ -416,8 +493,7 @@ test('targets need a resolved height and follow range and offset changes', async
 
   // a range without ground points drops the automatic target
   await noTerrain();
-  await seekNumber(page, 2);
-  await page.locator('#splat-set-start').click();
+  await nudgeHandle(page, 'start', 'ArrowRight', 2);
   await expect(page.locator('#splat-warnings')).toContainText('No ground points');
   await expect(page.locator('#splat-alt')).toHaveValue('');
   await expect(page.locator('#splat-go')).toBeDisabled();
@@ -465,7 +541,6 @@ test('an RGB MPEG-TS with KLV pose hands over an rgb request with its width', as
   await expect(page.locator('#splat-refine-label')).toBeHidden();
   await expect(page.locator('#splat-rgb-width option')).toHaveText(['Full (320)']);
   await expect(page.locator('#splat-rgb-estimate')).toContainText('× 320×240');
-  await expect(page.locator('#splat-view')).toContainText('middle training view');
 
   const tab = await go(page);
   await tab.evaluate(() => window.stub.ready());
@@ -484,6 +559,11 @@ test('an RGB MPEG-TS with KLV pose hands over an rgb request with its width', as
   expect(r.target.alt_amsl).toBe(500);
   expect(r.range).toEqual(expected);
   expect(r.title).toBe('misb');
+  // the default radius: the ground footprint at the recording's distance and HFOV
+  const autoRadius = Number(await page.locator('#splat-radius').inputValue());
+  expect(autoRadius).toBeGreaterThanOrEqual(100);
+  expect(r.radius).toBe(autoRadius);
+  expect(r.max_height).toBeUndefined();
   await tab.evaluate(() => window.stub.accept());
   await expect(page.locator('#splat-status')).toContainText('accepted');
 
@@ -502,4 +582,42 @@ test('an RGB MPEG-TS with KLV pose hands over an rgb request with its width', as
   await page.locator('#splat-rgb-width').selectOption('1920');
   await expect(page.locator('#splat-warnings')).toContainText('may exceed GPU memory');
   await expect(page.locator('#splat-rgb-estimate')).toContainText('1920×1080');
+});
+
+test('bracket keys do not seek, Go waits for the new automatic target, high views are dropped', async ({
+  page,
+  context,
+}) => {
+  await config(context);
+  await start(page);
+  await openThermal(page);
+  await openPanel(page);
+  await page.waitForFunction(() => window.fireViewer.map.viewer.scene.mode === 3);
+  await expect(page.locator('#splat-go')).toBeEnabled();
+  await seekNumber(page, 5);
+  const before = await page.evaluate(() => window.fireViewer.state.number);
+  // a key on a bracket moves the range only, and the old automatic target is dropped at once
+  await page.locator('#splat-handle-start').focus();
+  await page.locator('#splat-handle-start').press('ArrowRight');
+  await expect(page.locator('#splat-go')).toBeDisabled();
+  await expect(page.locator('#splat-alt')).toHaveValue('');
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.fireViewer.state.number)).toBe(before);
+  await expect(page.locator('#splat-go')).toBeEnabled();
+  await expect(page.locator('#splat-alt')).toHaveValue('1360.0');
+  await expect(page.locator('#splat-range-summary')).toContainText('11 frames');
+
+  // a view from above 9000 m AMSL is not sent; WebSplat opens its default view
+  await page.locator('#map-follow').uncheck();
+  await page.evaluate(() => {
+    const cam = window.fireViewer.map.viewer.camera;
+    cam.setView({ destination: cam.position.constructor.fromDegrees(148.838, -35.322, 20000) });
+  });
+  const tab = await go(page);
+  await expect(page.locator('#splat-status')).toContainText('cannot be a start view');
+  await tab.evaluate(() => window.stub.ready());
+  await tab.waitForFunction(() => window.stub.received.length === 1);
+  const [message] = await tab.evaluate(() => window.stub.received);
+  expect(message.request.view).toBeUndefined();
+  await expect(page.locator('#splat-status')).toContainText('cannot be a start view');
 });

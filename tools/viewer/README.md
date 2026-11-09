@@ -223,19 +223,27 @@ camera pose and, for RGB, a horizontal FOV (recorded or the FOV override). The b
 indexed; its tooltip says why when it is not. The map switches to 3D and a
 panel opens above the map options:
 
-- **Range**: **Set start here** / **Set end here** use the current frame; the
-  seek bar shows the range. Only the in-range track is drawn (**Show whole
-  flight** dims the rest) and the dots show where the camera looked.
+- **Range**: drag the `[` and `]` brackets on the seek bar (or focus one and
+  use the arrow keys, shift for 10 frames); clicking the bar still seeks. The
+  panel shows the start and end times and frame numbers. Only the in-range
+  track is drawn (**Show whole flight** dims the rest) and the dots show where
+  the camera looked; both follow a bracket once it stops moving.
 - **Target**: defaults to the median of those dots. **Pick on map** sets it
   from the next map click; the height (m AMSL) can be edited or nudged by
   1 m (shift: 10 m). A picked target needs a terrain height or an entered
   one. For thermal, **Refine to the hot spot** lets WebSplat move it to the
   hottest point nearby.
+- **Area**: **Radius** (m) around the target, by default the ground width
+  the camera sees (2 × the median camera-to-target distance × tan(HFOV / 2),
+  rounded to 10 m, 100-2000 m); clear the field to restore it. **Max height**
+  (5-300 m above the target, or Auto: WebSplat's own ceiling just above the
+  tree tops) drops everything higher. The map shows the area as a ring, or a
+  translucent cylinder up to the max height.
 - **Width** (RGB): the processing width, Full or 1920 / 1280 (default) / 960 /
   640, never above the source. The panel shows the frames used (3 fps) and
   the pixel workload; widths above 1280 may exceed GPU memory on small GPUs.
-- **View**: **Use this view** captures the current 3D camera as the splat's
-  start view; without one WebSplat picks its own.
+- **View**: the splat opens from the 3D map's view at the moment Go is
+  pressed (in 2D, WebSplat picks its own).
 - **Go** opens WebSplat in a new tab and passes it the request and the open
   file, without a second download. Allow pop-ups for the site. Keep this tab
   open until the panel reports that WebSplat accepted the job.

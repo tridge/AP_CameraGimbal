@@ -10,6 +10,7 @@ import {
   rgbWorkload,
   sourceKind,
   deepFreeze,
+  footprintRadius,
   handoverMessage,
   handoverUrl,
   lookPoints,
@@ -152,6 +153,69 @@ test('validation is strict and names the field', () => {
     'request.view.camera.alt_amsl',
   );
   bad((r) => (r.title = 'x'.repeat(121)), 'request.title');
+  bad((r) => (r.radius = 5), 'request.radius');
+  bad((r) => (r.radius = 10001), 'request.radius');
+  bad((r) => (r.radius = '700'), 'request.radius');
+  assert.equal(validateRequest({ ...good, radius: 700 }).radius, 700);
+  bad((r) => (r.max_height = 0.5), 'request.max_height');
+  bad((r) => (r.max_height = null), 'request.max_height');
+  assert.equal(validateRequest({ ...good, max_height: 60 }).max_height, 60);
+  assert.equal('max_height' in good, false);
+  assert.equal(
+    buildRequest({ source, frames, range: { start: 0, end: 11 }, target, maxHeight: 60 })
+      .max_height,
+    60,
+  );
+  assert.equal(
+    'max_height' in
+      buildRequest({ source, frames, range: { start: 0, end: 11 }, target, maxHeight: null }),
+    false,
+  );
+  assert.equal('radius' in good, false);
+});
+
+test('radius: in the request when set, default from the ground footprint', () => {
+  const request = buildRequest({
+    source,
+    frames,
+    range: { start: 0, end: 11 },
+    target,
+    radius: 704.6,
+  });
+  assert.equal(request.radius, 705);
+  // camera 800 m above the target (straight down), HFOV 60: 2 * 800 * tan(30) = 923.8 -> 920
+  const camera = { ...target, alt_amsl: target.alt_amsl + 800 };
+  const record = (alt, hfov = 60) => ({
+    ...pose(),
+    position: {
+      lat_e7: Math.round(camera.lat * 1e7),
+      lon_e7: Math.round(camera.lon * 1e7),
+      alt_amsl_m: alt,
+      age_ms: 0,
+    },
+    hfov_deg: hfov,
+  });
+  const at = (records) =>
+    footprintRadius(frames, { start: 0, end: 11 }, (f) => records[f.id], target);
+  assert.equal(at(frames.map(() => record(camera.alt_amsl))), 920);
+  // medians of distance and FOV over the range; frames without a pose or FOV are skipped
+  const mixed = frames.map((f, i) =>
+    i < 4 ? record(target.alt_amsl + 400, 40) : i < 9 ? record(camera.alt_amsl) : { hfov_deg: 60 },
+  );
+  assert.equal(at(mixed), 920);
+  // scales with height and FOV, clamped to [100, 2000]
+  assert.equal(at(frames.map(() => record(target.alt_amsl + 400))), 460);
+  assert.equal(at(frames.map(() => record(target.alt_amsl + 50, 30))), 100);
+  assert.equal(at(frames.map(() => record(target.alt_amsl + 3000, 90))), 2000);
+  assert.equal(at(frames.map(() => record(camera.alt_amsl, null))), null);
+  assert.equal(
+    footprintRadius(frames, null, () => record(800), target),
+    null,
+  );
+  assert.equal(
+    footprintRadius(frames, { start: 0, end: 11 }, () => record(800), null),
+    null,
+  );
 });
 
 test('optical axis ground points, sampling and the median target', () => {
