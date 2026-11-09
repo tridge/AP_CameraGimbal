@@ -56,3 +56,34 @@ window.openResult = async (name, meta = null) => {
 };
 
 window.resultMeta = () => JSON.parse(new TextDecoder().decode(window.result.files['meta.json']));
+
+// Spark's decode of a splat file, as PackedSplats and as ExtSplats (the thermal viewer's): the
+// splat count and a SHA-256 of every array Spark holds
+window.sparkDecode = async (url) => {
+  const { ExtSplats, PackedSplats } = await import('@sparkjsdev/spark');
+  const bytes = new Uint8Array(await (await get(url)).arrayBuffer());
+  const out = {};
+  for (const [name, C] of [
+    ['packed', PackedSplats],
+    ['ext', ExtSplats],
+  ]) {
+    const s = new C({
+      fileBytes: bytes.slice(),
+      fileName: url.split('/').pop(),
+    });
+    await s.initialized;
+    const arrays = [s.packedArray, ...(s.extArrays ?? []), ...Object.values(s.extra ?? {})].filter(
+      (a) => ArrayBuffer.isView(a),
+    );
+    const hashes = [];
+    for (const a of arrays) {
+      const v = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', v));
+      hashes.push(
+        `${v.length}:${Array.from(d.subarray(0, 8), (x) => x.toString(16).padStart(2, '0')).join('')}`,
+      );
+    }
+    out[name] = { numSplats: s.numSplats, hashes };
+  }
+  return out;
+};

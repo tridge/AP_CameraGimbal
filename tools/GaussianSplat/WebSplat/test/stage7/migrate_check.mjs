@@ -2,15 +2,18 @@
 // removing the marker and setting the SPZ antialiased flag, as exports before the marker were):
 // a site (run13 and the 7a tiny model), a samples-style NAME.json + NAME.spz pair and a
 // standalone PLY. Checks that only the marker changes, that the migrated SPZ equals a fresh
-// export's, that a second run changes nothing, and lists what a deployment would change.
+// export's (after viewer/embed-meta.mjs adds the metadata legacy SPZs lack), that a second run
+// changes nothing, and lists what a deployment would change.
 //   node migrate_check.mjs SITE_RUN13 SITE_TINY OUT      (exit 1 on failure)
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { setAntialiased } from '../../../viewer/spz-flags.mjs';
+import { spzMeta, withSpzMeta } from '../../../viewer/spz-meta.mjs';
 
 const tool = fileURLToPath(new URL('../../../viewer/migrate-classic.mjs', import.meta.url));
+const embedTool = fileURLToPath(new URL('../../../viewer/embed-meta.mjs', import.meta.url));
 const [run13, tiny, out] = process.argv.slice(2);
 if (!out) throw new Error('usage: node migrate_check.mjs SITE_RUN13 SITE_TINY OUT');
 let failures = 0;
@@ -46,7 +49,9 @@ for (const name of ['run13', 'tiny']) {
   const d = `${site}/2026-11-08/legacy/${name}`;
   writeFileSync(`${d}/meta.json`, unmarkJson(readFileSync(`${fresh}/${name}/meta.json`, 'utf8')));
   writeFileSync(`${d}/splat.ply`, unmarkPly(readFileSync(`${fresh}/${name}/splat.ply`)));
-  writeFileSync(`${d}/splat.spz`, setAntialiased(readFileSync(`${fresh}/${name}/splat.spz`), true));
+  // legacy SPZs carry no metadata
+  const spz = withSpzMeta(readFileSync(`${fresh}/${name}/splat.spz`), null);
+  writeFileSync(`${d}/splat.spz`, setAntialiased(spz, true));
 }
 mkdirSync(`${out}/samples`, { recursive: true });
 cpSync(`${site}/2026-11-08/legacy/tiny/meta.json`, `${out}/samples/tiny.json`);
@@ -79,6 +84,7 @@ const files = [
   ['site/2026-11-08/legacy/run13', 'run13'],
   ['site/2026-11-08/legacy/tiny', 'tiny'],
 ];
+const freshSpzs = {};
 for (const [rel, name] of files) {
   const a = JSON.parse(readFileSync(`${legacy}/${rel}/meta.json`, 'utf8'));
   const b = JSON.parse(readFileSync(`${out}/${rel}/meta.json`, 'utf8'));
@@ -118,9 +124,31 @@ for (const [rel, name] of files) {
     `${name}: SPZ decodes to the same bytes but the antialiased flag`,
     sa.equals(sb) && !(sb[14] & 1),
   );
+  // a fresh export embeds its PLY's apcg_splat JSON (exports made before that: added here)
+  const fp = readFileSync(`${fresh}/${name}/splat.ply`);
+  const fpText = fp
+    .subarray(0, fp.indexOf('\nend_header'))
+    .toString('latin1')
+    .match(/comment apcg_splat (.*)/)[1];
+  const freshSpz = Buffer.from(withSpzMeta(readFileSync(`${fresh}/${name}/splat.spz`), fpText));
   check(
-    `${name}: migrated SPZ = a fresh export's`,
-    readFileSync(`${out}/${rel}/splat.spz`).equals(readFileSync(`${fresh}/${name}/splat.spz`)),
+    `${name}: migrated SPZ = a fresh export's but the embedded metadata`,
+    Buffer.from(withSpzMeta(readFileSync(`${out}/${rel}/splat.spz`), fpText)).equals(freshSpz) &&
+      spzMeta(readFileSync(`${out}/${rel}/splat.spz`)) === null,
+  );
+  freshSpzs[name] = freshSpz;
+}
+// an SPZ that has metadata keeps it through the flag rewrite, its rasterize_mode updated
+{
+  const r = `${out}/with-meta`;
+  cpSync(`${legacy}/site/2026-11-08/legacy/tiny`, r, { recursive: true });
+  writeFileSync(`${r}/splat.spz`, setAntialiased(freshSpzs.tiny, true));
+  const before = spzMeta(readFileSync(`${r}/splat.spz`));
+  execFileSync('node', [tool, '--write', `${r}/meta.json`], { encoding: 'utf8' });
+  check(
+    'SPZ with metadata: kept through migration, rasterize_mode antialiased -> classic, = fresh',
+    before.rasterize_mode === 'antialiased' &&
+      readFileSync(`${r}/splat.spz`).equals(freshSpzs.tiny),
   );
 }
 const again = runTool('--write');
@@ -284,5 +312,26 @@ check('a second run changes nothing', /changed 0 file\(s\)/.test(again));
     'consistently antialiased run: skipped, nothing changed',
     /skip.*already antialiased/.test(text) && snap().every((b, i) => b.equals(before[i])),
   );
+}
+// embed-meta.mjs then adds the metadata: the fresh export's SPZ
+{
+  const text = execFileSync('node', [embedTool, '--write', site], { encoding: 'utf8' });
+  check(
+    'embed-meta after migration: 2 SPZ',
+    /changed 2 SPZ/.test(text),
+    text.trim().split('\n').at(-1),
+  );
+  // the migrated PLY's header text (the marker first) in a fresh export's SPZ
+  for (const [rel, name] of files) {
+    const p = readFileSync(`${out}/${rel}/splat.ply`);
+    const t = p
+      .subarray(0, p.indexOf('\nend_header'))
+      .toString('latin1')
+      .match(/comment apcg_splat (.*)/)[1];
+    check(
+      `${name}: migrated, metadata embedded SPZ = a fresh export's with the migrated PLY's JSON`,
+      readFileSync(`${out}/${rel}/splat.spz`).equals(Buffer.from(withSpzMeta(freshSpzs[name], t))),
+    );
+  }
 }
 process.exit(failures ? 1 : 0);

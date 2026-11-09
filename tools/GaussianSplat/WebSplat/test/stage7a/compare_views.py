@@ -86,7 +86,7 @@ def main():
 
     report = {}
     cases = {'file_start', 'spz_start', 'site_start', 'embed_start', 'embed_back', 'embed_legacy_back',
-             'embed_spz_start'}
+             'embed_spz_start', 'spz_embedded_start', 'file_spz_start'}
     check('every viewer case present', set(res['cases']) == cases, 'got %s' % sorted(res['cases']))
     for name, case in res['cases'].items():
         cam = case['camera']
@@ -139,6 +139,9 @@ def main():
     check('site page = ?url SPZ page', np.abs(a - b).max() <= 1, 'max %.0f' % np.abs(a - b).max())
     a, b = shot('spz_start'), shot('embed_spz_start')
     check('embedded SPZ = ?url SPZ page', np.abs(a - b).max() <= 1, 'max %.0f' % np.abs(a - b).max())
+    for name in ('spz_embedded_start', 'file_spz_start'):  # metadata from the SPZ's gzip header
+        b = shot(name)
+        check('%s = ?url SPZ page with meta.json' % name, np.abs(a - b).max() <= 1, 'max %.0f' % np.abs(a - b).max())
     (views / 'compare.json').write_text(json.dumps(report, indent=1))
     print('view checks: %s' % ('all pass' if not failures else '%d FAILED' % failures))
     sys.exit(1 if failures else 0)

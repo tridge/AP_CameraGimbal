@@ -1,17 +1,32 @@
 // SPZ: encoded with Spark's transcodeSpz from the exported PLY, as export_web.py does (ply2spz.mjs),
 // so browser and native SPZ files match. The decoder here (Niantic SPZ v2/v3 layout) measures the
-// quantisation error of an exported file against the splat it came from.
-import { emptySplat, shCoeffs } from './ply.js';
+// quantisation error of an exported file against the splat it came from. The PLY's apcg_splat
+// JSON goes into the gzip header (the viewer's spz-meta.mjs), as ply2spz.mjs does.
+import { emptySplat, parsePlyHeader, shCoeffs } from './ply.js';
+import {
+  gzipHeader,
+  metaForFlags,
+  spzMetaText,
+  withSpzMeta,
+} from '../../../../../viewer/spz-meta.mjs';
 
 export const SPZ_MAX_SH = 3;
+
+// the JSON of a PLY's `comment apcg_splat` line, or null
+export function plyMetaText(plyBytes) {
+  const c = parsePlyHeader(plyBytes).comments.find((x) => x.startsWith('apcg_splat '));
+  return c ? c.slice('apcg_splat '.length) : null;
+}
 
 // transcodeSpz: Spark's function (the caller imports @sparkjsdev/spark). Spark always sets the
 // antialiased flag; antialiased = false (classic-trained splats) clears it.
 export async function encodeSpz(plyBytes, transcodeSpz, { antialiased = true } = {}) {
-  const { fileBytes } = await transcodeSpz({
+  let { fileBytes } = await transcodeSpz({
     inputs: [{ fileBytes: plyBytes, pathOrUrl: 'splat.ply' }],
     maxSh: SPZ_MAX_SH,
   });
+  const meta = plyMetaText(plyBytes);
+  if (meta != null) fileBytes = withSpzMeta(fileBytes, meta);
   return antialiased ? fileBytes : setSpzFlags(fileBytes, (f) => f & ~1);
 }
 
@@ -55,11 +70,12 @@ function crc32(b, c = 0) {
   return ~c >>> 0;
 }
 
-// gzip with a fixed header (no name, mtime 0, OS unknown) around zlib's raw deflate, so Node
-// (ply2spz.mjs does the same with zlib) and browsers give the same bytes. chunks: an (async)
-// iterable of Uint8Arrays; yields the gzip file in pieces.
-export async function* gzipFixedStream(chunks) {
-  yield new Uint8Array([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]);
+// gzip with a fixed header (no name, mtime 0, OS unknown; meta: embedded metadata, as
+// spz-meta.mjs gzipHeader) around zlib's raw deflate, so Node (ply2spz.mjs does the same with
+// zlib) and browsers give the same bytes. chunks: an (async) iterable of Uint8Arrays; yields the
+// gzip file in pieces.
+export async function* gzipFixedStream(chunks, meta = null) {
+  yield gzipHeader(meta);
   let crc = 0;
   let size = 0;
   const cs = new CompressionStream('deflate-raw');
@@ -85,7 +101,7 @@ export async function* gzipFixedStream(chunks) {
   yield t;
 }
 
-export const gzipFixed = (bytes) => collect(gzipFixedStream([bytes]));
+export const gzipFixed = (bytes, meta = null) => collect(gzipFixedStream([bytes], meta));
 
 // the decompressed SPZ in pieces, with the header's flags byte changed by fn
 async function* spzFlagged(spz, fn) {
@@ -100,8 +116,31 @@ async function* spzFlagged(spz, fn) {
   }
 }
 
-// an SPZ with its flags byte rewritten, as gzip pieces (streaming) or bytes
-export const setSpzFlagsStream = (spz, fn) => gzipFixedStream(spzFlagged(spz, fn));
+// an SPZ with its flags byte rewritten, as gzip pieces (streaming) or bytes; embedded metadata is
+// kept with its rasterize_mode set to match, as spz-flags.mjs setAntialiased does natively
+export async function* setSpzFlagsStream(spz, fn) {
+  // the decompressed pieces up to the flags byte, held back until the header is known
+  const it = spzFlagged(spz, fn)[Symbol.asyncIterator]();
+  const head = [];
+  let n = 0;
+  let flags = null;
+  while (flags === null) {
+    const { done, value } = await it.next();
+    if (done) throw new Error('not an SPZ file');
+    if (n + value.length > 14) flags = value[14 - n];
+    head.push(value);
+    n += value.length;
+  }
+  const rest = async function* () {
+    yield* head;
+    for (;;) {
+      const { done, value } = await it.next();
+      if (done) return;
+      yield value;
+    }
+  };
+  yield* gzipFixedStream(rest(), metaForFlags(spzMetaText(spz), flags));
+}
 export const setSpzFlags = (spz, fn) => collect(setSpzFlagsStream(spz, fn));
 
 const SQRT1_2 = Math.SQRT1_2;
