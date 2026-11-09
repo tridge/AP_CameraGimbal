@@ -43,6 +43,18 @@ workers, CSS and runtime configuration; no public CDN is needed. Browser
 runtime does not require Node or Python. Do not commit generated assets,
 `node_modules`, recordings or local test results.
 
+## Open from a URL
+
+`?url=` opens a video and `?log=` a flight log (`.bin` / `.tlog`) from an
+http(s) URL as if chosen locally, for example
+`https://plot.ardupilot.org/video/?url=https://example.org/flight2_thermal.mkv`.
+The download streams into the browser's origin-private file system (in memory
+if that is unavailable), shows progress and can be cancelled. Copies no open
+page is using are deleted when the next download starts. The server must send
+`Access-Control-Allow-Origin`, and the page's Content-Security-Policy
+`connect-src` (in `index.html`) must allow the file's origin. An https page
+cannot download from http.
+
 ## Supported recordings
 
 | Container                                         | Video        | Embedded telemetry                                               |

@@ -214,6 +214,37 @@ small {
 .empty-state small {
   display: block;
 }
+.downloads {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: grid;
+  gap: 8px;
+  z-index: 2;
+}
+.download {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.download strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download progress {
+  width: 100%;
+}
+.download button {
+  grid-row: 1 / span 3;
+  grid-column: 2;
+}
 .empty-symbol {
   font-size: 50px;
   color: #627e91;
@@ -573,6 +604,7 @@ progress {
   gap: 20px;
 }
 #error-text {
+  white-space: pre-line;
   flex: 1;
 }
 #dismiss-error {
