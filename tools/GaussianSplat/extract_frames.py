@@ -19,6 +19,18 @@ from splat_common import (LocalFrame, camera_rotation, decode_frames, fatal, int
                           raw_to_celsius, read_mkv_metadata, terrain_height, triangulate_rays)
 
 
+def srtm_reference(positions, home_alt, ground_tol=3.0):
+    """Takeoff altitude in the SRTM datum. The terrain under a frame on the ground at takeoff height
+    cancels SRTM's offset from GPS altitude; a recording that starts airborne has no such frame, so
+    the GPS takeoff altitude stands in (the terrain under an airborne frame is not takeoff height)."""
+    p = min(positions, key=lambda p: abs(p['alt_relative_m']))
+    if abs(p['alt_relative_m']) <= ground_tol:
+        return terrain_height(p['lat_e7'] / 1e7, p['lon_e7'] / 1e7)
+    print('the recording starts %.0f m above takeoff: terrain heights are taken from the GPS takeoff '
+          'altitude, so carry any SRTM offset from GPS altitude' % p['alt_relative_m'])
+    return home_alt
+
+
 def rotate(image, degrees):
     k = (degrees // 90) % 4
     return np.ascontiguousarray(np.rot90(image, k)) if k else image
@@ -123,23 +135,22 @@ def main():
     K = intrinsics(width, height, hfov)
 
     # takeoff altitude: median of AMSL minus relative altitude
-    homes = [m['telemetry']['position']['alt_amsl_m'] - m['telemetry']['position']['alt_relative_m']
-             for m in metas if m.get('telemetry') and m['telemetry'].get('position')
-             and m['telemetry']['position'].get('alt_relative_m') is not None]
-    if not homes:
+    positions = [m['telemetry']['position'] for m in metas if m.get('telemetry') and m['telemetry'].get('position')
+                 and m['telemetry']['position'].get('alt_relative_m') is not None]
+    if not positions:
         fatal('no frames carry position telemetry')
-    home_alt = float(np.median(homes))
+    home_alt = float(np.median([p['alt_amsl_m'] - p['alt_relative_m'] for p in positions]))
     local = LocalFrame(args.lat, args.lon, home_alt)
-    home_pos = min((m['telemetry']['position'] for m in metas if m.get('telemetry') and m['telemetry'].get('position')
-                    and m['telemetry']['position'].get('alt_relative_m') is not None),
-                   key=lambda p: abs(p['alt_relative_m']))
+    home_srtm = []  # looked up on first use
 
     def ground_up(lat, lon):
-        """Terrain height above takeoff; SRTM at both ends cancels its offset from GPS altitude."""
+        """Terrain height above takeoff."""
         if args.no_terrain:
             return 0.0
-        t, h = terrain_height(lat, lon), terrain_height(home_pos['lat_e7'] / 1e7, home_pos['lon_e7'] / 1e7)
-        return 0.0 if t is None or h is None else t - h
+        if not home_srtm:
+            home_srtm.append(srtm_reference(positions, home_alt))
+        t = None if home_srtm[0] is None else terrain_height(lat, lon)
+        return 0.0 if t is None else t - home_srtm[0]
 
     target = np.array([0.0, 0.0, ground_up(args.lat, args.lon) if args.target_alt is None else args.target_alt])
     end = len(metas) - 1 if args.end is None else min(args.end, len(metas) - 1)
