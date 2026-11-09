@@ -68,11 +68,31 @@
         This tab is hidden: the browser may slow down or stop the work until it is visible again.
       </div>
     </section>
+    <section id="trained" class="panel" hidden>
+      <div>
+        Training is not in the app yet. Choose a trained splat to export (a Brush PLY, or
+        params.bin):
+        <input id="trained-file" type="file" accept=".ply,.bin" />
+      </div>
+    </section>
     <section id="stages-panel" hidden>
       <table>
         <tbody id="stages"></tbody>
       </table>
       <p id="overall"></p>
+    </section>
+    <section id="result" class="panel" hidden>
+      <h2>Result</h2>
+      <div id="result-summary"></div>
+      <div id="result-downloads"></div>
+      <label
+        >View
+        <select id="result-view">
+          <option value="ply">PLY (exact)</option>
+          <option value="spz">SPZ (compressed)</option>
+        </select></label
+      >
+      <div id="result-viewer"></div>
     </section>
     <section><div id="log"></div></section>
     <script type="module" src="./src/main.js"></script>

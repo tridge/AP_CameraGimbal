@@ -1,4 +1,5 @@
 // Minimal static server for app/dist (plus /__blank for clearing storage on the origin).
+// extra: {'/url/path': 'file path'}, files served besides root (e.g. inputs for stand-in stages).
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize } from 'node:path';
@@ -14,7 +15,7 @@ const TYPES = {
   '.svg': 'image/svg+xml',
 };
 
-export function serve(root, port, host = '127.0.0.1') {
+export function serve(root, port, host = '127.0.0.1', extra = {}) {
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/__blank') {
@@ -23,9 +24,13 @@ export function serve(root, port, host = '127.0.0.1') {
     }
     let p = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
     if (p.endsWith('/')) p += 'index.html';
-    const file = join(root, p);
+    const file = extra[url.pathname] ?? join(root, p);
+    let size;
     try {
-      if (!file.startsWith(root) || !statSync(file).isFile()) throw new Error();
+      if (!(extra[url.pathname] || file.startsWith(root))) throw new Error();
+      const st = statSync(file);
+      if (!st.isFile()) throw new Error();
+      size = st.size;
     } catch {
       res.writeHead(404);
       return res.end('not found');
@@ -33,6 +38,7 @@ export function serve(root, port, host = '127.0.0.1') {
     res.writeHead(200, {
       'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
       'cache-control': 'no-store',
+      'content-length': size,
     });
     createReadStream(file).pipe(res);
   });

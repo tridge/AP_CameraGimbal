@@ -13,8 +13,12 @@ import { decodeSpz, encodeSpz, spzErrors } from './spz.js';
 export function exportInputs(dataset, frames) {
   const images = dataset.images;
   const target = dataset.hotspot?.enu ?? frames.target_enu;
+  const frameMax = frames.frames
+    ? Object.fromEntries(frames.frames.map((f) => [f.name, f.maximum_c]))
+    : null;
   return {
     target,
+    frameMax,
     origin: frames.origin,
     scale: dataset.scale,
     hotspot: dataset.hotspot ?? null,

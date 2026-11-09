@@ -104,3 +104,30 @@ button {
 #proposal-form input[type='number'] {
   width: 9em;
 }
+#result-downloads a.button {
+  display: inline-block;
+  margin: 0.4em 0.6em 0.4em 0;
+  padding: 0.3em 0.9em;
+  border: 1px solid #888;
+  border-radius: 4px;
+  text-decoration: none;
+}
+#result-viewer iframe {
+  width: 100%;
+  height: 70vh;
+  border: 0;
+  margin-top: 0.5em;
+  background: #000;
+}
+table.timings td,
+table.timings th {
+  padding: 0 1.2em 0 0;
+  text-align: left;
+}
+.note {
+  color: #666;
+}
+#result-downloads a.secondary {
+  border-style: dashed;
+  color: #555;
+}
