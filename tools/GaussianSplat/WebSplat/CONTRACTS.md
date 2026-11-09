@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.9 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.10 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -451,8 +451,9 @@ ENU about the target, up from the takeoff altitude).
 - **3-5**: unchanged formats on the grey images; one SIMPLE_RADIAL camera seeded from `K` at the
   processing width (`config.map.camera` `"RADIAL"`: `[f, cx, cy, k1, k2]`, as `sfm.py
   --camera-model RADIAL`; a legacy `cameraModel` key is ignored, as it always was, so stage keys
-  stay truthful; map checkpoints record `camera` and are not resumed under another model). RGB jobs set `config.features = {maxNumFeatures: 4096}` (half of `sfm.py`'s
-  8192) for the same memory reason. Mapping that runs out of memory fails with a message naming
+  stay truthful; map checkpoints record `camera` and are not resumed under another model). RGB jobs set `config.features = {maxNumFeatures: 8192}` and `config.map.camera = "RADIAL"`
+  (the native RGB recipe) when first opened; jobs made earlier keep 4096 and SIMPLE_RADIAL.
+  Mapping thins matches to stay within its heap. Mapping that runs out of memory fails with a message naming
   the images and matches.
 - **5b (`websplat.dataset` v1 with `kind: "rgb"`)**: `train_rgb.py`'s setup: images undistorted to
   the pinhole `K` (initUndistortRectifyMap with `[k1, k2, 0, 0]` + remap INTER_LINEAR, constant
@@ -579,7 +580,7 @@ and `hfov` from the request or proposal, `start`/`end` = the resolved range, `st
 project up to a quarter frame outside the image, as telemetry poses can be tens of metres off;
 measured 34 m on the orbit); an rgb request's: `lat`, `lon`, `target_alt`, `hfov`, `width`,
 `start`/`end`, `budget` 500), `prepare` (a request's `radius` and `max_height`), `features`
-(`maxNumFeatures`; RGB jobs 4096), `map` (`camera`), `export` (`title`, `description`, `view` = `request.view`,
+(`maxNumFeatures`; RGB jobs 8192), `map` (`camera`; RGB jobs RADIAL), `export` (`title`, `description`, `view` = `request.view`,
 `target` = `"picked"` when `refine` is false), `request` (a request job's identity plus
 `source{name,size}`; in no stage's `configKeys`: display and reopen checks only), `standin`, and
 run-time knobs (`speed`, `ckptMs`, `selectMode`, `rgbDecoder`: `auto` | `webcodecs` | `software`).
@@ -669,6 +670,8 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
 
 ## Change log
 
+- v1.10 (2026-11-10): RGB jobs default to 8192 SIFT features and the RADIAL camera (set when a
+  job is first opened; earlier jobs keep 4096 and SIMPLE_RADIAL).
 - v1.9 (2026-11-10): request `radius` and `max_height` (optional, in the identity when given;
   `config.prepare.radius` / `max_height`); RGB dataset bounds `max_vertical` and
   `vertical_prune_from` (train_rgb.py's too-tall pruning to the end, Brush fork patch 0017; RGB
