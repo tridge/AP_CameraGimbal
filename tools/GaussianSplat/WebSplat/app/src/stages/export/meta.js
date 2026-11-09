@@ -110,6 +110,31 @@ export function trainInfo({ target, scale, origin, rasterizeMode = RASTERIZE_MOD
   };
 }
 
+// export_web.py info for an RGB splat (train_rgb.py): colours as trained, no temperature scale
+export function rgbWebInfo({
+  count,
+  shDegree,
+  title,
+  description = '',
+  camera,
+  target,
+  origin,
+  rasterizeMode = RASTERIZE_MODE,
+}) {
+  return {
+    kind: 'rgb',
+    gaussians: count,
+    sh_degree: shDegree,
+    title,
+    description,
+    camera,
+    up: [0, 0, 1],
+    target,
+    origin: origin ?? null,
+    rasterize_mode: rasterizeMode,
+  };
+}
+
 // export_web.py info (PLY header and, with downloads, meta.json), thermal
 export function webInfo({
   count,

@@ -52,6 +52,38 @@ function chunk(type, data) {
   return out;
 }
 
+// 8-bit RGB PNG of packed RGB8 [H, W, 3] (Brush's stock image path)
+export async function encodePngRgb8(rgb, width, height, deflate) {
+  const raw = new Uint8Array(height * (1 + 3 * width));
+  for (let y = 0; y < height; y++) {
+    const o = y * (1 + 3 * width);
+    raw[o] = 0;
+    raw.set(rgb.subarray(y * 3 * width, (y + 1) * 3 * width), o + 1);
+  }
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, width);
+  dv.setUint32(4, height);
+  ihdr.set([8, 2, 0, 0, 0], 8); // bit depth 8, truecolour
+  return pngFile(ihdr, await deflate(raw));
+}
+
+function pngFile(ihdr, idat) {
+  const parts = [
+    new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', idat),
+    chunk('IEND', new Uint8Array(0)),
+  ];
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
 // 16-bit grayscale PNG; deflate(bytes) -> zlib stream (CompressionStream('deflate') or zlib)
 export async function encodePng16(u16, width, height, deflate) {
   const raw = new Uint8Array(height * (1 + 2 * width));
@@ -153,10 +185,12 @@ function rng(seed) {
   };
 }
 
-// init.ply (binary little-endian 3DGS PLY) from points.f32 [count, 4] (x, y, z, v)
-export function initPly(points, count, shDegree, seed = 0) {
+// init.ply (binary little-endian 3DGS PLY) from points.f32 [count, 4] (x, y, z, v) or, for RGB,
+// [count, 6] (x, y, z, r, g, b)
+export function initPly(points, count, shDegree, seed = 0, channels = 1) {
+  const stride = 3 + channels;
   const xyz = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) xyz.set(points.subarray(i * 4, i * 4 + 3), i * 3);
+  for (let i = 0; i < count; i++) xyz.set(points.subarray(i * stride, i * stride + 3), i * 3);
   const scales = knnScales(xyz, count);
   const rand = rng(seed);
   const nRest = 3 * ((shDegree + 1) ** 2 - 1);
@@ -189,10 +223,8 @@ export function initPly(points, count, shDegree, seed = 0) {
     r[0] = xyz[i * 3];
     r[1] = xyz[i * 3 + 1];
     r[2] = xyz[i * 3 + 2];
-    const dc = (points[i * 4 + 3] - 0.5) / SH_C0;
-    r[3] = dc;
-    r[4] = dc;
-    r[5] = dc;
+    for (let c = 0; c < 3; c++)
+      r[3 + c] = (points[i * stride + 3 + (channels === 3 ? c : 0)] - 0.5) / SH_C0;
     const o = 6 + nRest;
     r[o] = logit;
     const ls = Math.log(scales[i]);
@@ -227,6 +259,9 @@ export const MEAN_NOISE_WEIGHT = 50;
 // with Brush's growth loses up to 2.7 dB on a hot view (notes/stage6.md)
 export const REFINE_EVERY = 200;
 
+// RGB splats grow large (train_rgb.py caps at 3M): a cap per GPU class keeps them in memory
+export const RGB_CAP = { desktop: 3000000, laptop: 2000000, integrated: 1000000, unknown: 1500000 };
+
 // Brush options (kebab-case TrainStreamConfig keys) for the dataset's training settings. The
 // growth threshold is Brush's own densification control (no gsplat equivalent): G1's value.
 // train.py's SH schedule `min(step // N, sh_degree)` as Brush's --sh-degree-interval N
@@ -244,6 +279,7 @@ export function brushConfig(
     meanNoiseWeight = MEAN_NOISE_WEIGHT,
     refineEvery = REFINE_EVERY,
     startIter = 0,
+    maxSplats = null,
   } = {},
 ) {
   const t = dataset.training;
@@ -274,7 +310,7 @@ export function brushConfig(
     // train.py's bounds pruning, every N steps to the end, independent of refinement
     'prune-bounds-every': t.prune_outside_bounds_every,
     'growth-grad-threshold': growthGradThreshold,
-    'max-splats': o.cap,
+    'max-splats': maxSplats ?? o.cap,
     'mean-noise-weight': meanNoiseWeight,
     'background-noise-strength': 0,
     'max-resolution': Math.max(dataset.width, dataset.height),
@@ -364,27 +400,31 @@ export function colmapText(dataset) {
   };
 }
 
-// Write the directory. io: {readTargets(i) -> Uint16Array f16 bits of image i, points, ceiling,
-// write(path, bytes|string), deflate(bytes), progress(i, n), signal}
+// Write the directory. io: {readTargets(i) -> Uint16Array f16 bits of image i (RGB datasets:
+// Uint8Array RGB8), points, ceiling, write(path, bytes|string), deflate(bytes), progress(i, n),
+// signal}
 export async function writeBrushDataset(dataset, io) {
   const bad = unsupported(dataset);
   if (bad.length)
     throw new Error(`train.py options not supported by the Brush trainer: ${bad.join(', ')}`);
   for (const [path, text] of Object.entries(colmapText(dataset))) await io.write(path, text);
   await io.write('bounds.json', JSON.stringify(boundsJson(dataset, io.ceiling)));
+  const rgb = dataset.kind === 'rgb';
   await io.write(
     'init.ply',
-    initPly(io.points, dataset.points.count, dataset.training.options.sh_degree),
+    initPly(io.points, dataset.points.count, dataset.training.options.sh_degree, 0, rgb ? 3 : 1),
   );
   const n = dataset.images.length;
   for (let i = 0; i < n; i++) {
     io.signal?.throwIfAborted?.();
-    const png = await encodePng16(
-      targetToU16(await io.readTargets(i)),
-      dataset.width,
-      dataset.height,
-      io.deflate,
-    );
+    const png = rgb
+      ? await encodePngRgb8(await io.readTargets(i), dataset.width, dataset.height, io.deflate)
+      : await encodePng16(
+          targetToU16(await io.readTargets(i)),
+          dataset.width,
+          dataset.height,
+          io.deflate,
+        );
     await io.write(`images/${dataset.images[i].name}`, png);
     io.progress?.(i + 1, n);
   }

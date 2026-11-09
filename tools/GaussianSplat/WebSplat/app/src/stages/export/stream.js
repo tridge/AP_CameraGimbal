@@ -7,7 +7,7 @@
 // Files are {size, read(offset, length) -> Uint8Array} (input) and sinks {write(bytes, offset),
 // read(offset, length), truncate(size), flush()} (synchronous, as FileSystemSyncAccessHandle).
 import { exportInputs } from './export.js';
-import { apcgComment, hottestView, metaJson, startCamera, webInfo } from './meta.js';
+import { apcgComment, hottestView, metaJson, rgbWebInfo, startCamera, webInfo } from './meta.js';
 import {
   emptySplat,
   greyscale,
@@ -91,7 +91,8 @@ const enc = (s) => new TextEncoder().encode(s);
 const turn = () => new Promise((r) => setTimeout(r, 0));
 
 // Pass 1: the PLY. opts: input (file), dataset (5b dataset.json), frames (stage 2 frames.json),
-// title, description, rasterizeMode, camera (default: the start camera), ply (sink), chunk,
+// title, description, rasterizeMode, targetPolicy (exportInputs), camera (default: the start
+// camera), ply (sink), chunk,
 // progress(done, count), throwIfStopped(). Returns {info, count, plySize, input}.
 export async function plyPass(opts) {
   const chunk = opts.chunk ?? CHUNK;
@@ -100,21 +101,24 @@ export async function plyPass(opts) {
   const src = splatSource(opts.input);
   const n = src.count;
   if (!n) throw new Error('the trained splat has no Gaussians');
-  const inputs = exportInputs(opts.dataset, opts.frames);
-  const info = webInfo({
+  const inputs = exportInputs(opts.dataset, opts.frames, opts.targetPolicy);
+  // RGB (dataset kind rgb): colours as trained, export_web.py's rgb metadata
+  const rgb = opts.dataset.kind === 'rgb';
+  const common = {
     count: n,
     shDegree: src.shDegree,
-    title: opts.title ?? 'Thermal splat',
+    title: opts.title ?? (rgb ? 'RGB splat' : 'Thermal splat'),
     description: opts.description ?? '',
     camera:
       opts.camera ??
       startCamera(inputs.views, inputs.target, hottestView(inputs.views, inputs.frameMax)),
     target: inputs.target,
     origin: inputs.origin,
-    scale: inputs.scale,
-    hotspot: inputs.hotspot,
     rasterizeMode: opts.rasterizeMode,
-  });
+  };
+  const info = rgb
+    ? rgbWebInfo(common)
+    : webInfo({ ...common, scale: inputs.scale, hotspot: inputs.hotspot });
   const comments = [apcgComment(info)];
   checkComments(comments);
   const names = plyPropertyNames(src.shDegree);
@@ -125,7 +129,8 @@ export async function plyPass(opts) {
   for (let a = 0; a < n; a += chunk) {
     stop();
     const b = Math.min(n, a + chunk);
-    opts.ply.write(plyBody(greyscale(src.read(a, b))), head.length + a * rowBytes);
+    const part = src.read(a, b);
+    opts.ply.write(plyBody(rgb ? part : greyscale(part)), head.length + a * rowBytes);
     progress(b, n);
     await turn(); // lets a Stop message in
   }

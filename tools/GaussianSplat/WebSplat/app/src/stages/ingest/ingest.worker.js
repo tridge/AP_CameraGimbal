@@ -1,13 +1,15 @@
 /** Stage 1 worker (workers/runtime.js protocol). msg: {file, outDir, coreURL, verify?, workers?,
  * proposal?}. Indexes the MKV (progress in bytes), records the source identity, proposes the
  * selection options (decoding the hot frames) and writes outDir/index.json (websplat.ingest v1)
- * and outDir/proposal.json. verify decodes every frame and returns its SHA-256 (gray16le).
+ * and outDir/proposal.json. proposal.range (a request's range) limits the proposal to those
+ * frames. verify decodes every frame and returns its SHA-256 (gray16le).
  */
 import { serveStage } from '../../workers/runtime.js';
 import { writeJson } from '../../storage/opfs.js';
 import { indexMkv, ingestRecord, sourceIdentity, telemetrySummary } from './ingest.js';
 import { FrameDecoder } from './frame-decoder.js';
-import { propose, PROPOSAL_KEYS } from '../select/select.js';
+import { homeAltitude, propose, PROPOSAL_KEYS } from '../select/select.js';
+import { resolveRange } from '../../request.js';
 
 // only the settings the stage is keyed on may influence the proposal
 const pick = (o = {}) =>
@@ -47,6 +49,18 @@ serveStage(async (msg, api) => {
         `this recording has no vehicle telemetry (position and attitude) in its ${telemetry.frames} ` +
           'frames, so the cameras cannot be placed; record with the autopilot connected to the gimbal',
       );
+    let range = null;
+    if (msg.proposal?.range) {
+      const r = resolveRange(index.frames, msg.proposal.range, ingest.track.timescale);
+      range = { ...r, frames: r.end - r.start + 1 };
+      api.log(`request range: frames ${r.start}..${r.end} (${range.frames})`);
+    }
+    let home = null;
+    try {
+      home = homeAltitude(ingest.frames.map((f) => f.meta));
+    } catch (e) {
+      api.log(`no takeoff altitude: ${e.message}`, 'warn');
+    }
     await writeJson(`${msg.outDir}/index.json`, index);
 
     decoder = new FrameDecoder(ingest, { coreURL: msg.coreURL, workers: msg.workers });
@@ -55,7 +69,9 @@ serveStage(async (msg, api) => {
     let proposal = null;
     try {
       const { samples, ...rest } = await propose(ingest, decoder, {
-        params: pick(msg.proposal),
+        params: range
+          ? { ...pick(msg.proposal), start: range.start, end: range.end }
+          : pick(msg.proposal),
         signal,
       });
       proposal = { format: 'websplat.proposal', version: 1, ...rest };
@@ -86,6 +102,8 @@ serveStage(async (msg, api) => {
       source,
       telemetry,
       proposal,
+      range,
+      homeAltitude: home,
       hashes,
       timings,
       decoderStats: decoder.stats,

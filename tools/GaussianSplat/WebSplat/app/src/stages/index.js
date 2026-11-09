@@ -10,6 +10,9 @@ import { prepareStage } from './prepare/stage.js';
 import { exportStage } from './export/stage.js';
 import { standinStage } from './export/standin.js';
 import { trainStage } from './train/stage.js';
+import { rgbIngestStage } from './ingest/rgb.stage.js';
+import { rgbSelectStage } from './select/rgb.stage.js';
+import { rgbPrepareStage } from './prepare/rgb.stage.js';
 import './dummy/stages.js';
 
 // selection waits for the user to confirm ingest's proposal (config.select)
@@ -24,6 +27,23 @@ registerStageSet(
   {
     title: 'Thermal splat',
   },
+);
+
+// RGB recordings (MPEG-TS/MP4 with KLV or APCG SEI): features, matching, mapping, training and
+// export are the thermal stages on grey images and RGB targets
+registerStageSet(
+  'rgb',
+  [
+    rgbIngestStage,
+    rgbSelectStage,
+    featuresStage,
+    matchStage,
+    mapStage,
+    rgbPrepareStage,
+    trainStage,
+    exportStage,
+  ],
+  { title: 'RGB splat' },
 );
 
 // export and result view on prepared inputs (frames.json, dataset.json, a trained splat): tests

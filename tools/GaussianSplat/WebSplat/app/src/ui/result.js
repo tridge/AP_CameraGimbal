@@ -20,7 +20,12 @@ const clampedValues = (spz) => (spz.clamped.sh0 ?? 0) + (spz.clamped.sh ?? 0);
 
 // what the SPZ loses: quantisation always; clamping can take much more off small hot sources.
 // spz.temperature: the largest drop of a Gaussian's emitted temperature (measured by the export)
-function spzNote(spz, ratio) {
+function spzNote(spz, ratio, rgb) {
+  if (rgb)
+    return (
+      `The SPZ is ${(ratio * 100).toFixed(0)}% of the PLY's size but lossy (quantised colours, ` +
+      `positions and shapes); the PLY holds the exact values.`
+    );
   const t = spz.temperature;
   return (
     `The SPZ is ${(ratio * 100).toFixed(0)}% of the PLY's size but lossy: sampled at 32 view ` +
@@ -65,7 +70,11 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
   urls = [];
   const base = (r.title || 'splat').replace(/[^\w.-]+/g, '_');
   const spz = r.spz;
+  const rgb = r.kind === 'rgb';
   const lossy = spz.temperature ? spz.temperature.maxDropC.toFixed(1) : '?';
+  const spzLabel = rgb
+    ? 'SPZ (compressed, lossy)'
+    : `SPZ (compressed, lossy: about ${lossy} °C lower at worst, sampled)`;
   const link = (blob, download, id, text) => {
     const href = URL.createObjectURL(blob);
     urls.push(href);
@@ -88,7 +97,7 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
       files['splat.spz'],
       `${base}.spz`,
       'download-spz',
-      `SPZ, compressed, lossy: about ${lossy} °C lower at worst, sampled (${mb(files['splat.spz'].size)})`,
+      `${spzLabel} (${mb(files['splat.spz'].size)})`,
     ),
   ];
   links[2].classList.add('secondary');
@@ -114,14 +123,17 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
       el(
         'p',
         {},
-        `${r.gaussians.toLocaleString('en')} Gaussians, SH degree ${r.shDegree}; temperature scale ` +
-          `${r.temperatureC[0].toFixed(1)} to ${r.temperatureC[1].toFixed(1)} °C (display ` +
-          `${r.displayRangeC[0]} to ${r.displayRangeC[1]} °C); rendered as trained (${r.rasterizeMode}).`,
+        rgb
+          ? `${r.gaussians.toLocaleString('en')} Gaussians, SH degree ${r.shDegree}, colour; ` +
+              `rendered as trained (${r.rasterizeMode}).`
+          : `${r.gaussians.toLocaleString('en')} Gaussians, SH degree ${r.shDegree}; temperature scale ` +
+              `${r.temperatureC[0].toFixed(1)} to ${r.temperatureC[1].toFixed(1)} °C (display ` +
+              `${r.displayRangeC[0]} to ${r.displayRangeC[1]} °C); rendered as trained (${r.rasterizeMode}).`,
       ),
       el(
         'p',
         { className: 'note' },
-        spzNote(spz, files['splat.spz'].size / files['splat.ply'].size),
+        spzNote(spz, files['splat.spz'].size / files['splat.ply'].size, rgb),
       ),
       el(
         'table',
@@ -144,8 +156,7 @@ export async function showResult(section, record, snapshot, mapRecord = null) {
   const holder = section.querySelector('#result-viewer');
   if (!viewer) viewer = embedViewer(holder, VIEWER);
   const select = section.querySelector('#result-view');
-  select.querySelector('option[value=spz]').textContent =
-    `SPZ (compressed, lossy: about ${lossy} °C lower at worst, sampled)`;
+  select.querySelector('option[value=spz]').textContent = spzLabel;
   // the PLY, exact; only a large PLY without clamped values opens as the SPZ first (it is slow
   // to open and needs a lot of memory in the viewer)
   select.value = files['splat.ply'].size > LARGE_PLY && !clampedValues(spz) ? 'spz' : 'ply';

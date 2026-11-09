@@ -11,9 +11,25 @@ import { readFile, readJson, writeFile, writeJson } from '../../storage/opfs.js'
 import { decodeFeatures } from '../features/format.js';
 import { decodeGeometry } from '../match/format.js';
 import { loadColmap } from './colmap.js';
-import { priorMap, cameraFromFrames, modelJson, PRIOR_MAP_DEFAULTS } from './priormap.js';
+import {
+  priorMap,
+  cameraFromFrames,
+  modelJson,
+  thinMatches,
+  PRIOR_MAP_DEFAULTS,
+} from './priormap.js';
 
 const TRI = 0.15; // share of a round's progress for triangulation
+
+// the 4 GB WebAssembly heap limits images x correspondences: say so
+function outOfMemory(e, images, geometry) {
+  if (!/bad_alloc/.test(e?.message ?? '')) return e;
+  const matches = geometry.reduce((n, g) => n + (g.matches?.length ?? 0) / 2, 0);
+  return new Error(
+    `mapping ran out of memory (the 4 GB WebAssembly heap) with ${images} images and ${matches} ` +
+      'matches: use a shorter time range (or, for RGB, a smaller processing width)',
+  );
+}
 
 serveStage(async (msg, api) => {
   const t0 = performance.now();
@@ -30,6 +46,13 @@ serveStage(async (msg, api) => {
       counts: features.counts,
     },
   );
+  const thinned = thinMatches(geometry);
+  if (thinned.kept < 1)
+    api.log(
+      `${thinned.total} matches: mapping with ${(100 * thinned.kept).toFixed(0)}% of each ` +
+        "image's keypoints to stay inside the WebAssembly heap",
+      'warn',
+    );
   let start = null;
   if (msg.checkpoint) {
     const s = await readJson(`${msg.checkpoint.dir}/state.json`);
@@ -44,7 +67,7 @@ serveStage(async (msg, api) => {
   let generation = msg.firstCheckpointGeneration;
   let lastPost = 0;
   let phase = null;
-  const res = await priorMap(cw, camera, info.frames, features, geometry, {
+  const res = await priorMap(cw, camera, info.frames, features, thinned.geometry, {
     ...o,
     start,
     onProgress: (p, raw, total, round) => {
@@ -81,6 +104,8 @@ serveStage(async (msg, api) => {
       }
       api.throwIfStopped();
     },
+  }).catch((e) => {
+    throw outOfMemory(e, info.frames.length, thinned.geometry);
   });
   api.phase('write');
   for (const [name, data] of Object.entries(res.files))
@@ -101,6 +126,8 @@ serveStage(async (msg, api) => {
       seconds: r.seconds,
     })),
     resumedAfter: start ? start.round : null,
+    matches: thinned.total,
+    keptKeypoints: thinned.kept,
     heap: cw.heapBytes,
     timings: { loadMs, totalMs: performance.now() - t0 },
   };

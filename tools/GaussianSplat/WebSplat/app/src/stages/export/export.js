@@ -9,10 +9,12 @@ import { greyscale, readParams, readPly, splatFromPly, writePly } from './ply.js
 import { apcgComment, metaJson, startCamera, trainInfo, webInfo } from './meta.js';
 import { decodeSpz, encodeSpz, spzErrors } from './spz.js';
 
-// inputs from the contract files: dataset.json (5b) and frames.json (2)
-export function exportInputs(dataset, frames) {
+// inputs from the contract files: dataset.json (5b) and frames.json (2); targetPolicy 'picked':
+// the selection's target (frames.target_enu) even when prepare found a hot spot
+export function exportInputs(dataset, frames, targetPolicy = null) {
   const images = dataset.images;
-  const target = dataset.hotspot?.enu ?? frames.target_enu;
+  const target =
+    targetPolicy === 'picked' ? frames.target_enu : (dataset.hotspot?.enu ?? frames.target_enu);
   const frameMax = frames.frames
     ? Object.fromEntries(frames.frames.map((f) => [f.name, f.maximum_c]))
     : null;
