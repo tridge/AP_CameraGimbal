@@ -4,10 +4,14 @@ import { mkdirSync } from 'node:fs';
 import { chromium } from '../../../../../viewer/node_modules/playwright-core/index.mjs';
 
 export const LINUX_CHROME = '/opt/google/chrome/chrome';
+// ANGLE on Vulkan with no surface: a hardware WebGPU adapter headless, with or without a display
 export const LINUX_FLAGS = [
   '--headless=new',
-  '--use-angle=gl',
-  '--enable-features=Vulkan',
+  '--use-angle=vulkan',
+  '--use-vulkan=native',
+  '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan',
+  '--disable-vulkan-surface',
+  '--ignore-gpu-blocklist',
   '--enable-unsafe-webgpu',
 ];
 
@@ -22,6 +26,11 @@ export async function launchLocal({ profile, adapter, extraArgs = [] }) {
     args,
     viewport: { width: 1280, height: 900 },
   });
+  // until the GPU process has started, requestAdapter() can give null or SwiftShader
+  const warm = await context.newPage();
+  await warm.goto('chrome://gpu');
+  await warm.waitForTimeout(3000);
+  await warm.close();
   return { context, close: () => context.close(), kind: 'local' };
 }
 

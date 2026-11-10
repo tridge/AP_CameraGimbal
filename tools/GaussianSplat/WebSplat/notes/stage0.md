@@ -135,13 +135,21 @@ config, `@ffmpeg/core` pinned to the viewer's 0.12.10 and copied to `vendor/ffmp
     test/harness/win11/win11.sh stop
     node test/harness/thermal.mjs --machine laptop|win11 [...] [--reference]
 
-The laptop runs its own headless Chrome (`--headless=new --use-angle=gl --enable-features=Vulkan
---enable-unsafe-webgpu`, profile under `$WEBSPLAT_DATA/harness/profiles/`); the win11 machine
-runs Chrome 156 with `--force_high_performance_gpu` and its own profile, driven over CDP. Reports
+The laptop runs its own headless Chrome (flags in `test/harness/lib/browser.mjs`, profile under
+`$WEBSPLAT_DATA/harness/profiles/`); the win11 machine runs Chrome 156 with
+`--force_high_performance_gpu` and its own profile, driven over CDP. Reports
 (checks, per-stage timings and phases, ETA rows, GPU samples, every console message, HTTP
 errors) go to `$WEBSPLAT_DATA/harness/runs/`. GPU memory: nvidia-smi whole-GPU samples and, on
 Linux, the test Chrome's own GPU process (other agents share the GPUs, so whole-GPU numbers are
 contaminated; Windows reports no per-process memory).
+
+Linux Chrome uses ANGLE on Vulkan with no surface (`--use-angle=vulkan --use-vulkan=native
+--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan --disable-vulkan-surface
+--ignore-gpu-blocklist --enable-unsafe-webgpu`), which gives the hardware adapter on a headless
+GPU server as well as the laptop. `launchLocal` opens `chrome://gpu` for 3 s first: until the GPU
+process is up `requestAdapter()` can return null or SwiftShader. On the laptop both GPUs still
+work (`--adapter low-power` gives the Intel one); WebGL moves from Intel GL to NVIDIA Vulkan.
+Running as root needs `extraArgs: ['--no-sandbox']`.
 
 ### Acceptance (dummy pipeline, speed 30): 22/22 checks on both machines
 
