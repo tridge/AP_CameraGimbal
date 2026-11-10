@@ -160,6 +160,7 @@ function traceBuffers() {
 async function createDevice() {
   const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('no WebGPU adapter');
+  if (!adapter.features.has('subgroups')) throw new Error('WebGPU adapter lacks subgroups');
   // what cubecl asks for on its own device: every adapter feature and its limits
   const requiredLimits = {};
   for (const k in adapter.limits) requiredLimits[k] = adapter.limits[k];
