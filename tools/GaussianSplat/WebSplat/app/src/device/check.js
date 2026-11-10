@@ -65,6 +65,12 @@ export async function checkDevice({ powerPreference = 'high-performance', smoke 
     out.hint = isLinux() ? LINUX_HINT : 'Check that hardware acceleration is enabled.';
     return out;
   }
+  // Brush's sort and scan kernels always use subgroup operations
+  if (!adapter.features.has('subgroups')) {
+    out.reason = "This browser's WebGPU lacks subgroups, which training needs.";
+    out.hint = 'Use a current Chrome or Edge, or Firefox Nightly (release Firefox lacks them).';
+    return out;
+  }
   out.ok = true;
   if (smoke) {
     out.smoke = await smokeTest(adapter);
