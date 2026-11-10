@@ -392,6 +392,13 @@ Raspberry Pi camera used for the `2026-11/randy` splats) no dataflash log is nee
         --max-scale 5 --neighbours 30 --sequential 10 --prior-sigma 5
     $PY $T/train_rgb.py rgb --out splat --width 1920 --holdout 25
 
+With good telemetry, `sfm.py --mapper prior --thresholds 16,4` is a fast mapping mode: two
+triangulate and bundle adjust rounds instead of the default four (`40,16,8,4`). On a 468-frame
+1920-wide orbit (8192 features, RADIAL) prior mapping took 354 s instead of 1581 s, with a lower
+mean reprojection error (0.74 vs 0.99 px) but shorter tracks, for 0.15 dB less held-out PSNR at
+7k iterations. `train_rgb.py --holdout-names FILE` holds out the images named in FILE (one per
+line) instead of every `--holdout`th, so runs like these are scored on the same views.
+
 `train_rgb.py` defaults to SH degree 1 and drops Gaussians taller than 1 m: with views only
 from above, higher SH degrees and vertically stretched Gaussians show up as a coloured haze
 over the scene from low viewing angles. Publish a splat by copying `splat.pt`, `scale.json`
