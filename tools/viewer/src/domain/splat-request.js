@@ -269,7 +269,11 @@ export function buildRequest({
       !(frames[i].timestampTicks > frames[i - 1].timestampTicks) ||
       !(frames[i].offset > frames[i - 1].offset)
     )
-      throw new RequestError('range', 'frame timestamps are not increasing in file order');
+      throw new RequestError(
+        'range',
+        'frame timestamps are not increasing in file order (B-frames, as in a re-encoded ' +
+          "file?): use the camera's own recording",
+      );
   const request = {
     format: REQUEST_FORMAT,
     version: REQUEST_VERSION,
