@@ -47,6 +47,17 @@ def undistorted_camera(cam, width):
     return K, h, maps
 
 
+def holdout_ids(names, every, names_file=None):
+    """indices of the held-out images: those listed in names_file, else every Nth"""
+    if names_file is None:
+        return set(range(every // 2, len(names), every)) if every else set()
+    held = set(names_file.read_text().split())
+    missing = held - set(names)
+    if missing:
+        fatal('--holdout-names: %d not in the reconstruction, e.g. %s' % (len(missing), sorted(missing)[0]))
+    return {i for i, n in enumerate(names) if n in held}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('workdir', type=Path)
@@ -57,6 +68,8 @@ def main():
     ap.add_argument('--sh-degree', type=int, default=1,
                     help='view-dependent colour degree; higher degrees go wild when seen from angles not flown')
     ap.add_argument('--holdout', type=int, default=25, help='hold out every Nth image (0 = none)')
+    ap.add_argument('--holdout-names', type=Path,
+                    help='file of image names, one per line, to hold out instead of every Nth')
     ap.add_argument('--radius', type=float, default=200.0, help='drop Gaussians further than this from the model centre (m)')
     ap.add_argument('--max-vertical', type=float,
                     help='drop Gaussians whose vertical extent (1 sigma) exceeds this (m, 0 = keep); from above '
@@ -88,6 +101,7 @@ def main():
         images = [im for im in images if args.video_range[0] <= int(Path(im.name).stem) / 1000 <= args.video_range[1]]
     if len({im.camera_id for im in images}) != 1:
         fatal('expected one shared camera')
+    test = holdout_ids([im.name for im in images], args.holdout, args.holdout_names)
     K, H, maps = undistorted_camera(rec.cameras[images[0].camera_id], args.width)
     W = args.width
 
@@ -104,7 +118,6 @@ def main():
     viewmats = torch.tensor(np.array(viewmats), dtype=torch.float32, device=device)
     Kt = torch.tensor(K, dtype=torch.float32, device=device)[None]
     print('%d images %dx%d loaded in %.0f s' % (len(images), W, H, time.time() - t0), flush=True)
-    test = set(range(args.holdout // 2, len(images), args.holdout)) if args.holdout else set()
     train_ids = [i for i in range(len(images)) if i not in test]
 
     pts = rec.points3D
