@@ -49,7 +49,10 @@ export class Controller extends EventTarget {
   async acceptEarly(id) {
     const r = this.record(id);
     if (r.state === 'done') throw new Error(`${id} is already done`);
-    const running = this.channels.get(id)?.request;
+    const ch = this.channels.get(id);
+    // starting: the run has already read record.accept but has no worker to stop yet
+    if (ch && !ch.request) throw new Error(`${id} is starting; try again in a moment`);
+    const running = ch?.request;
     if (!running && !r.checkpoint) throw new Error(`${id} has no checkpoint to accept`);
     // a running worker refuses before training has started
     if (running) await this.command(id, 'finish');

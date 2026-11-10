@@ -415,7 +415,6 @@ async function fromViewer(nonce, remembered) {
         // rgb: the radius is about the request's target (thermal's always is)
         if (request.kind === 'rgb') prepare.centre = 'target';
         if (Object.keys(prepare).length) config.prepare = prepare;
-        const existed = await exists(jobDir(jobId));
         const j = await Job.open(jobId, { source, config });
         try {
           const { source: _, ...stored } = j.manifest.config?.request ?? {};
@@ -434,7 +433,7 @@ async function fromViewer(nonce, remembered) {
           return j;
         } catch (e) {
           // a job made for this handover is removed again (no half-copied job is left)
-          if (existed) j.close();
+          if (!j.created) j.close();
           else await j.destroy().catch(() => j.close());
           throw e;
         }

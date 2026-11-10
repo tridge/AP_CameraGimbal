@@ -28,6 +28,7 @@ export class Job {
         ? new Job(jobId, lock, found.manifest, found.slot)
         : new Job(jobId, lock, newManifest(jobId, fields), 1);
       job.durable = found ? JSON.parse(JSON.stringify(found.manifest)) : null;
+      job.created = !found; // this open made the manifest, under the lock
       if (!found) await job.save();
       await job.recover();
       return job;

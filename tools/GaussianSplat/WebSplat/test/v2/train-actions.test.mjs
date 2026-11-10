@@ -294,6 +294,20 @@ test('accepting a running stage asks its worker first, and a refusal records not
   assert.equal(job.stage('train').accept.iteration, 1234);
 });
 
+test('accepting a resumed stage before its worker starts is refused, not lost', async () => {
+  const job = new MemoryJob();
+  const c = new Controller({ set: trainSet(async () => ({})), job, config: {} });
+  // resumed from a checkpoint: running, but the run has read record.accept and has no worker yet
+  Object.assign(job.stage('train'), {
+    state: 'running',
+    progress: { done: 400, total: 1000 },
+    checkpoint: { generation: 2, done: 400 },
+  });
+  c.channels.set('train', {});
+  await assert.rejects(c.acceptEarly('train'), /starting/);
+  assert.equal(job.stage('train').accept, undefined);
+});
+
 test('a config change still invalidates an accepted stage and clears the acceptance', async () => {
   const job = new MemoryJob();
   const config = { train: { refineEvery: 100 } };
