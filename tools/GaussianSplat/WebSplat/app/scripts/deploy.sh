@@ -95,12 +95,13 @@ run() { # COMMAND...: on the target (ssh) or here
 }
 run mkdir -p "$base/releases"
 # unchanged files hard-linked from the live release (by content: --checksum, and times are not
-# preserved since link-dest needs every preserved attribute to match; relative to the destination)
+# preserved since link-dest needs every preserved attribute to match; relative to the destination);
+# --whole-file: rsync 3.5.1 to 3.4.3 fails verification on deltas against a link-dest basis
 live=$(run bash -c 'test -e "$1/current" && basename "$(readlink -f "$1/current")"' _ "$base" || true)
 link=()
 if [[ -n $live ]]; then link=(--link-dest="../$live/"); fi
 echo "uploading $release to ${host:+$host:}$base/releases/$release.partial/"
-rsync -rl --checksum --chmod=D755,F644 "${link[@]}" "$rel/" "${host:+$host:}$base/releases/$release.partial/"
+rsync -rl --checksum --whole-file --chmod=D755,F644 "${link[@]}" "$rel/" "${host:+$host:}$base/releases/$release.partial/"
 # switch and prune, serialized by flock held by the target-side process
 if [[ -n $host ]]; then
   ssh -o BatchMode=yes "$host" "$(printf '%q ' flock "$base/.deploy.lock" bash -s -- "$base" "$release" "$KEEP")" \
