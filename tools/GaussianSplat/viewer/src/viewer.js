@@ -9,6 +9,9 @@
 // float (or half-float) target, then decoded to degrees C and colormapped per pixel, as view_splat.py does.
 // A ceiling slider hides Gaussians above a height (floaters) with a Spark SplatEdit plane, display
 // only; a PLY can be downloaded without them.
+// View settings (gear button, kept in localStorage): a horizon-level orbit that stays above the
+// ground, a circular trim (Spark SplatEdit cylinder) about trim_centre / the target, and for
+// georeferenced splats (meta.origin) Esri satellite imagery on a ground disc below the splat.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -19,15 +22,41 @@ import {
   SplatEditSdfType,
   SplatMesh,
 } from '@sparkjsdev/spark';
-import { spzMeta } from '../spz-meta.mjs';
+import { embeddedMeta } from './splat-meta.js';
 import { clipPly } from '../ply-clip.mjs';
 import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
+import {
+  MIN_PITCH_DEG,
+  clampCamera,
+  dollyDistance,
+  estimateTrim,
+  groundAt,
+  groundGrid,
+  loadSettings,
+  median,
+  saveSettings,
+  tileLayout,
+  trimFromMeta,
+} from './view-math.js';
 
 // render size caps (pixels): integrated GPUs struggle at full HiDPI resolution
 const MAX_PIXELS = 2.0e6;
 const MOVING_SCALE = 0.45; // linear scale while the view moves, refined when it settles
 const FORMATS = ['ply', 'spz', 'splat', 'ksplat', 'sog'];
 const UP_AXES = { z: [0, 0, 1], y: [0, 1, 0], '-y': [0, -1, 0] };
+const SAMPLES = 300000; // Gaussians sampled for the trim and ground estimates
+// the video viewer's satellite imagery (tools/viewer map-view.js), with its credit
+const SAT_URL =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const SAT_CREDIT = 'Esri, Maxar, Earthstar Geographics';
+const GEAR_SVG =
+  '<svg viewBox="-12 -12 24 24" width="20" height="20" aria-hidden="true"><mask id="gear-hole">' +
+  '<rect x="-12" y="-12" width="24" height="24" fill="#fff"/><circle r="3.2" fill="#000"/></mask>' +
+  '<g fill="currentColor" mask="url(#gear-hole)">' +
+  [0, 45, 90, 135]
+    .map((a) => `<rect x="-2" y="-10.5" width="4" height="21" rx="1" transform="rotate(${a})"/>`)
+    .join('') +
+  '<circle r="7.5"/></g></svg>';
 
 const cfg = window.SPLAT;
 window.splatViewer = {}; // state for tests (ceiling)
@@ -108,28 +137,6 @@ async function getJson(url) {
   return r.json();
 }
 
-// metadata written by train.py, train_rgb.py and export_web.py: "comment apcg_splat {json}"
-function plyMeta(bytes) {
-  const head = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 1 << 20)));
-  const end = head.search(/\nend_header\r?\n/); // the line, not the text inside a comment
-  if (!head.startsWith('ply') || end < 0) return null;
-  for (const line of head.slice(0, end).split('\n')) {
-    if (line.startsWith('comment apcg_splat ')) {
-      try {
-        return JSON.parse(line.slice('comment apcg_splat '.length));
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
-}
-
-// the file's own metadata: a PLY header line or an SPZ's gzip header (spz-meta.mjs)
-function embeddedMeta(bytes) {
-  return plyMeta(bytes) ?? spzMeta(bytes);
-}
-
 function extension(name) {
   return (String(name).split('?')[0].split('.').pop() || '').toLowerCase();
 }
@@ -186,6 +193,81 @@ async function main() {
   camera.up.set(0, 0, 1);
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
+  controls.minDistance = 0.5;
+
+  let store = null;
+  try {
+    store = window.localStorage;
+  } catch {
+    // storage blocked
+  }
+  const settings = loadSettings(store);
+  const view = { settings }; // state for tests
+  window.splatViewer.view = view;
+  window.splatViewer.camera = () => ({
+    position: camera.position.toArray(),
+    target: controls.target.toArray(),
+  });
+
+  // panel collapse: a triangle beside the title; narrow screens start collapsed
+  const panel = $('panel');
+  const panelHead = document.createElement('div');
+  panelHead.className = 'panel-head';
+  const panelToggle = document.createElement('button');
+  panelToggle.id = 'panel-toggle';
+  panelToggle.type = 'button';
+  panelHead.append(panelToggle, $('title'));
+  panel.prepend(panelHead);
+  function setCollapsed(collapsed) {
+    panel.classList.toggle('collapsed', collapsed);
+    panelToggle.textContent = collapsed ? '▸' : '▾';
+    panelToggle.title = collapsed ? 'Show the panel' : 'Hide the panel';
+    panelToggle.setAttribute('aria-expanded', String(!collapsed));
+  }
+  setCollapsed(
+    settings.panel ? settings.panel === 'collapsed' : matchMedia('(max-width: 600px)').matches,
+  );
+  panelToggle.onclick = () => {
+    setCollapsed(!panel.classList.contains('collapsed'));
+    settings.panel = panel.classList.contains('collapsed') ? 'collapsed' : 'open';
+    saveSettings(store, settings);
+  };
+
+  // zoom buttons and the settings gear, bottom right
+  const tools = document.createElement('div');
+  tools.id = 'view-tools';
+  tools.hidden = true;
+  tools.innerHTML =
+    '<div class="zoom" role="group" aria-label="Zoom">' +
+    '<button id="zoom-in" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>' +
+    '<button id="zoom-out" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>' +
+    '</div><button id="settings-button" type="button" aria-label="View settings" ' +
+    `title="View settings" aria-expanded="false">${GEAR_SVG}</button>`;
+  const settingsUi = document.createElement('div');
+  settingsUi.id = 'settings';
+  settingsUi.hidden = true;
+  settingsUi.innerHTML =
+    '<h2>View settings</h2>' +
+    '<label><input id="set-level" type="checkbox" /> Keep the horizon level</label>' +
+    '<p class="note">No roll; the camera stays above the horizon and the ground.</p>' +
+    '<label><input id="set-trim" type="checkbox" /> Trim to a circle</label>' +
+    '<label id="trim-radius-label">Radius <input id="trim-radius" type="range" min="0" ' +
+    'max="1000" step="1" /></label><p id="trim-note" class="note"></p>' +
+    '<div id="satellite-controls" hidden>' +
+    '<label><input id="set-satellite" type="checkbox" /> Satellite map below</label>' +
+    '<label id="splat-opacity-label">Splat opacity <input id="splat-opacity" type="range" ' +
+    'min="0" max="100" step="1" value="100" /></label><p id="satellite-note" class="note"></p>' +
+    '</div>';
+  document.body.append(tools, settingsUi);
+  const satCredit = document.createElement('span');
+  satCredit.id = 'sat-credit';
+  satCredit.hidden = true;
+  satCredit.textContent = `Imagery: ${SAT_CREDIT} · `;
+  document.querySelector('.credits')?.prepend(satCredit);
+  $('settings-button').onclick = () => {
+    settingsUi.hidden = !settingsUi.hidden;
+    $('settings-button').setAttribute('aria-expanded', String(!settingsUi.hidden));
+  };
 
   const ui = Object.fromEntries(
     ['cmap', 'lo', 'hi', 'auto', 'stats', 'rangeinfo', 'hover', 'up'].map((id) => [id, $(id)]),
@@ -280,15 +362,28 @@ async function main() {
     needSplat = true;
   }
 
-  function setupCeiling() {
-    scene.remove(ceilingEdit);
-    ceilingH = null;
+  // world positions: every height (the ceiling) and a sample of the opaque ones (trim, ground)
+  function sampleSplat() {
     const zs = new Float32Array(mesh.numSplats);
+    const step = Math.max(1, Math.floor(mesh.numSplats / SAMPLES));
+    const s = { x: [], y: [], z: [] };
     const v = new THREE.Vector3();
-    mesh.forEachSplat((i, centre) => {
-      zs[i] = v.copy(centre).applyQuaternion(holder.quaternion).z;
+    mesh.forEachSplat((i, centre, _scales, _q, opacity) => {
+      v.copy(centre).applyQuaternion(holder.quaternion);
+      zs[i] = v.z;
+      if (i % step === 0 && opacity > 0.2) {
+        s.x.push(v.x);
+        s.y.push(v.y);
+        s.z.push(v.z);
+      }
     });
     zs.sort();
+    return { zs, sample: s };
+  }
+
+  function setupCeiling(zs) {
+    scene.remove(ceilingEdit);
+    ceilingH = null;
     heights = zs;
     const top = zs[zs.length - 1];
     targetZ = meta.target
@@ -326,6 +421,316 @@ async function main() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   };
+
+  // circular trim: Gaussians outside a vertical cylinder (Spark's is along its local y) get
+  // opacity 0, display only
+  const trimSdf = new SplatEditSdf({
+    type: SplatEditSdfType.CYLINDER,
+    invert: true,
+    opacity: 0,
+    color: new THREE.Color(1, 1, 1),
+    radius: 1,
+  });
+  trimSdf.rotation.x = Math.PI / 2;
+  trimSdf.scale.set(1, 1e6, 1); // half height
+  const trimEdit = new SplatEdit({ rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY });
+  trimEdit.add(trimSdf);
+  let trim = null; // {centre: [x, y] world, radius, initial, max, source}
+  let ground = null; // groundGrid() in world coordinates
+  const metresText = (m) => `${m.toFixed(m < 100 ? 1 : 0)} m`;
+
+  function applyTrim() {
+    const on = settings.trim && trim;
+    if (on) {
+      trimSdf.radius = trim.radius;
+      trimSdf.position.set(trim.centre[0], trim.centre[1], 0);
+      if (!trimEdit.parent) scene.add(trimEdit);
+    } else scene.remove(trimEdit);
+    $('set-trim').checked = settings.trim;
+    $('set-trim').disabled = !trim;
+    $('trim-radius-label').hidden = !on;
+    $('trim-note').textContent = trim
+      ? `${metresText(trim.radius)} about the ${trim.about}` +
+        (trim.radius === trim.initial
+          ? trim.source === 'file'
+            ? ' (from the file).'
+            : ' (estimated).'
+          : ` (${trim.source === 'file' ? 'the file says' : 'estimate'} ` +
+            `${metresText(trim.initial)}).`)
+      : '';
+    view.trim = trim && { ...trim, on: !!on };
+    needSplat = true;
+  }
+
+  // world [x, y] of a splat-frame point [x, y(, z)]
+  const worldXY = (p) => {
+    const v = new THREE.Vector3(p[0], p[1], p[2] ?? 0).applyQuaternion(holder.quaternion);
+    return [v.x, v.y];
+  };
+
+  function setupTrim(sample) {
+    const fromFile = trimFromMeta(meta);
+    const about =
+      fromFile && meta.trim_centre ? 'scene centre' : meta.target ? 'target' : 'median centre';
+    const centre = fromFile
+      ? worldXY(fromFile.centre)
+      : meta.target
+        ? worldXY(meta.target)
+        : [median(sample.x), median(sample.y)];
+    const est = estimateTrim(sample.x, sample.y, centre);
+    const radius = fromFile?.radius ?? est?.radius;
+    trim =
+      radius > 0
+        ? {
+            centre,
+            radius,
+            initial: radius,
+            max: Math.max(radius * 1.5, est?.edge ?? 0),
+            source: fromFile ? 'file' : 'estimate',
+            about,
+          }
+        : null;
+    if (trim) {
+      $('trim-radius').max = String(Math.ceil(trim.max));
+      $('trim-radius').min = String(Math.min(10, Math.floor(trim.radius)));
+      $('trim-radius').value = String(Math.round(trim.radius));
+    }
+    // ground over the trim circle (or the estimate's) for the camera limit and the map
+    const r = trim?.radius ?? est?.edge;
+    ground = r > 0 ? groundGrid(sample.x, sample.y, sample.z, centre, r) : null;
+    if (ground) {
+      // the map's height: low among the cells, so hills stand on it rather than cut through
+      const hs = Array.from(ground.h).filter(Number.isFinite);
+      hs.sort((a, b) => a - b);
+      ground.map = hs[Math.floor(0.2 * (hs.length - 1))];
+    }
+    view.ground = ground && { ground: ground.ground, map: ground.map, cell: ground.cell };
+    applyTrim();
+  }
+
+  $('set-trim').onchange = () => {
+    settings.trim = $('set-trim').checked;
+    saveSettings(store, settings);
+    applyTrim();
+    updateSatellite();
+  };
+  $('trim-radius').oninput = () => {
+    if (!trim) return;
+    trim.radius = Number($('trim-radius').value);
+    applyTrim();
+  };
+
+  // horizon-level orbit (as MAVProxy's map3d): pitch at least MIN_PITCH_DEG, pans horizontal,
+  // camera above the ground estimate; off: OrbitControls' free orbit
+  function applyLevel() {
+    controls.screenSpacePanning = !settings.level;
+    controls.maxPolarAngle = settings.level
+      ? THREE.MathUtils.degToRad(90 - MIN_PITCH_DEG)
+      : Math.PI;
+    $('set-level').checked = settings.level;
+    controls.update();
+  }
+  function limitCamera() {
+    if (!settings.level) return false;
+    const p = camera.position;
+    const t = controls.target;
+    const dist = p.distanceTo(t);
+    const out = clampCamera([p.x, p.y, p.z], [t.x, t.y, t.z], {
+      ground: ground ? (x, y) => groundAt(ground, x, y) : null,
+      clearance: Math.min(2, Math.max(0.2, dist * 0.02)),
+    });
+    if (out[0] === p.x && out[1] === p.y && out[2] === p.z) return false;
+    p.set(...out);
+    return true;
+  }
+  $('set-level').onchange = () => {
+    settings.level = $('set-level').checked;
+    saveSettings(store, settings);
+    applyLevel();
+  };
+
+  function zoom(inward) {
+    const offset = camera.position.clone().sub(controls.target);
+    const d = offset.length();
+    if (!(d > 0)) return;
+    offset.setLength(dollyDistance(d, inward, controls.minDistance, controls.maxDistance));
+    camera.position.copy(controls.target).add(offset);
+    controls.update();
+  }
+  $('zoom-in').onclick = () => zoom(true);
+  $('zoom-out').onclick = () => zoom(false);
+  window.addEventListener('keydown', (e) => {
+    if (tools.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest?.('input, select, textarea')) return;
+    if (e.key === '+' || e.key === '=') zoom(true);
+    else if (e.key === '-' || e.key === '_') zoom(false);
+  });
+
+  // satellite map: Esri World Imagery tiles drawn into one texture on a horizontal disc at the
+  // ground estimate (no terrain), about the splat's ENU origin, its rim fading to black; tiles
+  // that fail are left grey
+  const groundScene = new THREE.Scene();
+  let sat = null; // {mesh, state, loaded, failed, total, zoom}
+  let satGen = 0;
+  let splatOpacity = 1;
+  const satAvailable = () =>
+    !!(
+      meta?.origin &&
+      Number.isFinite(meta.origin.lat) &&
+      Number.isFinite(meta.origin.lon) &&
+      upAxis[2] === 1 &&
+      ground
+    );
+  const satVisible = () => !!(settings.satellite && sat?.mesh.visible && satAvailable());
+
+  function disposeSatellite() {
+    satGen++;
+    if (!sat) return;
+    groundScene.remove(sat.mesh);
+    sat.mesh.geometry.dispose();
+    sat.mesh.material.map?.dispose();
+    sat.mesh.material.dispose();
+    sat = null;
+  }
+
+  function buildSatellite() {
+    const gen = ++satGen;
+    const half = Math.min(3000, Math.max(600, 5 * (trim?.initial ?? 200)));
+    const layout = tileLayout(meta.origin, half);
+    const mosaic = document.createElement('canvas');
+    mosaic.width = layout.width;
+    mosaic.height = layout.height;
+    const ctx = mosaic.getContext('2d');
+    ctx.fillStyle = '#3a3a3a';
+    ctx.fillRect(0, 0, layout.width, layout.height);
+    const tex = new THREE.CanvasTexture(mosaic);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const geom = new THREE.RingGeometry(0, half, 128, 16);
+    const pos = geom.attributes.position;
+    const uv = geom.attributes.uv;
+    const rgb = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      uv.setXY(i, ...layout.uv(pos.getX(i), pos.getY(i)));
+      const r = Math.hypot(pos.getX(i), pos.getY(i)) / half;
+      rgb.fill(Math.min(1, Math.max(0, (1 - r) / 0.25)), 3 * i, 3 * i + 3);
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+    const mesh = new THREE.Mesh(
+      geom,
+      new THREE.MeshBasicMaterial({ map: tex, vertexColors: true }),
+    );
+    mesh.position.z = ground.map;
+    mesh.visible = false; // until a tile arrives
+    groundScene.add(mesh);
+    sat = {
+      mesh,
+      state: 'loading',
+      loaded: 0,
+      failed: 0,
+      total: layout.tiles.length,
+      zoom: layout.z,
+    };
+    const s = sat;
+    const queue = [...layout.tiles.entries()];
+    const one = async ([k, [x, y]]) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = SAT_URL.replace('{z}', layout.z).replace('{y}', y).replace('{x}', x);
+      let timer = null;
+      try {
+        await Promise.race([
+          img.decode(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('timeout')), 20000);
+          }),
+        ]);
+        if (gen !== satGen) return;
+        const nx = layout.width / 256;
+        ctx.drawImage(img, (k % nx) * 256, Math.floor(k / nx) * 256);
+        tex.needsUpdate = true;
+        s.loaded++;
+        mesh.visible = true;
+      } catch {
+        s.failed++;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (gen === satGen) updateSatellite();
+    };
+    const worker = async () => {
+      while (queue.length && gen === satGen) await one(queue.shift());
+    };
+    Promise.all(Array.from({ length: 6 }, worker)).then(() => {
+      if (gen !== satGen) return;
+      s.state = !s.loaded ? 'failed' : s.failed ? 'partial' : 'done';
+      updateSatellite();
+    });
+  }
+
+  function updateSatellite() {
+    const avail = satAvailable();
+    $('satellite-controls').hidden = !avail;
+    $('set-satellite').checked = settings.satellite;
+    if (avail && settings.satellite && !sat) buildSatellite();
+    const on = avail && settings.satellite && sat?.state !== 'failed';
+    $('splat-opacity-label').hidden = !on;
+    let note = '';
+    if (avail && settings.satellite && sat) {
+      if (sat.state === 'failed')
+        note = 'Satellite imagery could not be loaded (offline, or blocked by the network).';
+      else if (sat.state === 'loading')
+        note = `Loading imagery ${sat.loaded} of ${sat.total} tiles…`;
+      else
+        note =
+          `Map plane at ${metresText(ground.map)}` +
+          (meta.origin.alt_amsl != null
+            ? ` (${(meta.origin.alt_amsl + ground.map).toFixed(0)} m AMSL)`
+            : '') +
+          `, a ground estimate from the splat (no terrain).` +
+          (sat.failed ? ` ${sat.failed} of ${sat.total} tiles failed.` : '');
+    }
+    $('satellite-note').textContent = note;
+    satCredit.hidden = !satVisible();
+    const op = on ? splatOpacity : 1;
+    if (mesh) mesh.opacity = thermal ? 1 : op; // thermal: faded in the post pass, values kept
+    if (post) post.material.uniforms.op.value = op;
+    view.satellite = avail
+      ? {
+          on,
+          visible: satVisible(),
+          state: sat?.state ?? null,
+          loaded: sat?.loaded ?? 0,
+          failed: sat?.failed ?? 0,
+          total: sat?.total ?? 0,
+          zoom: sat?.zoom ?? null,
+          height: ground.map,
+          opacity: op,
+        }
+      : null;
+    needSplat = needPost = true;
+  }
+
+  $('set-satellite').onchange = () => {
+    settings.satellite = $('set-satellite').checked;
+    saveSettings(store, settings);
+    if (sat?.state === 'failed') disposeSatellite(); // try again next time
+    // on: the splat starts opaque
+    splatOpacity = 1;
+    $('splat-opacity').value = '100';
+    updateSatellite();
+  };
+  $('splat-opacity').oninput = () => {
+    splatOpacity = Number($('splat-opacity').value) / 100;
+    updateSatellite();
+  };
+
+  function setupView(sample) {
+    disposeSatellite();
+    setupTrim(sample);
+    applyLevel();
+    updateSatellite();
+  }
 
   function setLut(name) {
     const rows = colormaps[name];
@@ -470,11 +875,12 @@ async function main() {
           knee: { value: 0 },
           glory: { value: 0 },
           gmin: { value: 0 },
+          op: { value: 1 },
         },
         vertexShader: `in vec3 position; out vec2 uv;
           void main() { uv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
         fragmentShader: `precision highp float; uniform sampler2D src; uniform sampler2D lut;
-          uniform float t0, k, norm, lo, hi, bg, knee, glory, gmin; in vec2 uv; out vec4 colour;
+          uniform float t0, k, norm, lo, hi, bg, knee, glory, gmin, op; in vec2 uv; out vec4 colour;
           void main() {
             vec4 s = texture(src, uv);
             float v = clamp((s.r + s.g + s.b) / 3.0, 0.0, 1.0);
@@ -498,10 +904,16 @@ async function main() {
             x = clamp(x, 0.0, 1.0);
             vec3 c = grey ? vec3(clamp(g, 0.0, 1.0) * 200.0 / 255.0)
                           : texture(lut, vec2((x * 255.0 + 0.5) / 256.0, 0.5)).rgb;
-            colour = vec4(c * clamp(s.a, 0.0, 1.0), 1.0);
+            float a = clamp(s.a, 0.0, 1.0) * op;
+            colour = vec4(c * a, a); // premultiplied, over black or the map
           }`,
         depthTest: false,
         depthWrite: false,
+        blending: THREE.CustomBlending,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendSrcAlpha: THREE.OneFactor,
+        blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
       }),
     );
     post.frustumCulled = false;
@@ -548,7 +960,8 @@ async function main() {
     });
     const q = (a, f) => a[Math.floor(f * (a.length - 1))];
     for (const a of xs) a.sort((p, r) => p - r);
-    const size = Math.max(...xs.map((a) => q(a, 0.98) - q(a, 0.02)), 1e-3);
+    let size = Math.max(...xs.map((a) => q(a, 0.98) - q(a, 0.02)), 1e-3);
+    if (trim && settings.trim) size = Math.min(size, 2 * trim.radius);
     const look = meta.target
       ? new THREE.Vector3(...meta.target).applyQuaternion(holder.quaternion)
       : new THREE.Vector3(...xs.map((a) => q(a, 0.5)));
@@ -569,6 +982,7 @@ async function main() {
     camera.near = Math.max(0.01, Math.min(0.5, dist / 1000));
     camera.far = Math.max(20000, dist * 100);
     camera.updateProjectionMatrix();
+    controls.maxDistance = camera.far / 4;
     controls.update();
   }
 
@@ -632,7 +1046,8 @@ async function main() {
     setUp(meta.up || UP_AXES[ui.up ? ui.up.value : 'z']);
     source = extension(name) === 'ply' ? src : null;
     sourceName = String(name).split('/').pop();
-    setupCeiling();
+    const { zs, sample } = sampleSplat();
+    setupCeiling(zs);
 
     if (thermal) {
       if (!colormaps) colormaps = await getJson(cfg ? cfg.colormaps : 'colormaps.json');
@@ -653,6 +1068,8 @@ async function main() {
       ui.auto.checked = true;
       applyRange();
     }
+    setupView(sample);
+    tools.hidden = false;
 
     home = meta.camera
       ? {
@@ -690,7 +1107,9 @@ async function main() {
     ui.up.onchange = () => {
       if (!mesh || meta.up) return;
       setUp(UP_AXES[ui.up.value]);
-      setupCeiling();
+      const { zs, sample } = sampleSplat();
+      setupCeiling(zs);
+      setupView(sample);
       home = fitView();
       goHome();
     };
@@ -703,6 +1122,10 @@ async function main() {
 
   renderer.setAnimationLoop(() => {
     controls.update(); // damping keeps emitting change events after release
+    if (limitCamera()) {
+      lastMove = performance.now();
+      needSplat = true;
+    }
     if (!mesh || (thermal && !post)) return; // thermal set-up awaits the colormaps
     const isMoving = performance.now() - lastMove < 200;
     if (thermal && (isMoving ? moving : full) !== target) {
@@ -710,7 +1133,15 @@ async function main() {
       needSplat = true; // refine at full size once the view settles
     }
     if (!needSplat && !needPost) return;
+    // the map is drawn first and the splat over it: it hides nothing of the splat (Gaussians
+    // below the estimated ground included, e.g. heat seen under canopy)
+    const map = satVisible();
     if (!thermal) {
+      if (map) {
+        renderer.render(groundScene, camera);
+        renderer.clearDepth();
+      }
+      renderer.autoClear = !map;
       renderer.render(scene, camera);
     } else {
       if (needSplat) {
@@ -721,8 +1152,11 @@ async function main() {
         if (target === full && ui.auto.checked) autoRange();
       }
       post.material.uniforms.src.value = target.texture;
+      if (map) renderer.render(groundScene, camera);
+      renderer.autoClear = !map;
       renderer.render(post.userData.scene, post.userData.camera);
     }
+    renderer.autoClear = true;
     needSplat = needPost = false;
   });
 

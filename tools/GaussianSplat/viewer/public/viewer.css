@@ -153,3 +153,105 @@ code {
   display: block;
   width: 100%;
 }
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#panel-toggle {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #ddd;
+  font-size: 16px;
+  cursor: pointer;
+}
+#panel-toggle:hover {
+  background: #333;
+}
+#panel.collapsed {
+  width: auto;
+  max-width: min(280px, calc(100vw - 80px));
+  right: auto;
+  padding: 4px 10px 4px 4px;
+}
+#panel.collapsed > :not(.panel-head) {
+  display: none !important;
+}
+#panel.collapsed h1 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#view-tools {
+  position: absolute;
+  right: 12px;
+  bottom: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#view-tools button {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid #555;
+  background: rgba(30, 30, 30, 0.9);
+  color: #eee;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#view-tools button:hover {
+  background: rgba(60, 60, 60, 0.95);
+}
+#view-tools .zoom {
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 2px 6px #0007;
+}
+#view-tools .zoom button:first-child {
+  border-radius: 5px 5px 0 0;
+}
+#view-tools .zoom button:last-child {
+  border-radius: 0 0 5px 5px;
+  border-top: 0;
+}
+#settings-button[aria-expanded='true'] {
+  background: #2a6db0;
+}
+#settings {
+  position: absolute;
+  right: 60px;
+  bottom: 28px;
+  width: 260px;
+  max-width: calc(100vw - 84px);
+  max-height: calc(100vh - 60px);
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.92);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+#settings h2 {
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+#settings label {
+  display: block;
+  margin: 6px 0 2px;
+}
+#settings .note {
+  margin: 2px 0 6px;
+}
+#settings input[type='range'] {
+  display: block;
+  width: 100%;
+}

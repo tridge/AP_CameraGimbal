@@ -151,6 +151,29 @@ for `?url=`, `NAME.json` or `meta.json` beside it; `&meta=` and a site's `meta.j
 precedence over all of these. Other splats open in colour with a view fitted to them and an
 up-axis choice.
 
+The metadata fields: `kind` (`thermal` or `rgb`), `up`, `target` (orbit target, ENU metres),
+`origin` (`lat`, `lon` and `alt_amsl` of the ENU origin; z is height above the takeoff
+altitude), `camera` (start view), `rasterize_mode`, `trim_centre` and `trim_radius` (the
+circular trim below), and for thermal splats `temperature_scale`, `hotspot`, `colormap` and
+`display_range_c`. `train.py` and `train_rgb.py` set the trim to 0.85 times the radius beyond
+which training prunes Gaussians (`--radius`; train.py prunes at 1.1 times it), about the
+training centre, and record that radius as `bounds` in `scale.json` for `export_web.py`.
+
+The panel's triangle collapses it (narrow screens start collapsed); + and − zoom without a
+mouse. The gear opens view settings, kept in the browser's local storage:
+
+- Keep the horizon level (on by default): no roll, the camera stays at least 5 degrees above
+  the orbit target's horizon and above a ground estimate from the splat (per 1/16 of the trim
+  circle, the 10th percentile height of its opaque Gaussians), and panning stays horizontal,
+  as MAVProxy's map3d. Off is the free orbit.
+- Trim to a circle (on by default): hides the Gaussians outside `trim_radius` about
+  `trim_centre` (else the target), with a radius slider. Files without the fields get an
+  estimate: 0.85 times the horizontal distance at which the density of Gaussians drops off.
+- Satellite map below, for splats with an `origin`: Esri World Imagery (as the video viewer's
+  3D map, same credit) on a flat disc at a low ground estimate, drawn under the splat, with a
+  splat opacity slider. There is no terrain, and the imagery's own registration error remains;
+  without network access the option reports that the tiles could not be loaded.
+
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
     (cd tools/GaussianSplat/viewer && npm ci && npm run build)

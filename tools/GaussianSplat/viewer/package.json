@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && node scripts/postbuild.mjs"
+    "build": "vite build && node scripts/postbuild.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@sparkjsdev/spark": "2.4.0",
