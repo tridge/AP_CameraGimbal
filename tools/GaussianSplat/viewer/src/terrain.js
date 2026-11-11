@@ -41,7 +41,10 @@ export function tileRect(z, x, y) {
     north: -90 + (y + 1) * d,
   };
 }
+const wrapLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+
 export function tileXY(z, lat, lon) {
+  lon = wrapLon(lon);
   const d = 180 / 2 ** z;
   const n = 2 ** z;
   return [
@@ -166,6 +169,7 @@ export class Terrain {
 
   // AMSL height at a point, NaN outside the tiles; minLevel: only tiles at least this fine
   amsl(lat, lon, minLevel = 0) {
+    lon = wrapLon(lon);
     for (const t of this.tiles) {
       if (t.level < minLevel) break;
       const r = t.rect;

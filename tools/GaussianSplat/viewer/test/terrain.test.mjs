@@ -86,6 +86,11 @@ test('tileXY / tileRect: geographic TMS tiling, y from the south', () => {
   assert.deepEqual(tileRect(0, 1, 0), { west: 0, south: -90, east: 180, north: 90 });
 });
 
+test('tileXY wraps longitudes past the antimeridian', () => {
+  assert.deepEqual(tileXY(3, -17, 181), tileXY(3, -17, -179));
+  assert.deepEqual(tileXY(3, -17, -181), tileXY(3, -17, 179));
+});
+
 const layer = (avail) => ({
   format: 'quantized-mesh-1.0',
   projection: 'EPSG:4326',

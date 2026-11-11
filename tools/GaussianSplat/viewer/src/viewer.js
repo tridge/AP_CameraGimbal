@@ -551,7 +551,8 @@ async function main() {
       ground: ground || terrainOn() ? groundHeight : null,
       clearance: Math.min(2, Math.max(0.2, dist * 0.02)),
     });
-    if (out[0] === p.x && out[1] === p.y && out[2] === p.z) return false;
+    // rounding at the pitch limit moves it ~1e-14 m every frame
+    if (Math.hypot(out[0] - p.x, out[1] - p.y, out[2] - p.z) <= 1e-6 * dist) return false;
     p.set(...out);
     return true;
   }
@@ -965,7 +966,13 @@ async function main() {
   $('set-satellite').onchange = () => {
     settings.satellite = $('set-satellite').checked;
     saveSettings(store, settings);
-    if (sat?.state === 'failed') disposeSatellite(); // try again next time
+    if (sat?.state === 'failed') {
+      disposeSatellite(); // try again next time
+    } else if (sat && settings.satellite) {
+      // terrain that became ready while the map was off was placed unshifted
+      placeMap();
+      rebuildAll();
+    }
     // on: the splat starts opaque
     splatOpacity = 1;
     $('splat-opacity').value = '100';
@@ -1241,6 +1248,7 @@ async function main() {
     camera.far = Math.max(20000, dist * 100);
     camera.updateProjectionMatrix();
     controls.maxDistance = camera.far / 4;
+    controls.minDistance = Math.min(0.5, dist / 100);
     controls.update();
   }
 
@@ -1256,6 +1264,7 @@ async function main() {
 
   // src: the file as opened (a Blob, or bytes), kept for the clipped PLY download
   async function show(bytes, name, m, src = bytes) {
+    disposeSatellite(); // before meta changes under a pending terrain load
     meta = m || { kind: 'rgb', title: name };
     thermal = meta.kind === 'thermal' && !!meta.temperature_scale;
     const title = meta.title || name.split('/').pop();
