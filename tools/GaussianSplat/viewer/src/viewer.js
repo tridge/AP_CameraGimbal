@@ -11,7 +11,8 @@
 // only; a PLY can be downloaded without them.
 // View settings (gear button, kept in localStorage): a horizon-level orbit that stays above the
 // ground, a circular trim (Spark SplatEdit cylinder) about trim_centre / the target, and for
-// georeferenced splats (meta.origin) Esri satellite imagery on a ground disc below the splat.
+// georeferenced splats (meta.origin) Esri satellite imagery draped on the plot.ardupilot.org SRTM
+// terrain (a flat disc without it) below the splat.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -23,6 +24,7 @@ import {
   SplatMesh,
 } from '@sparkjsdev/spark';
 import { embeddedMeta } from './splat-meta.js';
+import { TERRAIN_CREDIT, loadTerrain, terrainOffset } from './terrain.js';
 import { clipPly } from '../ply-clip.mjs';
 import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
 import {
@@ -256,7 +258,9 @@ async function main() {
     '<div id="satellite-controls" hidden>' +
     '<label><input id="set-satellite" type="checkbox" /> Satellite map below</label>' +
     '<label id="splat-opacity-label">Splat opacity <input id="splat-opacity" type="range" ' +
-    'min="0" max="100" step="1" value="100" /></label><p id="satellite-note" class="note"></p>' +
+    'min="0" max="100" step="1" value="100" /></label>' +
+    '<label id="align-label"><input id="set-align" type="checkbox" /> Align terrain to the ' +
+    'splat</label><p id="satellite-note" class="note"></p>' +
     '</div>';
   document.body.append(tools, settingsUi);
   const satCredit = document.createElement('span');
@@ -536,7 +540,7 @@ async function main() {
     const t = controls.target;
     const dist = p.distanceTo(t);
     const out = clampCamera([p.x, p.y, p.z], [t.x, t.y, t.z], {
-      ground: ground ? (x, y) => groundAt(ground, x, y) : null,
+      ground: ground || terrainOn() ? groundHeight : null,
       clearance: Math.min(2, Math.max(0.2, dist * 0.02)),
     });
     if (out[0] === p.x && out[1] === p.y && out[2] === p.z) return false;
@@ -566,11 +570,11 @@ async function main() {
     else if (e.key === '-' || e.key === '_') zoom(false);
   });
 
-  // satellite map: Esri World Imagery tiles drawn into one texture on a horizontal disc at the
-  // ground estimate (no terrain), about the splat's ENU origin, its rim fading to black; tiles
-  // that fail are left grey
+  // satellite map: Esri World Imagery tiles drawn into one texture, draped on the SRTM terrain
+  // mesh (or a horizontal disc at the splat's ground estimate until or unless it loads) about the
+  // splat's ENU origin, its rim fading to black; imagery tiles that fail are left grey
   const groundScene = new THREE.Scene();
-  let sat = null; // {mesh, state, loaded, failed, total, zoom}
+  let sat = null; // {mesh, state, loaded, failed, total, zoom, half, terrain}
   let satGen = 0;
   let splatOpacity = 1;
   const satAvailable = () =>
@@ -606,21 +610,10 @@ async function main() {
     const tex = new THREE.CanvasTexture(mosaic);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    const geom = new THREE.RingGeometry(0, half, 128, 16);
-    const pos = geom.attributes.position;
-    const uv = geom.attributes.uv;
-    const rgb = new Float32Array(pos.count * 3);
-    for (let i = 0; i < pos.count; i++) {
-      uv.setXY(i, ...layout.uv(pos.getX(i), pos.getY(i)));
-      const r = Math.hypot(pos.getX(i), pos.getY(i)) / half;
-      rgb.fill(Math.min(1, Math.max(0, (1 - r) / 0.25)), 3 * i, 3 * i + 3);
-    }
-    geom.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
     const mesh = new THREE.Mesh(
-      geom,
+      drape(new THREE.RingGeometry(0, half, 128, 16), layout, half),
       new THREE.MeshBasicMaterial({ map: tex, vertexColors: true }),
     );
-    mesh.position.z = ground.map;
     mesh.visible = false; // until a tile arrives
     groundScene.add(mesh);
     sat = {
@@ -630,8 +623,48 @@ async function main() {
       failed: 0,
       total: layout.tiles.length,
       zoom: layout.z,
+      half,
+      terrain: { state: 'loading' },
     };
     const s = sat;
+    placeMap();
+    loadTerrain(meta.origin, half).then(
+      (terrain) => {
+        if (gen !== satGen) return;
+        const g = terrain.geometry(half);
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.BufferAttribute(g.positions, 3));
+        geom.setIndex(new THREE.BufferAttribute(g.indices, 1));
+        mesh.geometry.dispose();
+        mesh.geometry = drape(geom, layout, half);
+        const offset = terrainOffset(
+          ground,
+          (x, y) => terrain.heightAt(x, y),
+          trim?.centre ?? [0, 0],
+          trim?.initial ?? half / 5,
+        );
+        s.terrain = {
+          state: 'ready',
+          terrain,
+          offset,
+          triangles: g.indices.length / 3,
+        };
+        console.log(
+          `terrain level ${terrain.level}, ${s.terrain.triangles} triangles; splat ground - ` +
+            `terrain: ${offset ? `${offset.median.toFixed(2)} m over ${offset.count} cells` : 'n/a'}`,
+        );
+        placeMap();
+        updateSatellite();
+      },
+      (err) => {
+        if (gen !== satGen) return;
+        // fetch rejects with a TypeError when offline or blocked
+        const reason =
+          err instanceof TypeError ? 'offline, or blocked by the network' : err.message;
+        s.terrain = { state: 'failed', reason };
+        updateSatellite();
+      },
+    );
     const queue = [...layout.tiles.entries()];
     const one = async ([k, [x, y]]) => {
       const img = new Image();
@@ -668,6 +701,59 @@ async function main() {
     });
   }
 
+  // map UVs (Web Mercator pixels of the imagery mosaic) and the rim fade, from ENU positions
+  function drape(geom, layout, half) {
+    const pos = geom.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    const rgb = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      uv.set(layout.uv(pos.getX(i), pos.getY(i)), 2 * i);
+      const r = Math.hypot(pos.getX(i), pos.getY(i)) / half;
+      rgb.fill(Math.min(1, Math.max(0, (1 - r) / 0.25)), 3 * i, 3 * i + 3);
+    }
+    geom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geom.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+    return geom;
+  }
+
+  const terrainOn = () => satAvailable() && settings.satellite && sat?.terrain.state === 'ready';
+  // the terrain's shift onto the splat (the median offset over the trim circle), when aligned
+  const terrainShift = () =>
+    settings.alignTerrain && sat?.terrain.offset ? sat.terrain.offset.median : 0;
+  function placeMap() {
+    if (sat) sat.mesh.position.z = sat.terrain.state === 'ready' ? terrainShift() : ground.map;
+  }
+  // the camera limit's ground: the terrain where loaded (raised to the splat's own ground
+  // estimate inside its grid), else the splat's estimate
+  function groundHeight(x, y) {
+    const g = ground ? groundAt(ground, x, y, false) : NaN;
+    if (terrainOn()) {
+      const t = sat.terrain.terrain.heightAt(x, y) + terrainShift();
+      if (Number.isFinite(t)) return Number.isFinite(g) ? Math.max(g, t) : t;
+    }
+    return Number.isFinite(g) ? g : ground ? ground.ground : -Infinity;
+  }
+
+  function terrainNote() {
+    const t = sat.terrain;
+    if (t.state === 'loading') return ' Loading terrain…';
+    const flat =
+      `flat at ${metresText(ground.map)}` +
+      (meta.origin.alt_amsl != null
+        ? ` (${(meta.origin.alt_amsl + ground.map).toFixed(0)} m AMSL)`
+        : '') +
+      ', a ground estimate from the splat.';
+    if (t.state === 'failed') return ` No terrain (${t.reason}): the map is ${flat}`;
+    const o = t.offset;
+    if (!o) return ` ${TERRAIN_CREDIT} terrain (level ${t.terrain.level}).`;
+    const d = Math.abs(o.median);
+    const rel = `${d.toFixed(1)} m ${o.median >= 0 ? 'below' : 'above'} the splat ground`;
+    return (
+      ` ${TERRAIN_CREDIT} terrain: ${rel} over the trim circle` +
+      (settings.alignTerrain ? `, shifted ${o.median >= 0 ? 'up' : 'down'} to match.` : '.')
+    );
+  }
+
   function updateSatellite() {
     const avail = satAvailable();
     $('satellite-controls').hidden = !avail;
@@ -675,23 +761,21 @@ async function main() {
     if (avail && settings.satellite && !sat) buildSatellite();
     const on = avail && settings.satellite && sat?.state !== 'failed';
     $('splat-opacity-label').hidden = !on;
+    $('align-label').hidden = !(on && sat?.terrain.offset);
+    $('set-align').checked = settings.alignTerrain;
     let note = '';
     if (avail && settings.satellite && sat) {
       if (sat.state === 'failed')
         note = 'Satellite imagery could not be loaded (offline, or blocked by the network).';
       else if (sat.state === 'loading')
         note = `Loading imagery ${sat.loaded} of ${sat.total} tiles…`;
-      else
-        note =
-          `Map plane at ${metresText(ground.map)}` +
-          (meta.origin.alt_amsl != null
-            ? ` (${(meta.origin.alt_amsl + ground.map).toFixed(0)} m AMSL)`
-            : '') +
-          `, a ground estimate from the splat (no terrain).` +
-          (sat.failed ? ` ${sat.failed} of ${sat.total} tiles failed.` : '');
+      else note = sat.failed ? `${sat.failed} of ${sat.total} imagery tiles failed.` : '';
+      if (sat.state !== 'failed') note = (note + terrainNote()).trim();
     }
     $('satellite-note').textContent = note;
     satCredit.hidden = !satVisible();
+    satCredit.textContent =
+      `Imagery: ${SAT_CREDIT}` + (terrainOn() ? ` · Terrain: ${TERRAIN_CREDIT}` : '') + ' · ';
     const op = on ? splatOpacity : 1;
     if (mesh) mesh.opacity = thermal ? 1 : op; // thermal: faded in the post pass, values kept
     if (post) post.material.uniforms.op.value = op;
@@ -706,6 +790,17 @@ async function main() {
           zoom: sat?.zoom ?? null,
           height: ground.map,
           opacity: op,
+          terrain: sat
+            ? {
+                state: sat.terrain.state,
+                reason: sat.terrain.reason,
+                level: sat.terrain.terrain?.level,
+                triangles: sat.terrain.triangles,
+                offset: sat.terrain.offset?.median,
+                cells: sat.terrain.offset?.count,
+                shift: terrainShift(),
+              }
+            : null,
         }
       : null;
     needSplat = needPost = true;
@@ -718,6 +813,12 @@ async function main() {
     // on: the splat starts opaque
     splatOpacity = 1;
     $('splat-opacity').value = '100';
+    updateSatellite();
+  };
+  $('set-align').onchange = () => {
+    settings.alignTerrain = $('set-align').checked;
+    saveSettings(store, settings);
+    placeMap();
     updateSatellite();
   };
   $('splat-opacity').oninput = () => {

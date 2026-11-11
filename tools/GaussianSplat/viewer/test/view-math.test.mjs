@@ -91,6 +91,7 @@ test('groundGrid: low percentile per cell, trees above a flat ground at 12 m', (
   assert.ok(Math.abs(groundAt(g, 30, -40) - 12) < 0.5);
   assert.equal(groundAt(g, 1e6, 0), g.ground); // outside the grid
   assert.equal(groundAt(null, 0, 0), -Infinity);
+  assert.ok(Number.isNaN(groundAt(g, 1e6, 0, false)));
   assert.equal(groundGrid([], [], [], [0, 0], 10), null);
 });
 
@@ -164,6 +165,7 @@ test('settings: defaults, round trip, bad or blocked storage', () => {
     level: false,
     trim: true,
     satellite: true,
+    alignTerrain: true, // not saved: the default
     panel: 'collapsed',
   });
   mem.set(SETTINGS_KEY, '{not json');

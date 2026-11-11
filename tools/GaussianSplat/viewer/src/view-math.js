@@ -4,7 +4,13 @@
 export const EARTH_RADIUS = 6378137; // splat_common.LocalFrame
 export const MIN_PITCH_DEG = 5; // horizon-level orbit: the camera stays this far above the target's horizon
 export const SETTINGS_KEY = 'apcg-splat-viewer';
-export const DEFAULT_SETTINGS = { level: true, trim: true, satellite: false, panel: null };
+export const DEFAULT_SETTINGS = {
+  level: true,
+  trim: true,
+  satellite: false,
+  alignTerrain: true,
+  panel: null,
+};
 
 const finite = (x) => typeof x === 'number' && Number.isFinite(x);
 
@@ -16,7 +22,8 @@ export function loadSettings(storage) {
     s = {};
   }
   const out = { ...DEFAULT_SETTINGS };
-  for (const k of ['level', 'trim', 'satellite']) if (typeof s[k] === 'boolean') out[k] = s[k];
+  for (const k of ['level', 'trim', 'satellite', 'alignTerrain'])
+    if (typeof s[k] === 'boolean') out[k] = s[k];
   if (s.panel === 'open' || s.panel === 'collapsed') out.panel = s.panel;
   return out;
 }
@@ -105,14 +112,14 @@ export function groundGrid(xs, ys, zs, centre, radius, { cells = 16, minCount = 
   return { x0, y0, cell, cells, h, ground };
 }
 
-// ground height under (x, y): its cell, else the overall ground
-export function groundAt(grid, x, y) {
+// ground height under (x, y): its cell, else the overall ground (NaN without fallback)
+export function groundAt(grid, x, y, fallback = true) {
   if (!grid) return -Infinity;
   const cx = Math.floor((x - grid.x0) / grid.cell);
   const cy = Math.floor((y - grid.y0) / grid.cell);
   const v =
     cx >= 0 && cy >= 0 && cx < grid.cells && cy < grid.cells ? grid.h[cy * grid.cells + cx] : NaN;
-  return Number.isFinite(v) ? v : grid.ground;
+  return Number.isFinite(v) ? v : fallback ? grid.ground : NaN;
 }
 
 // horizon-level limits for a camera at pos looking at target ([x, y, z], z up): at least

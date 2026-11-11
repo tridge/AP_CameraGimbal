@@ -170,9 +170,15 @@ mouse. The gear opens view settings, kept in the browser's local storage:
   `trim_centre` (else the target), with a radius slider. Files without the fields get an
   estimate: 0.85 times the horizontal distance at which the density of Gaussians drops off.
 - Satellite map below, for splats with an `origin`: Esri World Imagery (as the video viewer's
-  3D map, same credit) on a flat disc at a low ground estimate, drawn under the splat, with a
-  splat opacity slider. There is no terrain, and the imagery's own registration error remains;
-  without network access the option reports that the tiles could not be loaded.
+  3D map, same credit) draped on the video viewer's terrain, plot.ardupilot.org/quantized/
+  (SRTM, heights AMSL, so z = height - `origin.alt_amsl`), drawn under the splat, with a splat
+  opacity slider. Tiles are fetched only when the map is turned on, at the finest level that
+  layer.json says is available. The settings note gives the median offset between the splat's
+  ground estimate and the terrain over the trim circle, and "Align terrain to the splat" (on by
+  default) shifts the terrain by it, for SfM or altitude drift. Without terrain (offline,
+  blocked or no coverage) the map is a flat disc at a low ground estimate from the splat; the
+  note says which. The horizon-level camera limit also keeps above the terrain when it is
+  loaded.
 
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
