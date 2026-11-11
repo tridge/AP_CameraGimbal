@@ -12,6 +12,17 @@ EARTH_RADIUS = 6378137.0
 # OpenCV camera axes (x right, y down, z forward) expressed in body FRD axes
 R_BODY_CAM = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=float)
 R_ENU_NED = np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]], dtype=float)
+# the viewer's circular trim, this fraction of the radius beyond which training prunes Gaussians
+TRIM_FRACTION = 0.85
+
+
+def trim_info(bounds):
+    """apcg_splat trim fields from training bounds {centre: [x, y], radius}: the fringe just inside
+    the pruning radius is the poorly constrained part."""
+    if not bounds or not bounds.get('radius'):
+        return {}
+    return dict(trim_centre=[float(c) for c in bounds['centre'][:2]],
+                trim_radius=TRIM_FRACTION * float(bounds['radius']))
 
 
 def setup_cuda_env():

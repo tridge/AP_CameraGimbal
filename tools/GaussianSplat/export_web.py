@@ -31,7 +31,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from splat_common import fatal, setup_cuda_env  # noqa: E402
+from splat_common import fatal, setup_cuda_env, trim_info  # noqa: E402
 
 WEB = Path(__file__).resolve().parent / 'viewer'
 
@@ -163,7 +163,8 @@ def main():
                 title=args.title or ' '.join(parts),
                 description=desc.read_text().strip() if desc.exists() else '',
                 camera=start_camera(ckpt, target), up=[0, 0, 1], target=target.tolist(),
-                origin=meta.get('origin'), rasterize_mode='classic')  # train.py, train_rgb.py: gsplat classic
+                origin=meta.get('origin'), rasterize_mode='classic',  # train.py, train_rgb.py: gsplat classic
+                **trim_info(meta.get('bounds')))  # scale.json bounds: the viewer's trim circle
     if not rgb:
         ts = meta['temperature_scale']
         if ts.get('kind', 'log1p') != 'log1p':

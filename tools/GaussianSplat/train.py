@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from splat_common import fatal, setup_cuda_env, triangulate_rays
+from splat_common import fatal, setup_cuda_env, triangulate_rays, trim_info
 
 setup_cuda_env()
 import torch  # noqa: E402
@@ -308,7 +308,8 @@ def init_params(scene, args, device):
 def save_ply(path, params, sh0, shN, info=None):
     """Standard 3DGS PLY. info goes in a header comment for the browser viewer (viewer/): kind,
     up axis, orbit target, rasterize_mode (gsplat 'classic': the viewer renders without mip
-    opacity compensation) and, for thermal splats, the temperature scale."""
+    opacity compensation), the trim circle (trim_info) and, for thermal splats, the temperature
+    scale."""
     from plyfile import PlyData, PlyElement
     means = params['means'].detach().cpu().numpy()
     sh0 = sh0.detach().cpu().numpy()[:, 0, :]
@@ -659,7 +660,8 @@ def main():
         sh0, shN = bake_lobe_into_sh(params, args.sh_degree)
     save_ply(out / 'splat.ply', params, sh0, shN, info=dict(
         kind='thermal', up=[0, 0, 1], target=(hotspot or {}).get('enu', scene['info']['target_enu']),
-        temperature_scale=scene['scale'].todict(), origin=scene['info']['origin'], rasterize_mode='classic'))
+        temperature_scale=scene['scale'].todict(), origin=scene['info']['origin'], rasterize_mode='classic',
+        **trim_info(bounds)))
     save_ply(out / 'splat_color.ply', params, *colormap_sh(sh0, shN, args.colormap))
     print('wrote %s (%d gaussians) in %.0f s' % (out, len(params['means']), time.time() - t_start))
 

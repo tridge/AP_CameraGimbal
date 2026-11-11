@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from splat_common import fatal, import_pycolmap, setup_cuda_env  # noqa: E402
+from splat_common import fatal, import_pycolmap, setup_cuda_env, trim_info  # noqa: E402
 
 setup_cuda_env()
 import torch  # noqa: E402
@@ -236,15 +236,17 @@ def main():
                    heldout_psnr_db=float(np.mean(psnr)) if psnr else None, seconds=time.time() - t0)
     (out / 'metrics.json').write_text(json.dumps(metrics, indent=1))
     frames_info = json.loads((args.workdir / 'frames.json').read_text())
+    bounds = dict(centre=centre[:2].tolist(), radius=args.radius)  # Gaussians beyond it were pruned
     save_ply(out / 'splat.ply', params, params['sh0'], params['shN'], info=dict(
         kind='rgb', up=[0, 0, 1], target=frames_info.get('target_enu', centre.tolist()), origin=frames_info.get('origin'),
-        rasterize_mode='classic'))
+        rasterize_mode='classic', **trim_info(bounds)))
     # checkpoint for view_splat.py / splat_site.py
     torch.save(dict(params={k: v.detach().cpu() for k, v in params.items()}, sh_degree=args.sh_degree,
                     viewmats=viewmats.cpu(), K=Kt[0].cpu(), width=W, height=H, names=[im.name for im in images],
                     test=sorted(images[i].name for i in test)), out / 'splat.pt')
     (out / 'scale.json').write_text(json.dumps(dict(kind='rgb', target_enu=frames_info.get('target_enu', centre.tolist()),
-                                                    origin=frames_info.get('origin'), gaussians=len(params['means']),
+                                                    origin=frames_info.get('origin'), bounds=bounds,
+                                                    gaussians=len(params['means']),
                                                     heldout_psnr_db=metrics['heldout_psnr_db']), indent=1))
     print('held-out PSNR %.2f dB over %d views; wrote %s (%d gaussians) in %.0f s' % (
         metrics['heldout_psnr_db'] or 0, len(test), out, len(params['means']), metrics['seconds']))
