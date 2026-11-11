@@ -169,7 +169,7 @@ mouse. The gear opens view settings, kept in the browser's local storage:
 - Trim to a circle (on by default): hides the Gaussians outside `trim_radius` about
   `trim_centre` (else the target), with a radius slider. Files without the fields get an
   estimate: 0.85 times the horizontal distance at which the density of Gaussians drops off.
-- Satellite map below, for splats with an `origin`: Esri World Imagery (as the video viewer's
+- Satellite map below (on by default), for splats with an `origin`: Esri World Imagery (as the video viewer's
   3D map, same credit) on the video viewer's terrain, plot.ardupilot.org/quantized/ (SRTM,
   heights AMSL, so z = height - `origin.alt_amsl`), out to 25 km with earth curvature, under a
   sky with distance haze (darker for thermal splats); the splat itself is drawn over it
@@ -177,7 +177,7 @@ mouse. The gear opens view settings, kept in the browser's local storage:
   quadtree about the origin: the finest zoom (up to 18) over the splat, one zoom coarser per
   doubling of distance (about 100 to 150 imagery tiles), each on terrain of a matching level
   (about 20 to 25 terrain tiles, the finest that layer.json says is available), with skirts
-  against cracks. They are fetched only when the map is turned on, nearest first. A splat
+  against cracks. They are fetched only while the map is on, nearest first. A splat
   opacity slider fades the splat. The settings note gives the median offset between the splat's
   ground estimate and the terrain over the trim circle, and "Align terrain to the splat" (on by
   default) shifts the terrain by it, for SfM or altitude drift. Without terrain (offline,

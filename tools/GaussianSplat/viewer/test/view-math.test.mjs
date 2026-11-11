@@ -133,11 +133,11 @@ test('settings: defaults, round trip, bad or blocked storage', () => {
   const mem = new Map();
   const storage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
   assert.deepEqual(loadSettings(storage), DEFAULT_SETTINGS);
-  saveSettings(storage, { level: false, trim: true, satellite: true, panel: 'collapsed' });
+  saveSettings(storage, { level: false, trim: true, satellite: false, panel: 'collapsed' });
   assert.deepEqual(loadSettings(storage), {
     level: false,
     trim: true,
-    satellite: true,
+    satellite: false,
     alignTerrain: true, // not saved: the default
     panel: 'collapsed',
   });

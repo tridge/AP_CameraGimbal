@@ -7,7 +7,7 @@ export const SETTINGS_KEY = 'apcg-splat-viewer';
 export const DEFAULT_SETTINGS = {
   level: true,
   trim: true,
-  satellite: false,
+  satellite: true,
   alignTerrain: true,
   panel: null,
 };
