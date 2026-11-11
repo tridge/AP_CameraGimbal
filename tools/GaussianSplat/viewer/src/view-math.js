@@ -1,5 +1,5 @@
 // Pure helpers for the viewer (no three.js or DOM): trim circle and ground estimates, camera
-// limits, satellite tile layout and the stored settings. Unit tested in test/view-math.test.mjs.
+// limits, ENU to latitude and longitude and the stored settings. Unit tested in test/view-math.test.mjs.
 
 export const EARTH_RADIUS = 6378137; // splat_common.LocalFrame
 export const MIN_PITCH_DEG = 5; // horizon-level orbit: the camera stays this far above the target's horizon
@@ -158,43 +158,4 @@ export function enuToLatLon(origin, e, n) {
   const lon =
     origin.lon + ((e / (EARTH_RADIUS * Math.cos((origin.lat * Math.PI) / 180))) * 180) / Math.PI;
   return [lat, lon];
-}
-
-// Web Mercator pixel (256 px tiles) of a point at zoom z
-export function mercatorPixel(lat, lon, z) {
-  const s = 256 * 2 ** z;
-  const phi = (Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI) / 180;
-  return [
-    ((lon + 180) / 360) * s,
-    ((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * s,
-  ];
-}
-
-// the tiles that cover a square of half size `half` m about origin, at the finest zoom whose
-// mosaic fits maxPx; uv(e, n) maps ENU metres to mosaic texture coordinates (v up)
-export function tileLayout(origin, half, { maxPx = 2048, maxZoom = 18, minZoom = 1 } = {}) {
-  const mpp0 = (2 * Math.PI * EARTH_RADIUS * Math.cos((origin.lat * Math.PI) / 180)) / 256;
-  let z = Math.floor(Math.log2((mpp0 * maxPx) / (2 * half)));
-  z = Math.max(minZoom, Math.min(maxZoom, z));
-  const corner = (e, n) => mercatorPixel(...enuToLatLon(origin, e, n), z);
-  const [left, top] = corner(-half, half);
-  const [right, bottom] = corner(half, -half);
-  const tx0 = Math.floor(left / 256);
-  const ty0 = Math.floor(top / 256);
-  const nx = Math.floor(right / 256) - tx0 + 1;
-  const ny = Math.floor(bottom / 256) - ty0 + 1;
-  const w = nx * 256;
-  const h = ny * 256;
-  const tiles = [];
-  for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) tiles.push([tx0 + x, ty0 + y]);
-  return {
-    z,
-    tiles,
-    width: w,
-    height: h,
-    uv(e, n) {
-      const [px, py] = corner(e, n);
-      return [(px - tx0 * 256) / w, 1 - (py - ty0 * 256) / h];
-    },
-  };
 }

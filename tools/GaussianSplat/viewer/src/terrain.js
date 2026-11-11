@@ -50,19 +50,12 @@ export function tileXY(z, lat, lon) {
   ];
 }
 
-// the finest level whose tiles over a square of half size `half` m about origin are all available
-// and at most maxTiles; null if none at minZoom or finer
-export function chooseTiles(origin, half, layer, { maxTiles = 16, minZoom = 6 } = {}) {
-  const [south, west] = enuToLatLon(origin, -half, -half);
-  const [north, east] = enuToLatLon(origin, half, half);
-  for (let z = layer.maxzoom; z >= minZoom; z--) {
-    const [x0, y0] = tileXY(z, south, west);
-    const [x1, y1] = tileXY(z, north, east);
-    const tiles = [];
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles.push([x, y]);
-    if (tiles.length <= maxTiles && tiles.every(([x, y]) => layer.available(z, x, y)))
-      return { z, tiles };
-  }
+// the level for a ground resolution: a terrain tile (65 x 65 vertices on the plot terrain) about
+// `span` metres across, coarser where layer.json has no tile there; null if none
+export function terrainLevel(layer, lat, lon, span) {
+  let z = Math.round(Math.log2((180 * DEG * EARTH_RADIUS) / Math.max(span, 1)));
+  z = Math.max(0, Math.min(layer.maxzoom, z));
+  for (; z >= 0; z--) if (layer.available(z, ...tileXY(z, lat, lon))) return z;
   return null;
 }
 
@@ -120,53 +113,61 @@ function cached(url, load) {
   return memo.get(url);
 }
 
-// terrain around origin, or a rejection with the reason; fetchFn(url) -> Response
-export async function loadTerrain(origin, half, { url = TERRAIN_URL, fetchFn = fetch } = {}) {
-  const get = async (u) => {
-    const r = await fetchFn(u);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r;
-  };
-  const layer = await cached(new URL('layer.json', url).href, async (u) =>
-    parseLayer(await (await get(u)).json()),
-  );
-  const choice = chooseTiles(origin, half, layer);
-  if (!choice) throw new Error('no terrain coverage here');
-  const tiles = await Promise.all(
-    choice.tiles.map(async ([x, y]) => {
-      const path = layer.tiles.replace('{z}', choice.z).replace('{x}', x).replace('{y}', y);
-      const data = await cached(new URL(path, url).href, async (u) =>
-        decodeQuantizedMesh(await (await get(u)).arrayBuffer()),
-      );
-      const r = tileRect(choice.z, x, y);
-      return {
-        x,
-        y,
-        rect: r,
-        data,
-        sampler: meshSampler(data),
-        radians: {
-          west: r.west * DEG,
-          south: r.south * DEG,
-          width: (r.east - r.west) * DEG,
-          height: (r.north - r.south) * DEG,
-        },
-      };
-    }),
-  );
-  return new Terrain(origin, choice.z, tiles);
+async function get(fetchFn, u) {
+  const r = await fetchFn(u);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r;
 }
 
+// layer.json, parsed; fetchFn(url) -> Response
+export function openLayer(url = TERRAIN_URL, fetchFn = fetch) {
+  return cached(new URL('layer.json', url).href, async (u) =>
+    parseLayer(await (await get(fetchFn, u)).json()),
+  );
+}
+
+// one tile: {key, level, x, y, rect (degrees), data, sampler}
+export function loadTile(layer, z, x, y, url = TERRAIN_URL, fetchFn = fetch) {
+  const path = layer.tiles.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  return cached(new URL(path, url).href, async (u) => {
+    const data = decodeQuantizedMesh(await (await get(fetchFn, u)).arrayBuffer());
+    const rect = tileRect(z, x, y);
+    return {
+      key: `${z}/${x}/${y}`,
+      level: z,
+      x,
+      y,
+      rect,
+      data,
+      sampler: meshSampler(data),
+      radians: {
+        west: rect.west * DEG,
+        south: rect.south * DEG,
+        width: (rect.east - rect.west) * DEG,
+        height: (rect.north - rect.south) * DEG,
+      },
+    };
+  });
+}
+
+// the loaded tiles about origin, of mixed levels: heights from the finest tile holding a point
 export class Terrain {
-  constructor(origin, level, tiles) {
+  constructor(origin, tiles = []) {
     this.origin = origin;
-    this.level = level;
-    this.tiles = tiles;
+    this.tiles = [];
+    for (const t of tiles) this.add(t);
   }
 
-  // AMSL height at a point, NaN outside the tiles
-  amsl(lat, lon) {
+  add(tile) {
+    if (this.tiles.some((t) => t.key === tile.key)) return;
+    this.tiles.push(tile);
+    this.tiles.sort((a, b) => b.level - a.level);
+  }
+
+  // AMSL height at a point, NaN outside the tiles; minLevel: only tiles at least this fine
+  amsl(lat, lon, minLevel = 0) {
     for (const t of this.tiles) {
+      if (t.level < minLevel) break;
       const r = t.rect;
       if (lat < r.south || lat > r.north || lon < r.west || lon > r.east) continue;
       const h = t.sampler.sample(t.radians, lon * DEG, lat * DEG);
@@ -175,37 +176,9 @@ export class Terrain {
     return NaN;
   }
 
-  // splat-frame height (ENU z, above the takeoff altitude) at ENU (e, n)
-  heightAt(e, n) {
-    return this.amsl(...enuToLatLon(this.origin, e, n)) - this.origin.alt_amsl;
-  }
-
-  // the tiles' triangles with a vertex within radius of the origin, in ENU:
-  // {positions: Float32Array xyz, indices: Uint32Array}
-  geometry(radius) {
-    const pos = [];
-    const idx = [];
-    const S = 32767;
-    for (const t of this.tiles) {
-      const d = t.data;
-      const { west, south, east, north } = t.rect;
-      const base = pos.length / 3;
-      const inside = new Uint8Array(d._uValues.length);
-      for (let i = 0; i < d._uValues.length; i++) {
-        const lon = west + ((east - west) * d._uValues[i]) / S;
-        const lat = south + ((north - south) * d._vValues[i]) / S;
-        const [e, n] = latLonToEnu(this.origin, lat, lon);
-        const h =
-          d._minimumHeight + ((d._maximumHeight - d._minimumHeight) * d._heightValues[i]) / S;
-        pos.push(e, n, h - this.origin.alt_amsl);
-        inside[i] = Math.hypot(e, n) <= radius ? 1 : 0;
-      }
-      const ix = d._indices;
-      for (let i = 0; i < ix.length; i += 3)
-        if (inside[ix[i]] || inside[ix[i + 1]] || inside[ix[i + 2]])
-          idx.push(base + ix[i], base + ix[i + 1], base + ix[i + 2]);
-    }
-    return { positions: Float32Array.from(pos), indices: Uint32Array.from(idx) };
+  // splat-frame height (ENU z, above the takeoff altitude) at ENU (e, n), no curvature
+  heightAt(e, n, minLevel = 0) {
+    return this.amsl(...enuToLatLon(this.origin, e, n), minLevel) - this.origin.alt_amsl;
   }
 }
 

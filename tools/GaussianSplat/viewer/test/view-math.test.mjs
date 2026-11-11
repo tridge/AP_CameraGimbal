@@ -11,9 +11,7 @@ import {
   groundAt,
   groundGrid,
   loadSettings,
-  mercatorPixel,
   saveSettings,
-  tileLayout,
   trimFromMeta,
 } from '../src/view-math.js';
 
@@ -124,36 +122,11 @@ test('dollyDistance: 0.75 per step within limits', () => {
   assert.equal(dollyDistance(1000, false, 0, 1200), 1200);
 });
 
-test('enuToLatLon and tileLayout: corners map to the mosaic', () => {
+test('enuToLatLon: metres north and east of the origin', () => {
   const origin = { lat: -35.5799, lon: 148.9066 };
   const [lat, lon] = enuToLatLon(origin, 1000, 500);
   assert.ok(Math.abs(lat - origin.lat - ((500 / 6378137) * 180) / Math.PI) < 1e-12);
   assert.ok(lon > origin.lon);
-  const L = tileLayout(origin, 600);
-  assert.ok(L.width <= 2048 + 256 && L.height <= 2048 + 256);
-  assert.equal(L.tiles.length, (L.width / 256) * (L.height / 256));
-  for (const [e, n] of [
-    [-600, 600],
-    [600, -600],
-    [0, 0],
-  ]) {
-    const [u, v] = L.uv(e, n);
-    assert.ok(u > 0 && u < 1 && v > 0 && v < 1, `${e},${n}: ${u},${v}`);
-  }
-  // east is +u, north is +v
-  assert.ok(L.uv(10, 0)[0] > L.uv(0, 0)[0]);
-  assert.ok(L.uv(0, 10)[1] > L.uv(0, 0)[1]);
-  // metres per texel near the requested size
-  const [u0] = L.uv(0, 0);
-  const [u1] = L.uv(100, 0);
-  const mpp = 100 / ((u1 - u0) * L.width);
-  assert.ok(mpp > (2 * 600) / 2048 / 1.01 && mpp < (4 * 600) / 2048, `mpp ${mpp}`);
-});
-
-test('mercatorPixel: zoom 0 corners and centre', () => {
-  assert.deepEqual(mercatorPixel(0, 0, 0), [128, 128]);
-  const [x, y] = mercatorPixel(85.05112878, -180, 0);
-  assert.ok(Math.abs(x) < 1e-9 && Math.abs(y) < 1e-6);
 });
 
 test('settings: defaults, round trip, bad or blocked storage', () => {

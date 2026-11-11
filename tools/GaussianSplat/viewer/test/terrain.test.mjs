@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Terrain,
-  chooseTiles,
   decodeQuantizedMesh,
   latLonToEnu,
-  loadTerrain,
+  loadTile,
+  openLayer,
   parseLayer,
+  terrainLevel,
   terrainOffset,
   tileRect,
   tileXY,
@@ -93,22 +94,17 @@ const layer = (avail) => ({
   available: avail,
 });
 
-test('chooseTiles: the finest available level within the tile budget', () => {
+test('terrainLevel: about the requested span, coarser where unavailable', () => {
   const all = Array.from({ length: 13 }, (_, z) => [
     { startX: 0, startY: 0, endX: 2 ** (z + 1) - 1, endY: 2 ** z - 1 },
   ]);
   const L = parseLayer(layer(all));
-  const c = chooseTiles(ORIGIN, 600, L);
-  assert.equal(c.z, 12);
-  assert.ok(c.tiles.length >= 1 && c.tiles.length <= 4);
-  // a disc much larger than a tile: coarser
-  assert.ok(chooseTiles(ORIGIN, 40000, L).z < 12);
-  // level 12 missing here: level 11
-  const holes = all.map((r, z) => (z === 12 ? [{ startX: 0, startY: 0, endX: 10, endY: 10 }] : r));
-  assert.equal(chooseTiles(ORIGIN, 600, parseLayer(layer(holes))).z, 11);
-  // nothing near: null
-  const none = all.map((r, z) => (z >= 6 ? [] : r));
-  assert.equal(chooseTiles(ORIGIN, 600, parseLayer(layer(none))), null);
+  assert.equal(terrainLevel(L, ORIGIN.lat, ORIGIN.lon, 500), 12); // capped at maxzoom
+  assert.equal(terrainLevel(L, ORIGIN.lat, ORIGIN.lon, 4 * 4892), 10); // level 12 tiles are 4.9 km
+  assert.equal(terrainLevel(L, ORIGIN.lat, ORIGIN.lon, 64000), 8);
+  const holes = all.map((r, z) => (z >= 11 ? [] : r));
+  assert.equal(terrainLevel(parseLayer(layer(holes)), ORIGIN.lat, ORIGIN.lon, 500), 10);
+  assert.equal(terrainLevel(parseLayer(layer(all.map(() => []))), 0, 0, 500), null);
   assert.throws(() => parseLayer({ format: 'x' }));
 });
 
@@ -118,38 +114,41 @@ test('latLonToEnu inverts enuToLatLon', () => {
   assert.ok(Math.abs(e - 1234.5) < 1e-6 && Math.abs(n + 678.9) < 1e-6);
 });
 
-test('Terrain: heights in the splat frame (AMSL - origin.alt_amsl) and clipped geometry', () => {
-  const [x, y] = tileXY(12, ORIGIN.lat, ORIGIN.lon);
-  const rect = tileRect(12, x, y);
-  // a slope rising 100 m west to east across the tile
-  const data = decodeQuantizedMesh(tile(17, (u) => 950 + 100 * u));
+function tileAt(z, fn) {
+  const [x, y] = tileXY(z, ORIGIN.lat, ORIGIN.lon);
+  const rect = tileRect(z, x, y);
+  const data = decodeQuantizedMesh(tile(17, fn, 0, 3000));
   const DEG = Math.PI / 180;
-  const t = new Terrain(ORIGIN, 12, [
-    {
-      rect,
-      data,
-      sampler: meshSampler(data),
-      radians: {
-        west: rect.west * DEG,
-        south: rect.south * DEG,
-        width: (rect.east - rect.west) * DEG,
-        height: (rect.north - rect.south) * DEG,
-      },
+  return {
+    key: `${z}/${x}/${y}`,
+    level: z,
+    rect,
+    data,
+    sampler: meshSampler(data),
+    radians: {
+      west: rect.west * DEG,
+      south: rect.south * DEG,
+      width: (rect.east - rect.west) * DEG,
+      height: (rect.north - rect.south) * DEG,
     },
-  ]);
-  const u = (ORIGIN.lon - rect.west) / (rect.east - rect.west);
+  };
+}
+
+test('Terrain: heights in the splat frame (AMSL - origin.alt_amsl), finest tile first', () => {
+  const fine = tileAt(12, (u) => 950 + 100 * u); // a slope rising 100 m west to east
+  const coarse = tileAt(10, () => 2000);
+  const t = new Terrain(ORIGIN, [coarse, fine]);
+  const u = (ORIGIN.lon - fine.rect.west) / (fine.rect.east - fine.rect.west);
   assert.ok(Math.abs(t.heightAt(0, 0) - (950 + 100 * u - ORIGIN.alt_amsl)) < 0.05);
-  assert.ok(Number.isNaN(t.heightAt(1e5, 0))); // outside the tile
-  const g = t.geometry(300);
-  assert.ok(g.indices.length > 0 && g.indices.length < data._indices.length);
-  let checked = 0;
-  for (let i = 0; i < g.positions.length; i += 3) {
-    const h = t.heightAt(g.positions[i], g.positions[i + 1]);
-    if (!Number.isFinite(h)) continue; // on the tile edge after float32 rounding
-    assert.ok(Math.abs(g.positions[i + 2] - h) < 0.05);
-    checked++;
-  }
-  assert.ok(checked > 0.8 * (g.positions.length / 3));
+  // beyond the fine tile, the coarse one
+  const lon =
+    fine.rect.east + 0.0005 < coarse.rect.east ? fine.rect.east + 0.0005 : fine.rect.west - 0.0005;
+  const [w] = latLonToEnu(ORIGIN, ORIGIN.lat, lon);
+  assert.ok(Math.abs(t.heightAt(w, 0) - (2000 - ORIGIN.alt_amsl)) < 0.05);
+  assert.ok(Number.isNaN(t.heightAt(1e6, 0)));
+  assert.ok(Number.isNaN(t.heightAt(w, 0, 12))); // only tiles at level 12 or finer
+  t.add(fine); // no duplicates
+  assert.equal(t.tiles.length, 2);
 });
 
 test('terrainOffset: median of splat ground minus terrain over the circle', () => {
@@ -172,8 +171,7 @@ test('terrainOffset: median of splat ground minus terrain over the circle', () =
   );
 });
 
-test('loadTerrain: fetches layer and tiles once, reasons on failure', async () => {
-  const [x, y] = tileXY(12, ORIGIN.lat, ORIGIN.lon);
+test('openLayer / loadTile: fetched once, reasons on failure', async () => {
   const all = Array.from({ length: 13 }, (_, z) => [
     { startX: 0, startY: 0, endX: 2 ** (z + 1) - 1, endY: 2 ** z - 1 },
   ]);
@@ -184,25 +182,26 @@ test('loadTerrain: fetches layer and tiles once, reasons on failure', async () =
     return { ok: true, arrayBuffer: async () => tile(9, () => 1000) };
   };
   const url = 'https://terrain.test/q/';
-  const t = await loadTerrain(ORIGIN, 600, { url, fetchFn });
-  assert.equal(t.level, 12);
+  const L = await openLayer(url, fetchFn);
+  const [x, y] = tileXY(12, ORIGIN.lat, ORIGIN.lon);
+  const t = await loadTile(L, 12, x, y, url, fetchFn);
+  assert.equal(t.key, `12/${x}/${y}`);
   assert.ok(fetched.includes(`${url}12/${x}/${y}.terrain`));
-  assert.ok(Math.abs(t.heightAt(0, 0) - (1000 - ORIGIN.alt_amsl)) < 0.05);
+  const terrain = new Terrain(ORIGIN, [t]);
+  assert.ok(Math.abs(terrain.heightAt(0, 0) - (1000 - ORIGIN.alt_amsl)) < 0.05);
   const n = fetched.length;
-  await loadTerrain(ORIGIN, 600, { url, fetchFn });
+  await openLayer(url, fetchFn);
+  await loadTile(L, 12, x, y, url, fetchFn);
   assert.equal(fetched.length, n); // cached
   await assert.rejects(
-    loadTerrain(ORIGIN, 600, {
-      url: 'https://down.test/',
-      fetchFn: async () => ({ ok: false, status: 503 }),
-    }),
+    openLayer('https://down.test/', async () => ({ ok: false, status: 503 })),
     /HTTP 503/,
   );
-  await assert.rejects(
-    loadTerrain(ORIGIN, 600, {
-      url: 'https://empty.test/',
-      fetchFn: async () => ({ ok: true, json: async () => layer([]) }),
-    }),
-    /no terrain coverage/,
-  );
+  // a failure is not cached
+  let calls = 0;
+  const flaky = async () =>
+    ++calls === 1 ? { ok: false, status: 500 } : { ok: true, json: async () => layer(all) };
+  await assert.rejects(openLayer('https://flaky.test/', flaky));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(await openLayer('https://flaky.test/', flaky));
 });
