@@ -148,6 +148,8 @@ export function tinyDataset() {
       viewmat: v.viewmat,
     })),
     hotspot: { enu: [...TARGET], frames: 4, median_ray_error_px: 0.5 },
+    // prepare's bounds as the export reads them (the trim circle), radius 1.1 x 150 m
+    bounds: { centre: [TARGET[0], TARGET[1]], radius: 165 },
   };
 }
 

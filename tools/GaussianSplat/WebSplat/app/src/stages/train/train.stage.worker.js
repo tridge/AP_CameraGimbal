@@ -18,7 +18,7 @@ import { serveStage } from '../../workers/runtime.js';
 import { readFile, readJson, remove, writeFile, writeJson } from '../../storage/opfs.js';
 import { RGB_CAP, brushConfig, pruneTallPly, writeBrushDataset } from './brush-dataset.js';
 import { plyToWssp, wsspHeader, wsspToPly } from './params.js';
-import { apcgComment, trainInfo } from '../export/meta.js';
+import { apcgComment, trainInfo, trimInfo } from '../export/meta.js';
 import { previewPly } from './preview.js';
 
 export const TRAINER =
@@ -259,11 +259,13 @@ serveStage(async (msg, api) => {
                   target: frames.target_enu,
                   origin: frames.origin,
                   rasterize_mode: 'classic',
+                  ...trimInfo(dataset.bounds),
                 }
               : trainInfo({
                   target: dataset.hotspot?.enu ?? frames.target_enu,
                   scale: dataset.scale,
                   origin: frames.origin,
+                  trim: trimInfo(dataset.bounds),
                 });
             worker.postMessage({ type: 'exportPly', comments: [apcgComment(info)] });
             evalViews.length = 0;

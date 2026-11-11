@@ -6,7 +6,7 @@
 //   splat.spz   Spark's SPZ of splat.ply (ply2spz.mjs)
 //   meta.json   export_web.py site metadata (the PLY header info plus download sizes)
 import { greyscale, readParams, readPly, splatFromPly, writePly } from './ply.js';
-import { apcgComment, metaJson, startCamera, trainInfo, webInfo } from './meta.js';
+import { apcgComment, metaJson, startCamera, trainInfo, trimInfo, webInfo } from './meta.js';
 import { decodeSpz, encodeSpz, spzErrors } from './spz.js';
 
 // inputs from the contract files: dataset.json (5b) and frames.json (2); targetPolicy 'picked':
@@ -22,6 +22,7 @@ export function exportInputs(dataset, frames, targetPolicy = null) {
     target,
     frameMax,
     origin: frames.origin,
+    trim: trimInfo(dataset.bounds),
     scale: dataset.scale,
     hotspot: dataset.hotspot ?? null,
     views: {
@@ -43,7 +44,7 @@ export function loadSplat(bytes) {
 
 const enc = (s) => new TextEncoder().encode(s);
 
-// opts: target, origin, scale, hotspot, views (start camera) or camera, title, description,
+// opts: target, origin, trim, scale, hotspot, views (start camera) or camera, title, description,
 // rasterizeMode (default 'classic'; also clears the SPZ antialiased flag),
 // transcodeSpz (Spark; without it no SPZ), checkSpz (decode and report the SPZ error)
 export async function exportSplat(splat, opts) {
@@ -56,6 +57,7 @@ export async function exportSplat(splat, opts) {
     camera,
     target: opts.target,
     origin: opts.origin,
+    trim: opts.trim,
     scale: opts.scale,
     hotspot: opts.hotspot ?? null,
     rasterizeMode: opts.rasterizeMode,
@@ -85,8 +87,8 @@ export async function exportSplat(splat, opts) {
 }
 
 // train.py's own splat.ply (colour channels kept, the shorter header)
-export function trainPly(splat, { target, scale, origin, rasterizeMode }) {
+export function trainPly(splat, { target, scale, origin, rasterizeMode, trim }) {
   return writePly(splat, {
-    comments: [apcgComment(trainInfo({ target, scale, origin, rasterizeMode }))],
+    comments: [apcgComment(trainInfo({ target, scale, origin, rasterizeMode, trim }))],
   });
 }

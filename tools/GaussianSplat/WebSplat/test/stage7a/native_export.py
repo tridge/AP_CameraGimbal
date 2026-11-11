@@ -55,9 +55,10 @@ def main():
     origin = {k: (float(v) if k != 'frame' else v) for k, v in fr['origin'].items()}
     hotspot = dict(enu=[float(x) for x in ds['hotspot']['enu']], frames=ds['hotspot']['frames'],
                    median_ray_error_px=float(ds['hotspot']['median_ray_error_px']))
+    bounds = dict(centre=[float(x) for x in ds['bounds']['centre']], radius=float(ds['bounds']['radius']))
     (sd / 'scale.json').write_text(json.dumps(dict(
         temperature_scale=scale, origin=origin, target_enu=[float(x) for x in fr['target_enu']],
-        hotspot=hotspot), indent=1))
+        hotspot=hotspot, bounds=bounds), indent=1))
 
     py = sys.executable
     subprocess.run([py, str(GS / 'export_web.py'), str(sd), '--ply', str(out / 'export_web.ply'),
@@ -66,9 +67,10 @@ def main():
                    check=True)
 
     import train
+    from splat_common import trim_info
     train.save_ply(out / 'train.ply', p, p['sh0'], p['shN'], info=dict(
         kind='thermal', up=[0, 0, 1], target=hotspot['enu'], temperature_scale=scale, origin=origin,
-        rasterize_mode='classic'))
+        rasterize_mode='classic', **trim_info(bounds)))
     print('wrote', out)
 
 

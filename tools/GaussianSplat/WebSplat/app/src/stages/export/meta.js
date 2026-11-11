@@ -16,7 +16,20 @@ export const FLOAT_FIELDS = [
   'temperature_scale.k_c',
   'hotspot.enu',
   'hotspot.median_ray_error_px',
+  'trim_centre',
+  'trim_radius',
 ];
+
+// splat_common.trim_info: the viewer's trim circle from the training bounds {centre, radius}
+// (Gaussians beyond radius were pruned; the fringe just inside it is poorly constrained)
+export const TRIM_FRACTION = 0.85;
+export function trimInfo(bounds) {
+  if (!bounds?.radius) return {};
+  return {
+    trim_centre: [bounds.centre[0], bounds.centre[1]],
+    trim_radius: TRIM_FRACTION * bounds.radius,
+  };
+}
 
 export function apcgComment(info) {
   return `apcg_splat ${pyJson(info, { floats: FLOAT_FIELDS })}`;
@@ -99,7 +112,7 @@ export function hottestView({ names, hot = [] }, frameMax) {
 }
 
 // train.py save_ply header info
-export function trainInfo({ target, scale, origin, rasterizeMode = RASTERIZE_MODE }) {
+export function trainInfo({ target, scale, origin, rasterizeMode = RASTERIZE_MODE, trim = {} }) {
   return {
     kind: 'thermal',
     up: [0, 0, 1],
@@ -107,6 +120,7 @@ export function trainInfo({ target, scale, origin, rasterizeMode = RASTERIZE_MOD
     temperature_scale: scale,
     origin,
     rasterize_mode: rasterizeMode,
+    ...trim,
   };
 }
 
@@ -120,6 +134,7 @@ export function rgbWebInfo({
   target,
   origin,
   rasterizeMode = RASTERIZE_MODE,
+  trim = {},
 }) {
   return {
     kind: 'rgb',
@@ -132,6 +147,7 @@ export function rgbWebInfo({
     target,
     origin: origin ?? null,
     rasterize_mode: rasterizeMode,
+    ...trim,
   };
 }
 
@@ -148,6 +164,7 @@ export function webInfo({
   hotspot = null,
   colormap = 'ironbow',
   rasterizeMode = RASTERIZE_MODE,
+  trim = {},
 }) {
   if ((scale.kind ?? 'log1p') !== 'log1p') throw new Error(`temperature scale ${scale.kind}`);
   return {
@@ -161,6 +178,7 @@ export function webInfo({
     target,
     origin: origin ?? null,
     rasterize_mode: rasterizeMode,
+    ...trim,
     temperature_scale: scale,
     hotspot,
     colormap,

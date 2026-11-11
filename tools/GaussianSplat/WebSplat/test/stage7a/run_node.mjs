@@ -295,6 +295,10 @@ sameBytes(
   check('SPZ keeps the axes (no flip)', r.steps.means <= 0.5);
   check('SPZ antialiased flag cleared (rasterize_mode classic)', r.antialiased === false);
   check('header and meta.json say rasterize_mode classic', res.info.rasterize_mode === 'classic');
+  check(
+    'header and meta.json carry the trim circle (0.85 x the bounds radius)',
+    res.info.trim_radius === 0.85 * 165 && JSON.stringify(res.info.trim_centre) === '[0,0]',
+  );
 
   // rejecting controls for the error accounting
   const src = splatFromPly(readPly(res.files['splat.ply']));

@@ -116,6 +116,7 @@ export async function plyPass(opts) {
     target: inputs.target,
     origin: inputs.origin,
     rasterizeMode: opts.rasterizeMode,
+    trim: inputs.trim,
   };
   const info = rgb
     ? rgbWebInfo(common)

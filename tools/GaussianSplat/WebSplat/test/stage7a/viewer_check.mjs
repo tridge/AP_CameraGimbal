@@ -76,7 +76,9 @@ async function prepare(frame, range) {
     { timeout: 30000 },
   );
   await frame.addStyleTag({
-    content: '#panel, .credits, #status, .project, #open-panel { display: none !important; }',
+    content:
+      '#panel, .credits, #status, .project, #open-panel, #view-tools, #settings ' +
+      '{ display: none !important; }',
   });
   await frame.evaluate(([lo, hi]) => {
     const cmap = document.getElementById('cmap');

@@ -1,6 +1,6 @@
 # WebSplat stage contracts
 
-Version 1.10 (2026-11-10). Formats exchanged between stages through OPFS, and the job manifest
+Version 1.11 (2026-11-11). Formats exchanged between stages through OPFS, and the job manifest
 that ties them together. Each format is derived from what the native scripts
 (`extract_frames.py`, `sfm.py`, `train.py`, `splat_common.py`) actually produce, so every browser
 output can be compared with `$WEBSPLAT_DATA/ref`. A change to a format bumps its `version`; a
@@ -381,12 +381,13 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   properties `x y z nx ny nz f_dc_0..2 f_rest_0..(3K-4) opacity scale_0..2 rot_0..3`, normals 0,
   `f_rest` channel-major (`shN.transpose(0,2,1)`), quaternion normalised w,x,y,z, header
   `comment apcg_splat {"kind":"thermal","up":[0,0,1],"target":[E,N,U],
-  "temperature_scale":{…},"origin":{…}}`. Greyscale: value = `SH_C0 * f_dc + 0.5` (all three
+  "temperature_scale":{…},"origin":{…},"rasterize_mode":"classic","trim_centre":[E,N],
+  "trim_radius":R}`. Greyscale: value = `SH_C0 * f_dc + 0.5` (all three
   channels equal), decoded with the scale's inverse `t0 + k * expm1(v * log1p((t1-t0)/k))`.
 - Downloads as `export_web.py` (stage 7a, `app/src/stages/export/`): `splat.ply` in its `--ply`
   form (SH channels replaced by their mean; header info `kind, gaussians, sh_degree, title,
-  description, camera{position,target,fov_deg}, up, target, origin, rasterize_mode, temperature_scale,
-  hotspot, colormap, display_range_c`, Python `json.dumps` text; `rasterize_mode` "classic": gsplat
+  description, camera{position,target,fov_deg}, up, target, origin, rasterize_mode, trim_centre,
+  trim_radius, temperature_scale, hotspot, colormap, display_range_c`, Python `json.dumps` text; `rasterize_mode` "classic": gsplat
   classic, as trained), `splat.spz` = Spark `transcodeSpz` of that PLY (`maxSh` 3, SPZ v3, 12
   fractional bits, antialiased flag cleared for classic, gzip with a fixed header holding the PLY's
   apcg_splat JSON in an `AP` FEXTRA subfield, `viewer/spz-meta.mjs`; the stage
@@ -398,6 +399,15 @@ Stage 6 output (`train/gen-<g>/`), what the export stage consumes (until stage 6
   radius is not positive). With `config.export.target` `"picked"` the export target is
   `frames.target_enu`, also when prepare found a hot spot. Otherwise: start camera `export_web.start_camera` from
   the dataset views (middle hot view). Target: `dataset.hotspot.enu`, else `frames.target_enu`.
+- Trim circle (`splat_common.trim_info`, `export/meta.js` `trimInfo`): `trim_centre` =
+  `dataset.bounds.centre` (E, N; thermal: the target's, not the hot spot's), `trim_radius` =
+  0.85 x `dataset.bounds.radius` (metres, horizontal; the radius beyond which training prunes
+  Gaussians: thermal 1.1 x the prepare radius, RGB the radius), Python floats, right after
+  `rasterize_mode` in train.py's header, export_web.py's info and the RGB forms. The viewer hides
+  Gaussians outside the circle (switchable, with a radius slider). Absent without bounds (older
+  datasets and splats), in which case the viewer estimates a circle from the splat. export_web.py
+  reads the bounds from `scale.json` (`train.py` always wrote them; `train_rgb.py` now writes
+  `bounds {centre, radius}`).
 
 - Training stopped early: the PLY header info and `meta.json` add `stopped_early: {iterations,
   iterations_planned}` (absent otherwise, so full runs keep export_web.py's bytes); the export
@@ -483,7 +493,7 @@ ENU about the target, up from the takeoff altitude).
   preview hold channel 0 (red) only.
 - **7**: the PLY keeps the trained colours; header and `meta.json` info is `export_web.py`'s rgb
   form `{kind: "rgb", gaussians, sh_degree, title, description, camera, up, target, origin,
-  rasterize_mode}`; target `frames.target_enu`; start camera from the captured view, else the
+  rasterize_mode, trim_centre, trim_radius}`; target `frames.target_enu`; start camera from the captured view, else the
   middle view (`export_web.start_camera`). The stage result has `kind`.
 - **Request**: `kind: "rgb"` with `rgb: {width}` selects this set (see below).
 
@@ -670,6 +680,9 @@ A stage is defined in `app/src/stages/<stage>/stage.js` with `defineStage` from
 
 ## Change log
 
+- v1.11 (2026-11-11): `trim_centre` and `trim_radius` in the splat metadata (train.py header,
+  export PLY header, `meta.json`, SPZ gzip header), from the dataset bounds; the viewer's
+  circular trim. Additive; stage versions unchanged.
 - v1.10 (2026-11-10): RGB jobs default to 8192 SIFT features and the RADIAL camera (set when a
   job is first opened; earlier jobs keep 4096 and SIMPLE_RADIAL).
 - v1.9 (2026-11-10): request `radius` and `max_height` (optional, in the identity when given;
