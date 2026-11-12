@@ -4,6 +4,10 @@ import { FFMPEG_VERSION } from '../versions.js';
  * seekable Matroska Blob, avoiding FFmpeg's linear scan of uncued recordings.
  */
 const MIB = 1024 * 1024;
+// The pinned FFmpeg runtime retains allocations between exec calls, and can
+// fail after repeated decodes even when the JS frame cache is bounded.
+const MAX_WORKER_DECODES = 32;
+const MAX_WORKER_BYTES = 64 * MIB;
 const abortError = (message = 'Decode cancelled') => new DOMException(message, 'AbortError');
 const asBytes = (value) => (value instanceof Uint8Array ? value : new Uint8Array(value ?? 0));
 const concat = (...parts) => {
@@ -208,6 +212,7 @@ export class SoftwareDecoder {
     this._generation = 0;
     this._worker = null;
     this._loaded = false;
+    this._workerDecodes = this._workerBytes = 0;
     this._closed = true;
     this._active = null;
   }
@@ -231,6 +236,7 @@ export class SoftwareDecoder {
     const worker = this._worker;
     this._worker = null;
     this._loaded = false;
+    this._workerDecodes = this._workerBytes = 0;
     worker?.terminate();
     for (const pending of this._pending.values()) pending.reject(error);
     this._pending.clear();
@@ -306,12 +312,23 @@ export class SoftwareDecoder {
       if (blob.size > this.limits.maxBytes + MIB)
         throw new Error('Software input exceeds its memory budget');
       this._check(job);
+      // Dispose the whole WASM runtime, including its virtual filesystem and
+      // retained allocations. Budget both compressed input and decoded pixels;
+      // large RGB groups therefore recycle sooner than small thermal frames.
+      const workBytes = blob.size + track.width * track.height * (track.codec === 'ffv1' ? 2 : 4);
+      if (
+        this._workerDecodes >= MAX_WORKER_DECODES ||
+        (this._workerDecodes && this._workerBytes + workBytes > MAX_WORKER_BYTES)
+      )
+        this._terminate();
       job.usingWorker = true;
       await this._load(job);
       this._check(job);
       this._status(
         `Decoding ${track.codec.toUpperCase()} locally (${group.length} packet${group.length === 1 ? '' : 's'})`,
       );
+      this._workerDecodes++;
+      this._workerBytes += workBytes;
       const result = await this._call('decode', {
         blob,
         targetTime: frame.pts - origin,

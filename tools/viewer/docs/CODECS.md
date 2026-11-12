@@ -21,6 +21,14 @@ fail explicitly. A decode or file replacement can terminate the worker; stale
 work cannot replace a later frame. HEVC fallback is CPU intensive and does not
 promise real-time playback at every resolution.
 
+The software worker is replaced before exceeding 32 decode calls or 64 MiB of
+cumulative input-plus-output work. The pinned runtime retains state between
+commands: a long gray16 decode sequence previously failed with a WASM memory
+access error despite a stable WASM heap size. Replacing the worker releases its
+entire runtime and virtual filesystem; this work budget is not a bound on total
+browser memory. Replacement may add a brief decoder startup delay. Native
+WebCodecs playback does not use this lifecycle limit.
+
 FFV1 gray16 sources return a numeric Uint16Array without rescaling or palette
 conversion. The decoder checks FFmpeg's input pixel format before labeling a
 frame gray16. Calibrated temperatures additionally require valid thermal metadata;

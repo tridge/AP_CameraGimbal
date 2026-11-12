@@ -164,3 +164,55 @@ test('packet-read cancellation and input-budget failures preserve an idle warm s
   assert.equal(workers, 1);
   decoder.close();
 });
+
+// Exercise worker ownership across a long sequence without relying on WASM's
+// platform-dependent failure point. Returned samples must survive recycling.
+test('long software playback recycles runtime state and preserves decoded pixels', async () => {
+  const workers = [];
+  const decoder = new SoftwareDecoder({
+    workerFactory: () => {
+      const worker = {
+        decodes: 0,
+        terminated: false,
+        terminate() {
+          this.terminated = true;
+        },
+        postMessage(message) {
+          assert.equal(this.terminated, false);
+          if (message.type === 'decode') this.decodes++;
+          queueMicrotask(() =>
+            this.onmessage({
+              data: {
+                id: message.id,
+                result:
+                  message.type === 'load'
+                    ? { loaded: true }
+                    : { kind: 'gray16', buffer: new Uint16Array([19000]).buffer, decodeMs: 1 },
+              },
+            }),
+          );
+        },
+      };
+      workers.push(worker);
+      return worker;
+    },
+  });
+  const frame = { id: 0, trackId: 1, pts: 0, keyframe: true, size: 3 };
+  await decoder.open(new Blob(), {
+    frames: [frame],
+    tracks: [{ id: 1, codec: 'ffv1', width: 1, height: 1, codecPrivate: Uint8Array.of(1) }],
+    readPacket: async () => Uint8Array.of(1, 2, 3),
+  });
+  for (let i = 0; i < 1000; i++) assert.equal((await decoder.decode(frame)).data[0], 19000);
+  assert.equal(workers.length, 32);
+  assert.ok(workers.every((worker) => worker.decodes <= 32));
+  assert.ok(workers.slice(0, -1).every((worker) => worker.terminated));
+  // Model large output dimensions without allocating full pixel buffers in the
+  // fake worker: byte-based recycling must trigger before the 32-call limit.
+  decoder.source.tracks[0].width = decoder.source.tracks[0].height = 4096;
+  for (let i = 0; i < 3; i++) assert.equal((await decoder.decode(frame)).data[0], 19000);
+  assert.equal(workers.length, 34);
+  assert.equal(workers.at(-1).decodes, 1);
+  decoder.close();
+  assert.ok(workers.every((worker) => worker.terminated));
+});
