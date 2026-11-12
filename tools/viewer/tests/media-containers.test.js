@@ -326,6 +326,19 @@ test('unknown thermal FOV never falls back to the nested RGB lens; Matroska AVC 
   assert.equal(avc.tracks[0].codecString, 'avc1.640028');
 });
 
+test('Matroska codec IDs ignore the NUL padding GStreamer matroskamux writes', async () => {
+  const { source } = await indexAll(
+    new Blob([
+      thermalMKV({
+        codecId: 'V_MPEG4/ISO/AVC\0',
+        codecPrivate: hex('01640028ffe1000567640028800100026880'),
+      }),
+    ]),
+  );
+  assert.equal(source.tracks[0].codecId, 'V_MPEG4/ISO/AVC');
+  assert.equal(source.tracks[0].codec, 'avc');
+});
+
 test('unknown-size Matroska clusters stop at sibling clusters; lacing is rejected', async () => {
   const { source } = await indexAll(new Blob([thermalMKV({ unknownClusters: true })]));
   assert.equal(source.frames.length, 2);

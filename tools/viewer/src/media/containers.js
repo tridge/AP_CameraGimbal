@@ -539,6 +539,13 @@ async function ebmlUint(reader, box) {
   if (box.end - box.data > 8) throw new Error('Oversized EBML integer');
   return uint(await ebmlBytes(reader, box));
 }
+// EBML strings may be padded with NULs (RFC 8794 section 7.4), and
+// GStreamer's matroskamux terminates its codec IDs with one
+async function ebmlString(reader, box) {
+  const bytes = await ebmlBytes(reader, box);
+  const nul = bytes.indexOf(0);
+  return decoder.decode(nul < 0 ? bytes : bytes.subarray(0, nul));
+}
 
 async function parseMatroskaTracks(source, box, scale) {
   for await (const entry of ebmlChildren(source.reader, box)) {
@@ -560,7 +567,7 @@ async function parseMatroskaTracks(source, box, scale) {
           type = await ebmlUint(source.reader, field);
           break;
         case 0x86:
-          track.codecId = decoder.decode(await ebmlBytes(source.reader, field));
+          track.codecId = await ebmlString(source.reader, field);
           break;
         case 0x63a2:
           track.codecPrivate = (await ebmlBytes(source.reader, field)).slice();
