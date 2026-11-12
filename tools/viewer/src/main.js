@@ -1364,8 +1364,7 @@ async function play() {
   $('play').setAttribute('aria-label', 'Pause video');
   const own = state.generation;
   while (state.playing && own === state.generation && playEpoch === state.playEpoch) {
-    const start = performance.now(),
-      duration = frameDuration(state.frame) / Number($('speed').value);
+    const start = performance.now();
     const current = state.requestedNumber ?? state.number;
     if (current >= state.frames.length - 1) {
       if (state.indexed) {
@@ -1377,6 +1376,15 @@ async function play() {
     }
     await showFrame(current + 1);
     if (!state.playing || playEpoch !== state.playEpoch) break;
+    // show this frame until the next one is due, rather than for its
+    // own duration: frames a recorder skipped (empty MP4 samples)
+    // leave gaps in the timestamps that no frame's duration covers
+    const next = state.frames[state.number + 1],
+      hold =
+        next && next.pts > state.frame.pts
+          ? next.pts - state.frame.pts
+          : frameDuration(state.frame),
+      duration = hold / Number($('speed').value);
     await new Promise((r) =>
       setTimeout(r, Math.max(0, duration * 1000 - (performance.now() - start))),
     );
