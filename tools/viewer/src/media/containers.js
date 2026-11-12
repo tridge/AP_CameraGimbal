@@ -294,25 +294,29 @@ async function* classicSamples(reader, track) {
     if (stsc[chunkRun][2] !== 1) throw new Error('Unsupported MP4 sample description index');
     for (let j = 0; j < stsc[chunkRun][1] && sample < count; j++, sample++) {
       const size = commonSize || u32(await sizeAt(sample));
-      if (!size || offset + size > reader.file.size) throw new Error('MP4 sample outside file');
+      if (offset + size > reader.file.size) throw new Error('MP4 sample outside file');
       const duration = stts[timeRun][1],
         composition = ctts[compositionRun]?.[1] ?? 0;
       track.defaultDuration ??= duration / track.timescale;
-      yield {
-        trackId: track.id,
-        pts: (dts + composition) / track.timescale + track.editOffset,
-        dts: dts / track.timescale + track.editOffset,
-        mediaPTS: (dts + composition) / track.timescale,
-        mediaDTS: dts / track.timescale,
-        editOffset: track.editOffset,
-        duration: duration / track.timescale,
-        timestampTicks: dts + composition,
-        timescale: track.timescale,
-        keyframe: !keys || keys.has(sample + 1),
-        offset,
-        size,
-        extents: [{ offset, size }],
-      };
+      // an empty sample is a frame the encoder missed, which some
+      // recorders (e.g. the SkyViper's) write to keep their frame rate
+      // constant: skip it, but keep its time
+      if (size)
+        yield {
+          trackId: track.id,
+          pts: (dts + composition) / track.timescale + track.editOffset,
+          dts: dts / track.timescale + track.editOffset,
+          mediaPTS: (dts + composition) / track.timescale,
+          mediaDTS: dts / track.timescale,
+          editOffset: track.editOffset,
+          duration: duration / track.timescale,
+          timestampTicks: dts + composition,
+          timescale: track.timescale,
+          keyframe: !keys || keys.has(sample + 1),
+          offset,
+          size,
+          extents: [{ offset, size }],
+        };
       offset += size;
       dts += duration;
       if (--timeLeft === 0 && timeRun + 1 < stts.length) timeLeft = stts[++timeRun][0];

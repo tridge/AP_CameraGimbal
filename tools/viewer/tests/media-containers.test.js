@@ -30,6 +30,7 @@ function mp4Track({
   edits = [],
   composition = [80, -40, 0],
   zeroRuns = false,
+  sizes = null,
 } = {}) {
   const tkhd = full('tkhd', 0, n32(0), n32(0), n32(1), zeros(64));
   const mdhd = full('mdhd', 0, n32(0), n32(0), n32(1000), n32(10000));
@@ -39,7 +40,9 @@ function mp4Track({
   new DataView(fields.buffer).setUint16(26, 512);
   const avcC = hex('0142001effe100056742001e800100026880');
   const stsd = full('stsd', 0, n32(1), box('avc1', fields, box('avcC', avcC)));
-  const stsz = full('stsz', 0, n32(packet.length), n32(fragmented ? 0 : count));
+  const stsz = sizes
+    ? full('stsz', 0, n32(0), n32(sizes.length), ...sizes.map(n32))
+    : full('stsz', 0, n32(packet.length), n32(fragmented ? 0 : count));
   const stts = full(
     'stts',
     0,
@@ -167,6 +170,27 @@ test('classic MP4 co64 seeks above 2GiB; signed B-frame PTS stays distinct from 
   assert.ok(batches.some((b) => b.frames.length && !b.progress.complete));
   assert.ok(file.maximum <= 512);
   assert.ok(file.total < 20000, `read ${file.total}`);
+});
+
+test('empty MP4 samples are skipped but keep their time, as SkyViper recordings have', async () => {
+  // the SkyViper's recorder keeps a constant frame rate by writing
+  // empty samples for the frames its encoder missed
+  const track = () =>
+    mp4Track({ count: 4, sizes: [6, 0, 0, 6], composition: [0, 0, 0, 0], offset });
+  let offset = 0;
+  const header = join(box('ftyp', encode('isom'), n32(0)), movie(track()));
+  offset = header.length + 8;
+  const file = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(track()),
+    box('mdat', packet, packet),
+  );
+  const { source } = await indexAll(new Blob([file]));
+  assert.deepEqual(
+    source.frames.map((f) => f.pts),
+    [0, 0.12],
+  );
+  assert.deepEqual(await source.readPacket(source.frames[1]), packet);
 });
 
 function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
