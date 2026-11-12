@@ -282,6 +282,31 @@ test('empty fragmented MP4 samples are skipped but keep their time', async () =>
   assert.equal(zero.tracks[0].defaultDuration, 0.04);
 });
 
+test('empty fragmented MP4 samples must give their size of 0 themselves', async () => {
+  // with trex's default sample size 0, a 16-byte trun with no per-sample
+  // fields would otherwise describe a million empty samples
+  const prefix = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(
+      mp4Track({ fragmented: true }),
+      box('mvex', full('trex', 0, n32(1), n32(1), n32(40), n32(0), n32(0))),
+    ),
+  );
+  const moof = box(
+    'moof',
+    box(
+      'traf',
+      full('tfhd', 0x020000, n32(1)),
+      full('tfdt', 0x01000000, n64(0)),
+      full('trun', 0, n32(1000000)),
+    ),
+  );
+  await assert.rejects(
+    indexAll(new Blob([join(prefix, moof, box('mdat', packet))])),
+    /Invalid fragmented MP4 sample/,
+  );
+});
+
 test('fragmented MP4 defaults, 64bit tfdt, signed composition, first batch before full scan', async () => {
   const data = fragmentedMP4(100),
     file = virtualFile(data.length, [[0, data]]);

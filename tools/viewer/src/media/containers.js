@@ -406,8 +406,11 @@ async function* fragmentSamples(reader, moof, tracks, defaults) {
           q += 4;
         }
         if (f & 0x800) cto = version ? i32(b, q) : u32(b, q);
+        // an empty sample must say so itself: a default size of 0
+        // would let a few bytes of trun describe millions of samples
         if (
           !Number.isInteger(size) ||
+          (!size && !(f & 0x200)) ||
           !Number.isInteger(dur) ||
           dur < 0 ||
           offset < 0 ||
