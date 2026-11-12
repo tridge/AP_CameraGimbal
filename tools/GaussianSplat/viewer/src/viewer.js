@@ -264,7 +264,8 @@ async function main() {
     '<label id="trim-radius-label">Radius <input id="trim-radius" type="range" min="0" ' +
     'max="1000" step="1" /></label><p id="trim-note" class="note"></p>' +
     '<div id="satellite-controls" hidden>' +
-    '<label><input id="set-satellite" type="checkbox" /> Satellite map below</label>' +
+    '<label title="Fetches imagery (Esri) and terrain (plot.ardupilot.org) tiles around the ' +
+    'splat\'s location"><input id="set-satellite" type="checkbox" /> Satellite map below</label>' +
     '<label id="splat-opacity-label">Splat opacity <input id="splat-opacity" type="range" ' +
     'min="0" max="100" step="1" value="100" /></label>' +
     '<label id="align-label"><input id="set-align" type="checkbox" /> Align terrain to the ' +
@@ -549,7 +550,7 @@ async function main() {
     const dist = p.distanceTo(t);
     const out = clampCamera([p.x, p.y, p.z], [t.x, t.y, t.z], {
       ground: ground || terrainOn() ? groundHeight : null,
-      clearance: Math.min(2, Math.max(0.2, dist * 0.02)),
+      clearance: Math.min(2, Math.max(0.2, dist * 0.02), dist * 0.1), // scaled for tiny splats
     });
     // rounding at the pitch limit moves it ~1e-14 m every frame
     if (Math.hypot(out[0] - p.x, out[1] - p.y, out[2] - p.z) <= 1e-6 * dist) return false;
@@ -643,6 +644,15 @@ async function main() {
 
   let sat = null; // see buildSatellite
   let satGen = 0;
+  // tile loaders wait here while the map is off
+  let mapResume = null;
+  let mapPaused = null;
+  const whileMapOn = () =>
+    settings.satellite ? null : (mapPaused ??= new Promise((r) => (mapResume = r)));
+  function resumeMapLoads() {
+    mapResume?.();
+    mapResume = mapPaused = null;
+  }
   let splatOpacity = 1;
   const satAvailable = () =>
     !!(
@@ -657,6 +667,7 @@ async function main() {
 
   function disposeSatellite() {
     satGen++;
+    resumeMapLoads(); // the paused loaders see the new generation and stop
     if (!sat) return;
     for (const m of sat.leaves) {
       mapGroup.remove(m);
@@ -763,7 +774,10 @@ async function main() {
       updateSatellite();
     };
     const worker = async () => {
-      while (queue.length && gen === satGen) await one(queue.shift());
+      while (queue.length && gen === satGen) {
+        await whileMapOn();
+        if (gen === satGen && queue.length) await one(queue.shift());
+      }
     };
     Promise.all(Array.from({ length: 6 }, worker)).then(() => {
       if (gen !== satGen) return;
@@ -857,7 +871,10 @@ async function main() {
       updateSatellite();
     };
     const worker = async () => {
-      while (queue.length && gen === satGen) await one(queue.shift());
+      while (queue.length && gen === satGen) {
+        await whileMapOn();
+        if (gen === satGen && queue.length) await one(queue.shift());
+      }
     };
     await Promise.all(Array.from({ length: 4 }, worker));
     if (gen !== satGen) return;
@@ -969,6 +986,7 @@ async function main() {
     if (sat?.state === 'failed') {
       disposeSatellite(); // try again next time
     } else if (sat && settings.satellite) {
+      resumeMapLoads();
       // terrain that became ready while the map was off was placed unshifted
       placeMap();
       rebuildAll();
