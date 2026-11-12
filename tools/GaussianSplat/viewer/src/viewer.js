@@ -504,9 +504,13 @@ async function main() {
           }
         : null;
     if (trim) {
-      $('trim-radius').max = String(Math.ceil(trim.max));
-      $('trim-radius').min = String(Math.min(10, Math.floor(trim.radius)));
-      $('trim-radius').value = String(Math.round(trim.radius));
+      // whole metres, finer for small (generic) splats
+      const step = Math.min(1, 10 ** Math.floor(Math.log10(trim.max / 100)));
+      const snap = (v, f) => Number((f(v / step) * step).toPrecision(12));
+      $('trim-radius').step = String(step);
+      $('trim-radius').max = String(snap(trim.max, Math.ceil));
+      $('trim-radius').min = String(Math.min(10, snap(trim.radius, Math.floor)));
+      $('trim-radius').value = String(snap(trim.radius, Math.round));
     }
     // ground over the trim circle (or the estimate's) for the camera limit and the map
     const r = trim?.radius ?? est?.edge;
@@ -1243,8 +1247,10 @@ async function main() {
     });
     const q = (a, f) => a[Math.floor(f * (a.length - 1))];
     for (const a of xs) a.sort((p, r) => p - r);
-    let size = Math.max(...xs.map((a) => q(a, 0.98) - q(a, 0.02)), 1e-3);
-    if (trim && settings.trim) size = Math.min(size, 2 * trim.radius);
+    const ext = xs.map((a) => q(a, 0.98) - q(a, 0.02));
+    let across = Math.max(ext[0], ext[1]);
+    if (trim && settings.trim) across = Math.min(across, 2 * trim.radius); // the trim cuts only x/y
+    const size = Math.max(across, ext[2], 1e-3);
     const look = meta.target
       ? new THREE.Vector3(...meta.target).applyQuaternion(holder.quaternion)
       : new THREE.Vector3(...xs.map((a) => q(a, 0.5)));
