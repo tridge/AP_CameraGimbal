@@ -297,10 +297,10 @@ async function* classicSamples(reader, track) {
       if (offset + size > reader.file.size) throw new Error('MP4 sample outside file');
       const duration = stts[timeRun][1],
         composition = ctts[compositionRun]?.[1] ?? 0;
-      track.defaultDuration ??= duration / track.timescale;
       // an empty sample is a frame the encoder missed, which some
       // recorders (e.g. the SkyViper's) write to keep their frame rate
       // constant: skip it, but keep its time
+      if (size) track.defaultDuration ??= duration / track.timescale;
       if (size)
         yield {
           trackId: track.id,
@@ -408,15 +408,15 @@ async function* fragmentSamples(reader, moof, tracks, defaults) {
         if (f & 0x800) cto = version ? i32(b, q) : u32(b, q);
         if (
           !Number.isInteger(size) ||
-          !size ||
           !Number.isInteger(dur) ||
           dur < 0 ||
           offset < 0 ||
           offset + size > reader.file.size
         )
           throw new Error('Invalid fragmented MP4 sample');
-        if (track) track.defaultDuration ??= dur / track.timescale;
-        if (track)
+        // skip empty samples, keeping their time, as classicSamples() does
+        if (track && size) track.defaultDuration ??= dur / track.timescale;
+        if (track && size)
           yield {
             trackId: id,
             pts: (dts + cto) / track.timescale + track.editOffset,

@@ -31,6 +31,7 @@ function mp4Track({
   composition = [80, -40, 0],
   zeroRuns = false,
   sizes = null,
+  durations = null,
 } = {}) {
   const tkhd = full('tkhd', 0, n32(0), n32(0), n32(1), zeros(64));
   const mdhd = full('mdhd', 0, n32(0), n32(0), n32(1000), n32(10000));
@@ -43,16 +44,18 @@ function mp4Track({
   const stsz = sizes
     ? full('stsz', 0, n32(0), n32(sizes.length), ...sizes.map(n32))
     : full('stsz', 0, n32(packet.length), n32(fragmented ? 0 : count));
-  const stts = full(
-    'stts',
-    0,
-    n32(fragmented ? 0 : zeroRuns ? 4 : 1),
-    ...(fragmented
-      ? []
-      : zeroRuns
-        ? [n32(0), n32(999), n32(1), n32(40), n32(0), n32(888), n32(count - 1), n32(40)]
-        : [n32(count), n32(40)]),
-  );
+  const stts = durations
+    ? full('stts', 0, n32(durations.length), ...durations.flatMap((d) => [n32(1), n32(d)]))
+    : full(
+        'stts',
+        0,
+        n32(fragmented ? 0 : zeroRuns ? 4 : 1),
+        ...(fragmented
+          ? []
+          : zeroRuns
+            ? [n32(0), n32(999), n32(1), n32(40), n32(0), n32(888), n32(count - 1), n32(40)]
+            : [n32(count), n32(40)]),
+      );
   const tables = fragmented
     ? []
     : [
@@ -193,7 +196,40 @@ test('empty MP4 samples are skipped but keep their time, as SkyViper recordings 
   assert.deepEqual(await source.readPacket(source.frames[1]), packet);
 });
 
-function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
+test('an empty first MP4 sample does not set the default frame duration', async () => {
+  const track = () =>
+    mp4Track({
+      count: 3,
+      sizes: [0, 6, 6],
+      durations: [0, 40, 40],
+      composition: [0, 0, 0],
+      offset,
+    });
+  let offset = 0;
+  offset = join(box('ftyp', encode('isom'), n32(0)), movie(track())).length + 8;
+  const file = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(track()),
+    box('mdat', packet, packet),
+  );
+  const { source } = await indexAll(new Blob([file]));
+  assert.deepEqual(
+    source.frames.map((f) => f.pts),
+    [0, 0.04],
+  );
+  assert.equal(source.tracks[0].defaultDuration, 0.04);
+});
+
+function fragmentedMP4(
+  repeat = 1,
+  samplePayload = packet,
+  edits = [],
+  {
+    sizes = [samplePayload.length, samplePayload.length],
+    durations = [40, 40],
+    flags = [0, 0x10000],
+  } = {},
+) {
   const prefix = join(
     box('ftyp', encode('isom'), n32(0)),
     movie(
@@ -201,7 +237,7 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
       box('mvex', full('trex', 0, n32(1), n32(1), n32(40), n32(samplePayload.length), n32(0))),
     ),
   );
-  const payload = join(samplePayload, samplePayload);
+  const payload = join(...sizes.filter((n) => n).map(() => samplePayload));
   function fragment(pts) {
     const tfhd = full('tfhd', 0x020000, n32(1));
     const tfdt = full('tfdt', 0x01000000, n64(pts));
@@ -211,13 +247,13 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
         0x01000f01,
         n32(2),
         n32(offset),
+        n32(durations[0]),
+        n32(sizes[0]),
+        n32(flags[0]),
         n32(40),
-        n32(samplePayload.length),
-        n32(0),
-        n32(40),
-        n32(40),
-        n32(samplePayload.length),
-        n32(0x10000),
+        n32(durations[1]),
+        n32(sizes[1]),
+        n32(flags[1]),
         n32(-40),
       );
     let moof = box('moof', box('traf', tfhd, tfdt, trun(0)));
@@ -226,6 +262,25 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
   }
   return join(prefix, ...Array.from({ length: repeat }, (_, i) => fragment(123456 + i * 80)));
 }
+
+test('empty fragmented MP4 samples are skipped but keep their time', async () => {
+  const { source } = await indexAll(
+    new Blob([fragmentedMP4(1, packet, [], { sizes: [0, 6], flags: [0x10000, 0] })]),
+  );
+  assert.equal(source.frames.length, 1);
+  assert.equal(source.frames[0].dts, 123.496);
+  assert.equal(source.frames[0].pts, 123.456);
+  assert.equal(source.frames[0].keyframe, true);
+  assert.deepEqual(await source.readPacket(source.frames[0]), packet);
+
+  const { source: zero } = await indexAll(
+    new Blob([
+      fragmentedMP4(1, packet, [], { sizes: [0, 6], durations: [0, 40], flags: [0x10000, 0] }),
+    ]),
+  );
+  assert.equal(zero.frames[0].dts, 123.456);
+  assert.equal(zero.tracks[0].defaultDuration, 0.04);
+});
 
 test('fragmented MP4 defaults, 64bit tfdt, signed composition, first batch before full scan', async () => {
   const data = fragmentedMP4(100),
