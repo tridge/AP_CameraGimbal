@@ -21,8 +21,13 @@ fail explicitly. A decode or file replacement can terminate the worker; stale
 work cannot replace a later frame. HEVC fallback is CPU intensive and does not
 promise real-time playback at every resolution.
 
-The software worker is replaced before exceeding 32 decode calls or 64 MiB of
-cumulative input-plus-output work. The pinned runtime retains state between
+The software worker is replaced after at most 32 decode calls, or before another
+decode would take cumulative compressed input plus the largest decoded output
+over 64 MiB. Only the largest output is charged because each output file is
+removed and its pixel copy transferred after decoding; accumulating every RGB
+output in this budget would reload the runtime on nearly every 4K frame. A single
+decode may exceed this lifecycle budget on a fresh worker; the separate per-input
+and per-output limits still apply. The pinned runtime retains state between
 commands: a long gray16 decode sequence previously failed with a WASM memory
 access error despite a stable WASM heap size. Replacing the worker releases its
 entire runtime and virtual filesystem; this work budget is not a bound on total

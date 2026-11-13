@@ -212,7 +212,7 @@ export class SoftwareDecoder {
     this._generation = 0;
     this._worker = null;
     this._loaded = false;
-    this._workerDecodes = this._workerBytes = 0;
+    this._workerDecodes = this._workerBytes = this._workerOutputBytes = 0;
     this._closed = true;
     this._active = null;
   }
@@ -236,7 +236,7 @@ export class SoftwareDecoder {
     const worker = this._worker;
     this._worker = null;
     this._loaded = false;
-    this._workerDecodes = this._workerBytes = 0;
+    this._workerDecodes = this._workerBytes = this._workerOutputBytes = 0;
     worker?.terminate();
     for (const pending of this._pending.values()) pending.reject(error);
     this._pending.clear();
@@ -313,12 +313,15 @@ export class SoftwareDecoder {
         throw new Error('Software input exceeds its memory budget');
       this._check(job);
       // Dispose the whole WASM runtime, including its virtual filesystem and
-      // retained allocations. Budget both compressed input and decoded pixels;
-      // large RGB groups therefore recycle sooner than small thermal frames.
-      const workBytes = blob.size + track.width * track.height * (track.codec === 'ffv1' ? 2 : 4);
+      // retained allocations. Charge cumulative input (filesystem state) plus
+      // the largest output, since frame.raw is unlinked and its copy transferred
+      // after each decode. Summing every RGBA output would reload 4K each frame.
+      const outputBytes = track.width * track.height * (track.codec === 'ffv1' ? 2 : 4);
+      const workBytes =
+        this._workerBytes + blob.size + Math.max(this._workerOutputBytes, outputBytes);
       if (
         this._workerDecodes >= MAX_WORKER_DECODES ||
-        (this._workerDecodes && this._workerBytes + workBytes > MAX_WORKER_BYTES)
+        (this._workerDecodes && workBytes > MAX_WORKER_BYTES)
       )
         this._terminate();
       job.usingWorker = true;
@@ -328,7 +331,8 @@ export class SoftwareDecoder {
         `Decoding ${track.codec.toUpperCase()} locally (${group.length} packet${group.length === 1 ? '' : 's'})`,
       );
       this._workerDecodes++;
-      this._workerBytes += workBytes;
+      this._workerBytes += blob.size;
+      this._workerOutputBytes = Math.max(this._workerOutputBytes, outputBytes);
       const result = await this._call('decode', {
         blob,
         targetTime: frame.pts - origin,

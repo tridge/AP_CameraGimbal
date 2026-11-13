@@ -207,12 +207,43 @@ test('long software playback recycles runtime state and preserves decoded pixels
   assert.equal(workers.length, 32);
   assert.ok(workers.every((worker) => worker.decodes <= 32));
   assert.ok(workers.slice(0, -1).every((worker) => worker.terminated));
-  // Model large output dimensions without allocating full pixel buffers in the
-  // fake worker: byte-based recycling must trigger before the 32-call limit.
-  decoder.source.tracks[0].width = decoder.source.tracks[0].height = 4096;
-  for (let i = 0; i < 3; i++) assert.equal((await decoder.decode(frame)).data[0], 19000);
-  assert.equal(workers.length, 34);
-  assert.equal(workers.at(-1).decodes, 1);
+  decoder.close();
+  assert.ok(workers.every((worker) => worker.terminated));
+
+  // Model full-size outputs with tiny fake results to check worker ownership
+  // without allocating RGBA frames. A 1 MiB compressed group plus 4K output
+  // must keep a warm runtime rather than reload on every frame.
+  const packet = new Uint8Array(1024 * 1024);
+  frame.size = packet.length;
+  const track = { id: 1, codec: 'avc', width: 3840, height: 2160, codecPrivate: Uint8Array.of(1) };
+  const source = { frames: [frame], tracks: [track], readPacket: async () => packet };
+  await decoder.open(new Blob(), source);
+  const previousWorkers = workers.length;
+  for (let i = 0; i < 32; i++) await decoder.decode(frame);
+  assert.equal(workers.length, previousWorkers + 1);
+  await decoder.decode(frame);
+  assert.equal(workers.length, previousWorkers + 2);
+
+  // Larger compressed groups still exhaust the byte budget before the call
+  // limit: two 20 MiB groups plus a 4K output exceed the lifecycle budget.
+  const largePacket = new Uint8Array(20 * 1024 * 1024);
+  frame.size = largePacket.length;
+  source.readPacket = async () => largePacket;
+  await decoder.open(new Blob(), source);
+  const beforeLarge = workers.length;
+  await decoder.decode(frame);
+  await decoder.decode(frame);
+  assert.equal(workers.length, beforeLarge + 2);
+
+  // A single maximum-size output plus input is allowed on a fresh worker,
+  // despite exceeding the lifecycle budget. Subsequent work must recycle it.
+  track.width = track.height = 4096;
+  frame.size = packet.length;
+  source.readPacket = async () => packet;
+  await decoder.open(new Blob(), source);
+  const beforeOversize = workers.length;
+  for (let i = 0; i < 3; i++) await decoder.decode(frame);
+  assert.equal(workers.length, beforeOversize + 3);
   decoder.close();
   assert.ok(workers.every((worker) => worker.terminated));
 });
