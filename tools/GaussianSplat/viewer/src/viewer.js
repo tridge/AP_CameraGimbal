@@ -509,7 +509,7 @@ async function main() {
       const snap = (v, f) => Number((f(v / step) * step).toPrecision(12));
       $('trim-radius').step = String(step);
       $('trim-radius').max = String(snap(trim.max, Math.ceil));
-      $('trim-radius').min = String(Math.min(10, snap(trim.radius, Math.floor)));
+      $('trim-radius').min = String(Math.min(10, snap(trim.radius / 2, Math.floor)));
       $('trim-radius').value = String(snap(trim.radius, Math.round));
     }
     // ground over the trim circle (or the estimate's) for the camera limit and the map
@@ -887,7 +887,8 @@ async function main() {
       fail(firstError ?? new Error('no terrain tiles'));
       return;
     }
-    if (t.state !== 'ready') ready();
+    // ready() again when the near tiles did not cover the trim circle for the offset
+    if (t.state !== 'ready' || !t.offset) ready();
     else rebuildAll(); // tile edges sampled from the finest terrain now loaded
     updateSatellite();
   }
@@ -1235,21 +1236,29 @@ async function main() {
 
   // a view of the whole splat from the south, 50 degrees up, robust to outlying Gaussians
   function fitView() {
-    const xs = [[], [], []];
     const step = Math.max(1, Math.floor(mesh.numSplats / 50000));
     const v = new THREE.Vector3();
-    mesh.forEachSplat((i, centre) => {
-      if (i % step) return;
-      v.copy(centre).applyQuaternion(holder.quaternion);
-      xs[0].push(v.x);
-      xs[1].push(v.y);
-      xs[2].push(v.z);
-    });
+    // the Gaussians shown: inside the trim circle when it is on
+    const gather = (circle) => {
+      const xs = [[], [], []];
+      mesh.forEachSplat((i, centre) => {
+        if (i % step) return;
+        v.copy(centre).applyQuaternion(holder.quaternion);
+        if (circle && Math.hypot(v.x - circle.centre[0], v.y - circle.centre[1]) > circle.radius)
+          return;
+        xs[0].push(v.x);
+        xs[1].push(v.y);
+        xs[2].push(v.z);
+      });
+      return xs;
+    };
+    let xs = trim && settings.trim ? gather(trim) : null;
+    if (!xs || xs[0].length < 100) xs = gather(null);
     const q = (a, f) => a[Math.floor(f * (a.length - 1))];
     for (const a of xs) a.sort((p, r) => p - r);
     const ext = xs.map((a) => q(a, 0.98) - q(a, 0.02));
     let across = Math.max(ext[0], ext[1]);
-    if (trim && settings.trim) across = Math.min(across, 2 * trim.radius); // the trim cuts only x/y
+    if (trim && settings.trim) across = Math.min(across, 2 * trim.radius);
     const size = Math.max(across, ext[2], 1e-3);
     const look = meta.target
       ? new THREE.Vector3(...meta.target).applyQuaternion(holder.quaternion)
