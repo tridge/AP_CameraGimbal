@@ -313,7 +313,7 @@ export class SoftwareDecoder {
         throw new Error('Software input exceeds its memory budget');
       this._check(job);
       // Dispose the whole WASM runtime, including its virtual filesystem and
-      // retained allocations. Charge cumulative input (filesystem state) plus
+      // retained allocations. Charge cumulative input plus
       // the largest output, since frame.raw is unlinked and its copy transferred
       // after each decode. Summing every RGBA output would reload 4K each frame.
       const outputBytes = track.width * track.height * (track.codec === 'ffv1' ? 2 : 4);
