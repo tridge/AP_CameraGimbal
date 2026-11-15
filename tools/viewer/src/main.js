@@ -1363,8 +1363,13 @@ async function play() {
   $('play').textContent = 'Pause';
   $('play').setAttribute('aria-label', 'Pause video');
   const own = state.generation;
-  // the frame on screen when Play is pressed is held too, from now
-  let start = performance.now();
+  // the frame on screen when Play is pressed is held too, from now.
+  // played is how much media time the frame has been shown for: each
+  // poll adds the wall time since the last at the speed then in force,
+  // so a Speed change applies from when it is made
+  let last = performance.now(),
+    played = 0,
+    speed = Number($('speed').value);
   while (state.playing && own === state.generation && playEpoch === state.playEpoch) {
     // show the frame until the next one is due, rather than for its
     // own duration: frames a recorder skipped (empty MP4 samples)
@@ -1376,10 +1381,14 @@ async function play() {
     // frame in ahead of it.
     const frame = state.frame;
     for (;;) {
+      const now = performance.now();
+      played += ((now - last) / 1000) * speed;
+      last = now;
+      speed = Number($('speed').value);
       const next = state.frames[state.number + 1],
         known = next && frame && next.pts > frame.pts,
         hold = known ? next.pts - frame.pts : frameDuration(frame),
-        wait = (hold / Number($('speed').value)) * 1000 - (performance.now() - start);
+        wait = ((hold - played) / speed) * 1000;
       if ((state.indexed || !frame || next) && wait <= 0) break;
       await new Promise((r) => setTimeout(r, wait > 0 ? Math.min(wait, 50) : 50));
       if (!state.playing || playEpoch !== state.playEpoch) break;
@@ -1394,7 +1403,8 @@ async function play() {
       await new Promise((r) => setTimeout(r, 100));
       continue;
     }
-    start = performance.now();
+    last = performance.now();
+    played = 0;
     await showFrame(current + 1);
   }
 }
