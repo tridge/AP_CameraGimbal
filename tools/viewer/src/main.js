@@ -1369,20 +1369,18 @@ async function play() {
     // show the frame until the next one is due, rather than for its
     // own duration: frames a recorder skipped (empty MP4 samples)
     // leave gaps in the timestamps that no frame's duration covers.
-    // While indexing is still going, keep looking at the next frame
-    // as we wait: it may not be indexed yet (a gap at the end of an
-    // index batch), or a later batch may sort an earlier B frame in
-    // ahead of it.
+    // Wait in short steps, looking again each time: a Speed change
+    // applies straight away, even in a long gap, and while indexing is
+    // still going the next frame may not be indexed yet (a gap at the
+    // end of an index batch), or a later batch may sort an earlier B
+    // frame in ahead of it.
     const frame = state.frame;
     for (;;) {
       const next = state.frames[state.number + 1],
         known = next && frame && next.pts > frame.pts,
         hold = known ? next.pts - frame.pts : frameDuration(frame),
         wait = (hold / Number($('speed').value)) * 1000 - (performance.now() - start);
-      if (state.indexed || !frame || (next && wait <= 0)) {
-        await new Promise((r) => setTimeout(r, Math.max(0, wait)));
-        break;
-      }
+      if ((state.indexed || !frame || next) && wait <= 0) break;
       await new Promise((r) => setTimeout(r, wait > 0 ? Math.min(wait, 50) : 50));
       if (!state.playing || playEpoch !== state.playEpoch) break;
     }
