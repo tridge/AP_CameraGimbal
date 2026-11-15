@@ -1363,20 +1363,10 @@ async function play() {
   $('play').textContent = 'Pause';
   $('play').setAttribute('aria-label', 'Pause video');
   const own = state.generation;
+  // the frame on screen when Play is pressed is held too, from now
+  let start = performance.now();
   while (state.playing && own === state.generation && playEpoch === state.playEpoch) {
-    const start = performance.now();
-    const current = state.requestedNumber ?? state.number;
-    if (current >= state.frames.length - 1) {
-      if (state.indexed) {
-        pause();
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-      continue;
-    }
-    await showFrame(current + 1);
-    if (!state.playing || playEpoch !== state.playEpoch) break;
-    // show this frame until the next one is due, rather than for its
+    // show the frame until the next one is due, rather than for its
     // own duration: frames a recorder skipped (empty MP4 samples)
     // leave gaps in the timestamps that no frame's duration covers.
     // While indexing is still going, keep looking at the next frame
@@ -1396,6 +1386,18 @@ async function play() {
       await new Promise((r) => setTimeout(r, wait > 0 ? Math.min(wait, 50) : 50));
       if (!state.playing || playEpoch !== state.playEpoch) break;
     }
+    if (!state.playing || own !== state.generation || playEpoch !== state.playEpoch) break;
+    const current = state.requestedNumber ?? state.number;
+    if (current >= state.frames.length - 1) {
+      if (state.indexed) {
+        pause();
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      continue;
+    }
+    start = performance.now();
+    await showFrame(current + 1);
   }
 }
 function refreshLog(force = false) {
