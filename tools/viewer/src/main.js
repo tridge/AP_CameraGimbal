@@ -1379,12 +1379,19 @@ async function play() {
     // still going the next frame may not be indexed yet (a gap at the
     // end of an index batch), or a later batch may sort an earlier B
     // frame in ahead of it.
-    const frame = state.frame;
+    let frame = state.frame;
     for (;;) {
       const now = performance.now();
       played += ((now - last) / 1000) * speed;
       last = now;
       speed = Number($('speed').value);
+      if (state.frame !== frame) {
+        // a seek's frame has arrived (Play pressed while it was still
+        // decoding, when next was already from the new position): hold
+        // that one, from now
+        frame = state.frame;
+        played = 0;
+      }
       const next = state.frames[state.number + 1],
         known = next && frame && next.pts > frame.pts,
         hold = known ? next.pts - frame.pts : frameDuration(frame),
