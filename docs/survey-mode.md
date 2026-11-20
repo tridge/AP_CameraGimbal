@@ -41,6 +41,8 @@ Choose **Survey pattern** before saving:
   (approximately 34°, 45° and 63° down), before row rounding and aircraft motion.
   Successive sweeps revisit each ground row at all three pitch angles, without
   a lateral sweep or a deliberate 180° yaw reversal.
+- **Fore-wide (three yaw angles)** (`4`, `fore_wide`): front-left → front-centre → front-right,
+  Targets are at 1× the forward distance at 3 yaw angles covering left, centre and right, rounded to common ground rows. The rear distance is unused.
 
 Both remains the default for existing configurations. The reduced patterns budget
 only their selected views, giving shorter sweeps and closer ground rows. Saving a
@@ -99,7 +101,7 @@ parameters. The corresponding INI section is `[survey]`.
 
 | MAVLink parameter | INI key | Default | Meaning |
 | --- | --- | --- | --- |
-| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only |
+| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only, 4 fore-wide |
 | SURV_LENS | lens | thermal | 0 thermal, 1 wide, 2 zoom; INI uses names |
 | SURV_OVERLAP | overlap | 50 | Requested overlap percent, 0–90 |
 | SURV_FORE | fore_pct | 50 | Forward offset as percent of AGL; nearest offset for fore-only |

@@ -66,6 +66,7 @@ void ca_config_defaults(struct ca_config *config)
     config->survey.terrain_tol = 25;
     config->survey.min_speed = 5;
     config->survey.turn_deg = 15;
+    config->survey.aim = CA_SURVEY_AIM_ROWS;
     config->raw_stream_fps = 5;
     config->raw_record_fps = 5;
     config->main_resolution = (enum ca_video_resolution)APCAM_DEFAULT_MAIN_RESOLUTION;

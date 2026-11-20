@@ -255,7 +255,8 @@
     both: 'Front-left → front-centre → front-right → down-right → down-centre → down-left → rear-left → rear-centre → rear-right.',
     left_right: 'Left → right, repeating. No centre or fore/aft views. Forward and rear distance settings are unused.',
     fore_aft: 'Front-centre → rear-centre, repeating. No centre or lateral views.',
-    fore_only: 'Straight ahead: far → middle → near, at 3×, 2× and 1× forward distance, rounded to ground rows. Three pitch angles with no lateral sweep. Rear distance is unused.'
+    fore_only: 'Straight ahead: far → middle → near, at 3×, 2× and 1× forward distance, rounded to ground rows. Three pitch angles with no lateral sweep. Rear distance is unused.',
+    fore_wide: 'Forward row: left → centre → right, repeating. Rear distance is unused.'
   };
   function update() {
     document.getElementById('survey-pattern-description').textContent = descriptions[pattern.value];

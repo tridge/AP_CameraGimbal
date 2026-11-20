@@ -184,6 +184,11 @@ enum string_id {
     S_SURV_LEFT_RIGHT,
     S_SURV_FORE_AFT,
     S_SURV_FORE_ONLY,
+    S_SURV_FORE_WIDE,
+    S_SURV_AIM,
+    S_SURV_AIM_HELP,
+    S_SURV_AIM_ROWS,
+    S_SURV_AIM_AHEAD,
     S_SURV_LENS,
     S_SURV_LENS_HELP,
     S_SURV_THERMAL,
@@ -850,11 +855,16 @@ static constexpr Translations translations = [] {
     result[S_H_THERMAL_PALETTE] = {"Pseudo-colour palette applied by the thermal module to video and still images.", "热成像模块应用于视频和照片的伪彩调色板。", "サーマルモジュールが映像と静止画に適用する疑似カラーパレット。"};
     result[S_PARAMS_SURVEY] = {"Survey", "Survey", "Survey"};
     result[S_SURV_PATTERN] = {"Survey pattern", "Survey pattern", "Survey pattern"};
-    result[S_SURV_PATTERN_HELP] = {"Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid."};
+    result[S_SURV_PATTERN_HELP] = {"Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Both uses the full nine-view grid."};
     result[S_SURV_BOTH] = {"Both (nine views)", "Both (nine views)", "Both (nine views)"};
     result[S_SURV_LEFT_RIGHT] = {"Left/right only", "Left/right only", "Left/right only"};
     result[S_SURV_FORE_AFT] = {"Fore/aft only", "Fore/aft only", "Fore/aft only"};
     result[S_SURV_FORE_ONLY] = {"Fore-only (three pitch angles)", "Fore-only (three pitch angles)", "Fore-only (three pitch angles)"};
+    result[S_SURV_FORE_WIDE] = {"Fore wide (fore_left, fore_centre, fore_right)", "Fore wide (fore_left, fore_centre, fore_right)", "Fore wide (fore_left, fore_centre, fore_right)"};
+    result[S_SURV_AIM] = {"Survey aiming", "Survey aiming", "Survey aiming"};
+    result[S_SURV_AIM_HELP] = {"Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft.", "Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft.", "Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft."};
+    result[S_SURV_AIM_ROWS] = {"Fixed ground rows", "Fixed ground rows", "Fixed ground rows"};
+    result[S_SURV_AIM_AHEAD] = {"Ahead of aircraft", "Ahead of aircraft", "Ahead of aircraft"};
     result[S_SURV_LENS] = {"Survey camera", "Survey camera", "Survey camera"};
     result[S_SURV_LENS_HELP] = {"Select the physical camera used for survey captures.", "Select the physical camera used for survey captures.", "Select the physical camera used for survey captures."};
     result[S_SURV_THERMAL] = {"Raw thermal", "Raw thermal", "Raw thermal"};

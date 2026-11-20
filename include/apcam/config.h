@@ -162,7 +162,9 @@ struct ca_network_config {
     char gateway[16];
 };
 
-enum ca_survey_pattern { CA_SURVEY_BOTH=0, CA_SURVEY_LEFT_RIGHT=1, CA_SURVEY_FORE_AFT=2, CA_SURVEY_FORE_ONLY=3 };
+enum ca_survey_pattern { CA_SURVEY_BOTH=0, CA_SURVEY_LEFT_RIGHT=1, CA_SURVEY_FORE_AFT=2, CA_SURVEY_FORE_ONLY=3, CA_SURVEY_FORE_WIDE=4 };
+
+enum ca_survey_aim { CA_SURVEY_AIM_ROWS=0, CA_SURVEY_AIM_AHEAD=1 };
 
 struct ca_survey_config {
     unsigned pattern;
@@ -181,6 +183,7 @@ struct ca_survey_config {
     unsigned terrain_tol;
     unsigned min_speed;
     unsigned turn_deg;
+    unsigned aim; // 0 fixed ground rows, 1 ahead of the aircraft
 };
 
 enum ca_vpn_provider { CA_VPN_ZEROTIER = 0 };

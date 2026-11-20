@@ -394,7 +394,12 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         auto &r=v.request;
         r.session=v.session; r.generation=v.generation; r.leg=v.leg; r.cycle=v.cycle; r.slot=v.grid.slots[v.slot];
         r.pattern=cfg.pattern; r.position=v.slot; r.positions=v.grid.slot_count;
-        v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
+        if(cfg.aim==CA_SURVEY_AIM_AHEAD) {
+            const double agl=pose.alt-pose.ground;
+            v.grid.target_ahead(path_pose,cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,v.slot,
+                                r.target_lat,r.target_lon,r.row,r.column);
+        } else
+            v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
         r.target_alt=pose.ground; r.lens=cfg.lens;
         auto terrain=ca_terrain_height(r.target_lat,r.target_lon,r.target_alt);
         r.target_terrain_uploaded=terrain==CA_TERRAIN_READY;

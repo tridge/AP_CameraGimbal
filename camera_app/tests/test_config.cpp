@@ -156,12 +156,12 @@ int main(int argc, char **argv)
                   "ironbow") == 0);
     assert(strcmp(config.main_alias, "main.264") == 0 && config.sub_alias[0] == '\0');
 
-    assert(ca_config_param_count() == 54U);
+    assert(ca_config_param_count() == 55U);
     const ca_config_option *survey_options;
     int survey_min, survey_max;
     assert(config.survey.pattern==CA_SURVEY_BOTH);
     int pattern=ca_config_param_find("SURV_PATTERN");
-    assert(ca_config_param_options(pattern,&survey_options,&survey_min,&survey_max)==4);
+    assert(ca_config_param_options(pattern,&survey_options,&survey_min,&survey_max)==5);
     assert(ca_config_param_save(&config,path,pattern,1)==0);
     assert(config.survey.pattern==CA_SURVEY_LEFT_RIGHT);
     assert(ca_config_param_save(&config,path,pattern,2)==0);
@@ -171,7 +171,7 @@ int main(int argc, char **argv)
     ca_config reloaded;
     assert(ca_config_load(&reloaded,path,error,sizeof(error))==0);
     assert(reloaded.survey.pattern==CA_SURVEY_FORE_ONLY);
-    assert(ca_config_param_save(&config,path,pattern,4)<0);
+    assert(ca_config_param_save(&config,path,pattern,5)<0);
     assert(ca_config_param_save(&config,path,pattern,0)==0);
     int survey_lens=ca_config_param_find("SURV_LENS");
     assert(ca_config_param_options(survey_lens,&survey_options,&survey_min,&survey_max)==3);
