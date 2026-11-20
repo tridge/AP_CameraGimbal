@@ -126,10 +126,29 @@ int main()
         printf("fore-only %.0fm/s: %.2fs sweep, %.1fm rows, near/middle/far %.1f/%.1f/%.1fm\n",
             speed,g.cycle_s,g.spacing,g.fore_rows*g.spacing,2*g.fore_rows*g.spacing,3*g.fore_rows*g.spacing);
     }
+    {
+        ca_survey_pose p{-350000000,1490000000,1000,600,25,0}; // flying north
+        config.survey.pattern=CA_SURVEY_FORE_WIDE;
+        ca_survey_grid g{};
+        assert(g.init(p,config.survey,24.2,1.25,100,1000));
+        assert(g.slot_count==3);
+        const unsigned expect[3]={0,1,2};
+        int32_t lat[3],lon[3]; int64_t row[3]; int column[3];
+        for(unsigned k=0;k<3;k++) {
+            assert(g.slots[k]==expect[k]);
+            g.target(10,k,lat[k],lon[k],row[k],column[k]);
+            assert(row[k]==10+g.fore_rows && lat[k]>p.lat);   // all ahead
+        }
+        assert(column[0]==-1 && column[1]==0 && column[2]==1);
+        assert(lon[0]<p.lon && lon[1]==p.lon && lon[2]>p.lon);   // left, centre, right
+        for(unsigned k=1;k<3;k++) assert(g.deadline(1000,k)>g.deadline(1000,k-1));
+        assert(g.deadline(1000,2)==1000+uint64_t(g.cycle_s*1000));
+        config.survey.pattern=CA_SURVEY_BOTH;
+    }  
     // A 5.4-degree departure never crosses the 15-degree turn threshold, but
     // previously left targets over 1km off a long leg. Both turn directions
     // and all patterns must reanchor before that error accumulates.
-    for(unsigned pattern: {0U,1U,2U,3U}) for(float sign: {-1.0f,1.0f}) {
+    for(unsigned pattern: {0U,1U,2U,3U,4U}) for(float sign: {-1.0f,1.0f}) {
         ca_survey_pose p{-350000000,1490000000,1000,600,25,0};
         config.survey.pattern=pattern;
         ca_survey_grid g{};
