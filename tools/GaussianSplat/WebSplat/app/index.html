@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSplat: thermal Gaussian splats in the browser</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <h1>WebSplat</h1>
+    <p>
+      Turns a radiometric thermal recording (or an RGB video) with embedded telemetry into a
+      Gaussian splat on your own GPU. Files are read locally and never uploaded.
+    </p>
+    <section id="device" class="panel">Checking WebGPU…</section>
+    <section id="blocked" class="panel error" hidden>
+      This job is open in another tab or window. Close it there (or use that tab) and reload.
+    </section>
+    <section id="unreadable" class="panel error" hidden>
+      <span id="unreadable-text"></span>
+      <button id="discard">Delete this job</button>
+    </section>
+    <section id="request" class="panel" hidden>
+      <div id="request-status"></div>
+      <button id="request-latest" hidden>Open the latest job</button>
+    </section>
+    <section id="source" class="panel" hidden>
+      <div>
+        <label
+          >Recording (thermal MKV, or RGB MPEG-TS/MP4, with telemetry)
+          <input id="file" type="file" accept=".mkv,.ts,.m2ts,.mp4"
+        /></label>
+        <label><input id="copy" type="checkbox" checked /> keep a copy in browser storage</label>
+      </div>
+      <div id="source-status"></div>
+    </section>
+    <section id="proposal" class="panel" hidden>
+      <form id="proposal-form">
+        <div><b>Target and camera</b> (proposed from the recording; edit if needed)</div>
+        <label>latitude <input name="lat" type="number" step="any" required /></label>
+        <label>longitude <input name="lon" type="number" step="any" required /></label>
+        <label
+          >target height above takeoff, m
+          <input name="target_alt" type="number" step="any" placeholder="hot spot"
+        /></label>
+        <label id="rotation-label"
+          >rotation
+          <select name="rotation">
+            <option>0</option>
+            <option>90</option>
+            <option>180</option>
+            <option>270</option>
+          </select></label
+        >
+        <label>HFOV, deg <input name="hfov" type="number" step="any" /></label>
+        <label id="width-label" hidden
+          >processing width, px <input name="width" type="number" step="1" min="64"
+        /></label>
+        <button type="submit">Continue</button>
+        <ul id="proposal-notes"></ul>
+      </form>
+    </section>
+    <section id="job" class="panel" hidden>
+      <div>
+        <label
+          >Pipeline
+          <select id="pipeline"></select
+        ></label>
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="reset">Reset job</button>
+      </div>
+      <div id="request-summary" hidden></div>
+      <div id="storage"></div>
+      <div id="hidden-warning" class="warn" hidden>
+        This tab is hidden: the browser may slow down or stop the work until it is visible again.
+      </div>
+    </section>
+    <section id="trained" class="panel" hidden>
+      <div>
+        Training is not in the app yet. Choose a trained splat to export (a Brush PLY, or
+        params.bin):
+        <input id="trained-file" type="file" accept=".ply,.bin" />
+      </div>
+    </section>
+    <section id="stages-panel" hidden>
+      <table>
+        <tbody id="stages"></tbody>
+      </table>
+      <p id="overall"></p>
+    </section>
+    <section id="train-actions" class="panel" hidden>
+      <div>
+        <b>Training</b>
+        <button id="train-preview">Preview</button>
+        <button id="train-accept">Stop and accept…</button>
+        <span id="train-preview-status"></span>
+      </div>
+      <div id="preview" hidden>
+        <button id="preview-refresh">Refresh</button>
+        <button id="preview-close">Close preview</button>
+        <div id="preview-viewer"></div>
+      </div>
+    </section>
+    <section id="result" class="panel" hidden>
+      <h2>Result</h2>
+      <div id="result-summary"></div>
+      <div id="result-downloads"></div>
+      <label
+        >View
+        <select id="result-view">
+          <option value="ply">PLY (exact)</option>
+          <option value="spz">SPZ (compressed)</option>
+        </select></label
+      >
+      <div id="result-viewer"></div>
+    </section>
+    <section><div id="log"></div></section>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

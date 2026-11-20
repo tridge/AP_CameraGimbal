@@ -31,6 +31,11 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
         for name in ('camera.ini.default', 'web.pass.default', 'VERSION', 'README.md',
                      'COPYING.txt', 'THIRD_PARTY.md', 'OpenIPC-LICENSE.txt'):
             (source / name).write_text('fixture\n')
+        (source / 'webroot').mkdir()
+        (source / 'webroot/app.js').write_text('/* packaged web UI */\n')
+        destination = root / 'mnt/AP_CameraGimbal/zr10'
+        (destination / 'webroot').mkdir(parents=True)
+        (destination / 'webroot/stale.js').write_text('old version')
         (root / 'machine').write_text('INFINITY6B0\n')
         (root / 'mounts').write_text(f'/dev/mmcblk0p1 {root}/mnt vfat rw 0 0\n')
         (root / 'sdk').write_bytes(b'SDK fixture')
@@ -39,8 +44,8 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
         for path in source.iterdir():
             path.chmod(0o755)
         (source / 'SHA256SUMS').write_text(''.join(
-            hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n'
-            for path in sorted(source.iterdir())))
+            hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.relative_to(source).as_posix() + '\n'
+            for path in sorted(source.rglob('*')) if path.is_file()))
         for name, command in [('id', 'echo 0'), ('pidof', 'exit 1'), ('sync', 'exit 0')]:
             (commands / name).write_text('#!/bin/sh\n' + command + '\n')
             (commands / name).chmod(0o755)
@@ -51,6 +56,10 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
         env = dict(os.environ, PATH=str(commands) + ':' + os.environ['PATH'])
         subprocess.run(['sh', str(source / 'install.sh'), '--enable-boot'],
                        env=env, check=True, stdout=subprocess.DEVNULL)
+        assert (destination / 'webroot/app.js').read_bytes() == (source / 'webroot/app.js').read_bytes()
+        assert not (destination / 'webroot/stale.js').exists()
+        subprocess.run(['sha256sum', '-c', 'SHA256SUMS'], cwd=destination,
+                       check=True, stdout=subprocess.DEVNULL)
         assert (customer / 'zr10-uuid').read_bytes() == (source / 'zr10-uuid').read_bytes()
         assert (customer / 'sycamera').read_bytes() == (source / 'boot.sh').read_bytes()
         backup = customer / 'sycamera.vendor'

@@ -3,6 +3,7 @@
 These model control direction and interaction, not a particular sensor's
 radiometry, exposure calibration or lens mechanics. All arrays use RGB order.
 """
+from functools import lru_cache
 import math
 import struct
 
@@ -37,13 +38,31 @@ class ImageControls:
         self.matrix_key = None
         self.exposure = None
 
+    @staticmethod
+    def synthetic_thermal(image):
+        """Map rendered RGB luminance to 15..45 C, stored as Kelvin * 64.
+
+        This is a deterministic visual simulation, not measured terrain
+        temperature. Keep fractional luminance until uint16 quantisation.
+        """
+        luminance = image.astype(np.float32) @ np.array([.299, .587, .114], dtype=np.float32)
+        return np.rint((273.15 + 15 + luminance * (30 / 255)) * 64).astype('<u2')
+
+    def thermal_display(self, samples, settings):
+        """Apply display gain and palette to a copy of native samples."""
+        gray = np.rint(np.clip((samples.astype(np.float32) / 64 - 273.15 - 15) * (255 / 30),
+                              0, 255)).astype(np.uint8)
+        return self.thermal_palette(gray, settings)
+
+    def thermal_palette(self, gray, settings):
+        if settings.get('thermal_gain', 1) == 0:
+            gray = cv2.convertScaleAbs(gray, alpha=0.5, beta=64)
+        return cv2.applyColorMap(gray, self.luts.get(settings.get('thermal_palette', 0), self.luts[0]))
+
     def apply(self, image, settings, thermal=False):
         if thermal:
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            if settings.get('thermal_gain', 1) == 0:
-                # Low gain covers a wider temperature range, reducing contrast.
-                gray = cv2.convertScaleAbs(gray, alpha=0.5, beta=64)
-            return cv2.applyColorMap(gray, self.luts.get(settings.get('thermal_palette', 0), self.luts[0]))
+            return self.thermal_palette(gray, settings)
 
         brightness = (settings.get('brightness', 50) - 50) * 2.55
         contrast = settings.get('contrast', 50) / 50
@@ -107,3 +126,44 @@ class ImageControls:
         values = self.exposure or (math.nan,) * 7
         return struct.pack('<QBBHBBi7f', 0, 0, 1, valid,
                            self.exposure_mode if valid else 255, 0, 0, *values)
+
+
+@lru_cache(maxsize=16)
+def _overlay_pixels(width, height, scale, lines):
+    # Cache sparse pixels until geometry changes (e.g. zoom/resolution). Never
+    # rasterize the dashed box in the per-frame Python loop.
+    pixels = {}
+    # Match hardware region stacking: cross first, then each box edge.
+    groups = [[line for line in lines if not line[4]]]
+    groups.extend([line] for line in lines if line[4])
+    for group in groups:
+        for color, radius in ((0, int(2 * scale + .5)), (255, int(scale + .5) - 1)):
+            for x0, y0, x1, y1, dashed in group:
+                n = max(abs(x1 - x0), abs(y1 - y0))
+                for k in range(n + 1):
+                    if dashed and k // int(12 * scale + .5) % 2:
+                        continue
+                    x = x0 + (int((x1 - x0) * k / n) if n else 0)
+                    y = y0 + (int((y1 - y0) * k / n) if n else 0)
+                    for row in range(max(0, y-radius), min(height, y+radius+1)):
+                        for col in range(max(0, x-radius), min(width, x+radius+1)):
+                            pixels[row*width+col] = color
+    return np.array(list(pixels), dtype=np.intp), np.array(list(pixels.values()), dtype=np.uint8)
+
+
+def apply_overlay(image, overlay):
+    """Apply the hardware renderer's geometry after ISP effects, before encoding.
+
+    The scene caches clean images for other streams and still captures; encoders
+    consume their arrays on background threads, so never alter the source array.
+    """
+    lines = overlay.get('lines', [])
+    if not lines:
+        return image
+    indices, values = _overlay_pixels(image.shape[1], image.shape[0], overlay['scale'],
+                                      tuple(tuple(line) for line in lines))
+    if not len(indices):
+        return image
+    image = image.copy()
+    image.reshape(-1, 3)[indices] = values[:, None]
+    return image

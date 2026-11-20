@@ -1,0 +1,199 @@
+From ffa70f7c090abf7ee5f615fbf7c8e45e8397c28c Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 19:13:44 +1100
+Subject: [PATCH 11/12] Use the WebSplat CubeCL fork
+
+[patch] every CubeCL crate to a sibling checkout of the fork (same revision
+burn pins, plus deferred destroy() of deallocated buffers in wasm, which
+keeps browser GPU memory near the native working set).
+---
+ Cargo.lock | 19 -------------------
+ Cargo.toml | 22 ++++++++++++++++++++++
+ 2 files changed, 22 insertions(+), 19 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 819109c..03b59a0 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2525,7 +2525,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "cubecl-core",
+  "cubecl-cpu",
+@@ -2543,7 +2542,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-common"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "cfg_aliases",
+@@ -2567,7 +2565,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-core"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bitflags 2.13.1",
+  "bytemuck",
+@@ -2596,7 +2593,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-cpp"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "cubecl-common",
+@@ -2619,7 +2615,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-cpu"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "crossbeam-utils",
+@@ -2641,7 +2636,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-cuda"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "cubecl-common",
+@@ -2660,7 +2654,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-environment"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "async-channel",
+  "backtrace",
+@@ -2694,7 +2687,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-hip"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "cubecl-common",
+@@ -2725,7 +2717,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-ir"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bumpalo",
+  "cubecl-common",
+@@ -2756,7 +2747,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-llvm"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "cc",
+  "cubecl-core",
+@@ -2775,7 +2765,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-macros"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "darling 0.24.1",
+  "derive-new",
+@@ -2792,7 +2781,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-macros-internal"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "darling 0.24.1",
+  "inflections",
+@@ -2804,7 +2792,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-metal"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "block2 0.6.2",
+  "bytemuck",
+@@ -2827,7 +2814,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-opt"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "cubecl-common",
+  "cubecl-core",
+@@ -2848,7 +2834,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-runtime"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "buildid",
+  "bytemuck",
+@@ -2877,7 +2862,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-server"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "buildid",
+  "bytemuck",
+@@ -2905,7 +2889,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-std"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "cubecl-common",
+  "cubecl-core",
+@@ -2922,7 +2905,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-wgpu"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "bytemuck",
+  "cfg-if",
+@@ -2953,7 +2935,6 @@ dependencies = [
+ [[package]]
+ name = "cubecl-zspace"
+ version = "0.11.0-pre.4"
+-source = "git+https://github.com/tracel-ai/cubecl?rev=467522442c7b68f02c7ff0c84b2e249e36d8da91#467522442c7b68f02c7ff0c84b2e249e36d8da91"
+ dependencies = [
+  "derive-new",
+  "serde",
+diff --git a/Cargo.toml b/Cargo.toml
+index e06a552..38d8cbf 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -340,3 +340,25 @@ wgpu-hal             = { git = "https://github.com/ArthurBrussee/wgpu", branch =
+ wgpu-types           = { git = "https://github.com/ArthurBrussee/wgpu", branch = "fix/webgpu-errors-v30.0.1" }
+ naga                 = { git = "https://github.com/ArthurBrussee/wgpu", branch = "fix/webgpu-errors-v30.0.1" }
+ 
++# CubeCL with deferred destroy() of deallocated buffers in wasm (WebSplat fork, pinned at
++# the revision burn uses); a cubecl checkout of that fork is expected next to this one.
++[patch."https://github.com/tracel-ai/cubecl"]
++cubecl = { path = "../cubecl-fork/crates/cubecl" }
++cubecl-common = { path = "../cubecl-fork/crates/cubecl-common" }
++cubecl-core = { path = "../cubecl-fork/crates/cubecl-core" }
++cubecl-cpp = { path = "../cubecl-fork/crates/cubecl-cpp" }
++cubecl-cpu = { path = "../cubecl-fork/crates/cubecl-cpu" }
++cubecl-cuda = { path = "../cubecl-fork/crates/cubecl-cuda" }
++cubecl-environment = { path = "../cubecl-fork/crates/cubecl-environment" }
++cubecl-hip = { path = "../cubecl-fork/crates/cubecl-hip" }
++cubecl-ir = { path = "../cubecl-fork/crates/cubecl-ir" }
++cubecl-llvm = { path = "../cubecl-fork/crates/cubecl-llvm" }
++cubecl-macros = { path = "../cubecl-fork/crates/cubecl-macros" }
++cubecl-macros-internal = { path = "../cubecl-fork/crates/cubecl-macros-internal" }
++cubecl-metal = { path = "../cubecl-fork/crates/cubecl-metal" }
++cubecl-opt = { path = "../cubecl-fork/crates/cubecl-opt" }
++cubecl-runtime = { path = "../cubecl-fork/crates/cubecl-runtime" }
++cubecl-server = { path = "../cubecl-fork/crates/cubecl-server" }
++cubecl-std = { path = "../cubecl-fork/crates/cubecl-std" }
++cubecl-wgpu = { path = "../cubecl-fork/crates/cubecl-wgpu" }
++cubecl-zspace = { path = "../cubecl-fork/crates/cubecl-zspace" }

@@ -42,6 +42,18 @@ mount_microsd()
     return 1
 }
 
+prepare_media_storage()
+{
+    mount_microsd || return 1
+    # A newly formatted card has no vendor-created DCIM directory. The media
+    # writers create their own dated folders, but need these parents first.
+    # Only create them on mounted storage, never on the underlying rootfs.
+    if ! mkdir -p /mnt/DCIM/capture /mnt/DCIM/record; then
+        log "could not prepare photo and recording directories on microSD"
+        return 1
+    fi
+}
+
 # UART3 RX/TX: internal SIYI link to the gimbal controller.
 bspmm 0x0102f012c 0x1201
 bspmm 0x0102f0130 0x1201
@@ -55,6 +67,10 @@ export PATH="/app/bin:${PATH:-/usr/bin:/usr/sbin:/bin:/sbin}"
 export TMP=/run
 
 /sbin/ifconfig eth0:1 192.168.1.25 up
+
+# Keep UniGCS discovery reachable on retained vendor Ethernet drivers, which
+# can drop multicast despite a successful IP_ADD_MEMBERSHIP (observed on A8).
+/sbin/ifconfig eth0 allmulti || log "warning: could not enable Ethernet multicast reception"
 
 # Firmware overlays carry only an initial camera-app configuration. Preserve
 # parameters already selected through the web UI across subsequent upgrades.
@@ -95,7 +111,7 @@ fi
 # can inspect /mnt. WARNING: this also exposes any /mnt/MT11_FW_* package to
 # the automatic vendor updater. Failure is non-fatal so a bad/absent card
 # cannot suppress camera and network service startup.
-mount_microsd || true
+prepare_media_storage || true
 
 # Retain the vendor auxiliary HTTP server.
 if [ -x /app/boa/boa ]; then

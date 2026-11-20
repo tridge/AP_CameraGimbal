@@ -1,0 +1,707 @@
+import {
+  test,
+  expect,
+  fixture,
+  start,
+  openFile,
+  waitIndexed,
+  seekNumber,
+  pointAt,
+  downloadJSON,
+  screenshot,
+} from './helpers.js';
+import fs from 'node:fs/promises';
+
+async function openAnalysis(page, file = fixture('thermal.mkv')) {
+  await start(page);
+  await openFile(page, file, { kind: 'gray16' });
+  await waitIndexed(page);
+  await page.locator('#thermal-analysis > summary').click();
+  await expect(page.locator('#analysis-statistics')).toContainText('327,680 samples');
+  expect(
+    await page.locator('#thermal-analysis').evaluate((el) => el.getBoundingClientRect().height),
+  ).toBeGreaterThan(400);
+}
+async function apply(page, method) {
+  await page.locator('#analysis-method').selectOption(method);
+  await page.locator('#analysis-apply').click();
+  await page.waitForFunction(
+    (method) => {
+      const a = window.fireViewer.thermalAnalysis;
+      return !a.busy && a.result?.settings.method === method && (method === 'raw' || a.plane);
+    },
+    method,
+    { timeout: 45_000 },
+  );
+}
+
+test('histograms and every method preserve raw radiometry, coordinates and reproducible findings', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  await openAnalysis(page);
+  await page.evaluate(() => {
+    window.fireViewer.elevation.terrain = { at: () => 800, description: 'Test terrain' };
+  });
+  const original = await page.evaluate(() => Array.from(window.fireViewer.state.decoded.data));
+  for (const method of [
+    'background',
+    'dog',
+    'tophat',
+    'cfar',
+    'matched',
+    'multiscale',
+    'clahe',
+    'rl',
+    'wiener',
+  ]) {
+    await apply(page, method);
+    expect(
+      await page.evaluate(
+        (original) => window.fireViewer.state.decoded.data.every((v, i) => v === original[i]),
+        original,
+      ),
+    ).toBe(true);
+    await expect(page.locator('#stretch')).toBeDisabled();
+    await pointAt(page, 20, 30);
+    await expect(page.locator('#hover-reading')).toContainText('Raw pixel 20, 30');
+    await expect(page.locator('#hover-reading')).toContainText('1.94 °C');
+    await page.locator('#analysis-histogram').selectOption('processed');
+    await expect(page.locator('#analysis-statistics')).not.toContainText('°C');
+    await page.locator('#analysis-view').selectOption('raw');
+    await expect(page.locator('#stretch')).toBeEnabled();
+    await page.locator('#analysis-view').selectOption('processed');
+  }
+  await page.locator('#analysis-peaks').click();
+  await expect(page.locator('#peak-list li')).not.toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      window.fireViewer.state.peaks.some((p) => Math.hypot(p.x - 320, p.y - 256) < 3),
+    ),
+  ).toBe(true);
+  await pointAt(page, 20, 30);
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  await page.locator('#export-findings').click();
+  const json = await downloadJSON(page, '#export-json', testInfo, 'analysis-findings.json');
+  const f = json.findings[0];
+  expect(f.rawValue).toBe(17606);
+  expect(f.temperatureC).toBeCloseTo(1.94375, 5);
+  expect(f.rawPixel).toEqual({ x: 20, y: 30 });
+  expect(f.ground).not.toBeNull();
+  expect(f.analysis.method).toBe('wiener');
+  expect(f.analysis.candidateMethod).toBe('matched');
+  expect(f.analysis.inputSha256).toBe(f.calibration.sourceSha256);
+  expect(f.analysis.temperatureFromOriginalOnly).toBe(true);
+  await page.locator('#analysis-histogram-canvas').scrollIntoViewIfNeeded();
+  await screenshot(page, testInfo, 'analysis-wiener-histogram.png');
+});
+
+test('raw-coordinate ROI, rotation, histogram CSV and raw/result comparison', async ({
+  page,
+}, testInfo) => {
+  await openAnalysis(page);
+  await page.locator('#rotation').selectOption('180');
+  await pointAt(page, 319, 255); // Raw320,256 after rotation.
+  await page.locator('.analysis-region > summary').click();
+  await page.locator('#analysis-cursor').click();
+  await expect(page.locator('#analysis-statistics')).toContainText('9,216 samples');
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.roi)).toEqual({
+    x: 272,
+    y: 208,
+    width: 96,
+    height: 96,
+  });
+  await apply(page, 'matched');
+  const canvasPixels = () => page.locator('#video-canvas').evaluate((c) => c.toDataURL());
+  const withOutline = await canvasPixels();
+  await page.locator('#thermal-analysis > summary').click();
+  await expect.poll(canvasPixels).not.toBe(withOutline);
+  await page.locator('#thermal-analysis > summary').click();
+  await expect.poll(canvasPixels).toBe(withOutline);
+  const download = page.waitForEvent('download');
+  await page.locator('#analysis-export').click();
+  const path = testInfo.outputPath('histogram.csv');
+  await (await download).saveAs(path);
+  const lines = (await fs.readFile(path, 'utf8')).trim().split('\n'),
+    meta = JSON.parse(lines[0].slice(2));
+  expect(meta.source).toBe('raw');
+  expect(meta.roi.width).toBe(96);
+  expect(lines.slice(2).reduce((s, line) => s + Number(line.split(',')[2]), 0)).toBe(96 * 96);
+  await page.locator('#analysis-log').check();
+  await page.locator('#analysis-histogram').selectOption('processed');
+  await expect(page.locator('#analysis-statistics')).not.toContainText('°C');
+  await screenshot(page, testInfo, 'analysis-roi-log-histogram.png');
+});
+
+test('zoom and raw gamma windows survive processed-score comparison without changing temperatures', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#stretch').selectOption('gamma');
+  await page.locator('#stretch-low').fill('5');
+  await page.locator('#stretch-high').fill('30');
+  await page.locator('#display-gamma').fill('1.7');
+  await page.locator('#palette').selectOption('GloryHot');
+  await page.locator('#video-zoom').selectOption('4');
+  const displayPixel = () =>
+    page.evaluate(() => [
+      ...window.fireViewer.state.image.getContext('2d').getImageData(300, 200, 1, 1).data,
+    ]);
+  const originalDisplay = await displayPixel();
+  const raw = await page.evaluate(() => window.fireViewer.state.decoded.data[30 * 640 + 20]);
+  await apply(page, 'matched');
+  await expect(page.locator('#stretch')).toBeDisabled();
+  await expect(page.locator('#display-gamma')).toBeDisabled();
+  await expect(page.locator('#stretch-low')).toBeDisabled();
+  await expect(page.locator('#stretch-high')).toBeDisabled();
+  await expect(page.locator('#display-note')).toContainText('score units');
+  await expect(page.locator('#video-zoom')).toHaveValue('4');
+  await page.locator('#pixel-x').fill('20');
+  await page.locator('#pixel-y').fill('30');
+  await expect(page.locator('#hover-reading')).toContainText('1.94 °C');
+  expect(await page.evaluate(() => window.fireViewer.state.decoded.data[30 * 640 + 20])).toBe(raw);
+  await page.locator('#analysis-view').selectOption('raw');
+  await expect(page.locator('#stretch')).toBeEnabled();
+  await expect(page.locator('#display-gamma')).toBeEnabled();
+  await expect(page.locator('#stretch')).toHaveValue('gamma');
+  await expect(page.locator('#display-gamma')).toHaveValue('1.7');
+  await expect(page.locator('#stretch-low')).toHaveValue('5');
+  await expect(page.locator('#stretch-high')).toHaveValue('30');
+  expect(await displayPixel()).toEqual(originalDisplay);
+  await page.locator('#frame-input').fill('3');
+  await page.locator('#frame-go').click();
+  await expect(page.locator('#frame-number')).toContainText('Frame 3 / 12');
+  await expect(page.locator('#video-zoom')).toHaveValue('4');
+  await expect(page.locator('#display-gamma')).toHaveValue('1.7');
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+});
+
+test('seeking, cancellation, playback and RGB source replacement discard processed results', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('rl');
+  await page.locator('#analysis-iterations').fill('25');
+  await page.locator('#analysis-apply').click();
+  await seekNumber(page, 3);
+  await page.waitForFunction(() => !window.fireViewer.thermalAnalysis.busy);
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.result?.inputSha256)).toBe(
+    await page.evaluate(() => window.fireViewer.state.frame.thermalMetadata.source_sha256),
+  );
+  await page.locator('#analysis-apply').click();
+  await page.locator('#analysis-cancel').click();
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+  await apply(page, 'matched');
+  await page.locator('#play').click();
+  await page.waitForFunction(() => window.fireViewer.state.number > 3);
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+  await page.locator('#play').click();
+  await openFile(page, fixture('rgb.mp4'));
+  await expect(page.locator('#analysis-apply')).toBeDisabled();
+  await expect(page.locator('#analysis-availability')).toContainText('no detector samples');
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.result)).toBeNull();
+});
+
+test('uncalibrated raw images retain sample-only analysis and a narrow viewport fits the controls', async ({
+  page,
+}, testInfo) => {
+  await openAnalysis(page, fixture('uncalibrated.mkv'));
+  await expect(page.locator('#analysis-statistics')).not.toContainText('°C');
+  await apply(page, 'cfar');
+  await expect(page.locator('#stretch')).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#thermal-analysis').scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await screenshot(page, testInfo, 'analysis-mobile.png');
+});
+
+test('real flight thermal frame supports both restorations with unchanged raw samples', async ({
+  page,
+}, testInfo) => {
+  test.skip(!process.env.VIEWER_REAL_THERMAL, 'Provide a local real thermal recording.');
+  test.setTimeout(180_000);
+  await start(page);
+  await openFile(page, process.env.VIEWER_REAL_THERMAL, { kind: 'gray16', timeout: 120_000 });
+  await page.locator('#thermal-analysis > summary').click();
+  await page.waitForFunction(() => window.fireViewer.thermalAnalysis.result?.rawStats);
+  const bytes = await page.evaluate(() => Array.from(window.fireViewer.state.decoded.data));
+  for (const method of ['matched', 'multiscale', 'rl', 'wiener']) {
+    await apply(page, method);
+    expect(
+      await page.evaluate(
+        (before) => window.fireViewer.state.decoded.data.every((v, i) => v === before[i]),
+        bytes,
+      ),
+    ).toBe(true);
+    await screenshot(page, testInfo, `real-thermal-${method}.png`);
+  }
+  await waitIndexed(page);
+  const reference = JSON.parse(await fs.readFile(fixture('real-reference.json'), 'utf8')).frames[1];
+  await seekNumber(page, reference.number);
+  await apply(page, 'matched');
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.result.inputSha256)).toBe(
+    reference.raw_sha256,
+  );
+  await screenshot(page, testInfo, 'real-thermal-midflight-matched.png');
+});
+
+test('analysis adds no duplicate image renders during ordinary playback and waits for decode', async ({
+  page,
+}) => {
+  await start(page);
+  await openFile(page, fixture('thermal.mkv'), { kind: 'gray16' });
+  await waitIndexed(page);
+  await page.evaluate(() => {
+    const a = window.fireViewer.thermalAnalysis,
+      change = a.onChange;
+    window.analysisRepaints = 0;
+    a.onChange = () => {
+      window.analysisRepaints++;
+      change();
+    };
+  });
+  await page.locator('#play').click();
+  await expect(page.locator('#analysis-apply')).toBeDisabled();
+  await page.waitForFunction(() => window.fireViewer.state.number > 2);
+  expect(await page.evaluate(() => window.analysisRepaints)).toBe(0);
+  await page.locator('#play').click();
+  await page.evaluate(() => {
+    const d = window.fireViewer.state.decoder,
+      original = d.decode.bind(d);
+    window.restoreDecode = () => {
+      d.decode = original;
+    };
+    d.decode = async (...args) => {
+      await new Promise((resolve) => {
+        window.releaseDecode = resolve;
+      });
+      return original(...args);
+    };
+    window.pendingAnalysisSeek = window.fireViewer.showFrame(7);
+  });
+  await expect(page.locator('#analysis-apply')).toBeDisabled();
+  await page.evaluate(async () => {
+    window.restoreDecode();
+    window.releaseDecode();
+    await window.pendingAnalysisSeek;
+  });
+  await expect(page.locator('#analysis-apply')).toBeEnabled();
+  expect(await page.evaluate(() => window.fireViewer.state.number)).toBe(7);
+});
+
+test('playing at an indexing boundary clears processed display and cancels pending analysis', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await seekNumber(page, 11);
+  await apply(page, 'matched');
+  await page.evaluate(() => {
+    const { state } = window.fireViewer;
+    window.originalBoundaryPixels = state.decoded.data.slice();
+    // Model the end of a playable prefix while the indexer awaits more frames.
+    state.indexed = false;
+  });
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return state.playing && !a.result && !a.busy && !a.plane;
+  });
+  await expect(page.locator('#analysis-display-badge')).toBeHidden();
+  expect(await page.evaluate(() => window.fireViewer.state.number)).toBe(11);
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const a = window.fireViewer.thermalAnalysis;
+    return a.result?.settings.method === 'raw' && !a.busy;
+  });
+  await page.evaluate(() => {
+    const client = window.fireViewer.thermalAnalysis.client;
+    window.restoreAnalysisWorker = () => {
+      client.workerFactory = originalFactory;
+    };
+    const originalFactory = client.workerFactory;
+    window.boundaryWorkerTerminated = false;
+    client.workerFactory = () => {
+      const worker = originalFactory(),
+        terminate = worker.terminate.bind(worker);
+      // Keep a real worker pending deterministically, without racing filter speed.
+      worker.postMessage = () => {};
+      worker.terminate = () => {
+        window.boundaryWorkerTerminated = true;
+        terminate();
+      };
+      return worker;
+    };
+  });
+  await page.locator('#analysis-apply').click();
+  await page.waitForFunction(() => {
+    const a = window.fireViewer.thermalAnalysis;
+    return a.busy && a.client.worker && a.client.pending;
+  });
+  await page.locator('#play').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return (
+      state.playing &&
+      !a.result &&
+      !a.busy &&
+      !a.client.worker &&
+      !a.client.pending &&
+      window.boundaryWorkerTerminated
+    );
+  });
+  expect(
+    await page.evaluate(() =>
+      window.fireViewer.state.decoded.data.every(
+        (value, i) => value === window.originalBoundaryPixels[i],
+      ),
+    ),
+  ).toBe(true);
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  await page.locator('#play').click();
+});
+
+test('apply to every frame processes each stepped and played frame before showing it', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('rl');
+  await page.locator('#analysis-iterations').fill('4');
+  await page.locator('#analysis-follow').check();
+  const current = () =>
+    page.waitForFunction(
+      () => {
+        const v = window.fireViewer,
+          a = v.thermalAnalysis;
+        return (
+          !v.state.decoding &&
+          !a.busy &&
+          a.plane &&
+          a.result.settings.method === 'rl' &&
+          JSON.parse(a.identity)[4] === v.state.frame.id
+        );
+      },
+      null,
+      { timeout: 45_000 },
+    );
+  await current();
+  await page.locator('#next').click();
+  await current();
+  await page.locator('#previous').click();
+  await current();
+  // During playback every presented frame must carry its own processed plane.
+  const seen = await page.evaluate(async () => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis,
+      ids = [];
+    let stale = 0;
+    v.state.number = 0;
+    const done = new Promise((resolve) => {
+      const check = () => {
+        if (!v.state.decoding && v.state.frame) {
+          if (!a.busy && a.plane) {
+            if (JSON.parse(a.identity)[4] !== v.state.frame.id) stale++;
+            if (ids.at(-1) !== v.state.frame.id) ids.push(v.state.frame.id);
+          }
+        }
+        if (!v.state.playing) resolve();
+        else requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
+    document.querySelector('#play').click();
+    await done;
+    return { ids: ids.length, stale };
+  });
+  expect(seen.stale).toBe(0);
+  expect(seen.ids).toBeGreaterThan(3);
+  await expect(page.locator('#analysis-display-badge')).toBeVisible();
+  await page.locator('#analysis-follow').uncheck();
+  await page.locator('#next').click();
+  await page.waitForFunction(() => !window.fireViewer.state.decoding);
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.plane)).toBeNull();
+});
+
+test('apply to every frame never records the previous frame result against the next frame', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  const current = () =>
+    page.waitForFunction(
+      () => {
+        const v = window.fireViewer,
+          a = v.thermalAnalysis;
+        return (
+          !v.state.decoding && !a.busy && a.plane && JSON.parse(a.identity)[4] === v.state.frame.id
+        );
+      },
+      null,
+      { timeout: 45_000 },
+    );
+  await current();
+  // Hold the next frame's analysis so its pending state can be inspected.
+  await page.evaluate(() => {
+    const client = window.fireViewer.thermalAnalysis.client,
+      originalFactory = client.workerFactory,
+      held = [];
+    client.workerFactory = () => {
+      const worker = originalFactory(),
+        post = worker.postMessage.bind(worker);
+      worker.postMessage = (...args) => held.push(() => post(...args));
+      return worker;
+    };
+    window.releaseAnalysis = () => {
+      client.workerFactory = originalFactory;
+      for (const send of held.splice(0)) send();
+    };
+  });
+  const shown = await page.evaluate(() => window.fireViewer.state.frame.id);
+  await page.locator('#next').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return a.busy && a.client.pending && state.decoding;
+  });
+  expect(await page.evaluate(() => window.fireViewer.state.frame.id)).toBe(shown);
+  expect(await page.evaluate(() => window.fireViewer.state.pendingFrame.frame.id)).not.toBe(shown);
+  await expect(page.locator('#analysis-export')).toBeDisabled();
+  await expect(page.locator('#analysis-peaks')).toBeDisabled();
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.provenance())).toBeNull();
+  await page.locator('#video-stage').focus();
+  await page.keyboard.press('KeyM');
+  await page.evaluate(() => window.fireViewer.markFinding());
+  expect(await page.evaluate(() => window.fireViewer.state.findings.length)).toBe(0);
+
+  await page.evaluate(() => window.releaseAnalysis());
+  await current();
+  await expect(page.locator('#analysis-export')).toBeEnabled();
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  const match = await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      f = state.findings[0];
+    return {
+      frame: f.frameId === state.frame.id,
+      identity: JSON.parse(f.analysis.identity)[4] === f.frameId,
+      sha: f.analysis.inputSha256 === a.result.inputSha256,
+    };
+  });
+  expect(match).toEqual({ frame: true, identity: true, sha: true });
+
+  // An uncommitted invalid edit drops the processed result rather than carrying it forward.
+  await page.evaluate(() => {
+    document.querySelector('#analysis-sigma').value = '99';
+    const v = window.fireViewer;
+    return v.showFrame(v.state.number + 1);
+  });
+  await page.waitForFunction(() => !window.fireViewer.state.decoding);
+  expect(
+    await page.evaluate(() => {
+      const a = window.fireViewer.thermalAnalysis;
+      return { result: a.result, pending: a.pending, plane: a.plane };
+    }),
+  ).toEqual({ result: null, pending: false, plane: null });
+  await expect(page.locator('#analysis-display-badge')).toBeHidden();
+  await expect(page.locator('#analysis-export')).toBeDisabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('2');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return state.findings[1].frameId === state.frame.id && state.findings[1].analysis;
+    }),
+  ).toBeNull();
+});
+
+test('mark finding recovers after a held follow seek is superseded by a failed decode', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      originalFactory = a.client.workerFactory,
+      held = [];
+    a.client.workerFactory = () => {
+      const worker = originalFactory(),
+        post = worker.postMessage.bind(worker);
+      worker.postMessage = (...args) => held.push(() => post(...args));
+      return worker;
+    };
+    window.releaseAnalysis = () => {
+      a.client.workerFactory = originalFactory;
+      for (const send of held.splice(0)) send();
+    };
+    const decode = state.decoder.decode.bind(state.decoder);
+    window.failNextDecode = () => {
+      state.decoder.decode = async () => {
+        state.decoder.decode = decode;
+        throw new Error('Injected decode failure');
+      };
+    };
+  });
+  await page.locator('#next').click();
+  await page.waitForFunction(() => window.fireViewer.thermalAnalysis.client.pending);
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.evaluate(() => {
+    const v = window.fireViewer;
+    window.failNextDecode();
+    return v.showFrame(v.state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  // The superseded frame is still not presented.
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.evaluate(() => window.releaseAnalysis());
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return !a.pending && !a.busy && !state.decoding;
+  });
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer,
+        f = state.findings[0];
+      return f.frameId === state.frame.id && JSON.parse(f.analysis.identity)[4] === f.frameId;
+    }),
+  ).toBe(true);
+});
+
+test('cancelling a superseded follow analysis draws its frame before marking is enabled', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  // With Compare on Original, cancelling has no processed plane to repaint.
+  await page.locator('#analysis-view').selectOption('raw');
+  await page.evaluate(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer,
+      originalFactory = a.client.workerFactory;
+    a.client.workerFactory = () => {
+      const worker = originalFactory();
+      worker.postMessage = () => {};
+      return worker;
+    };
+    window.restoreAnalysisWorker = () => (a.client.workerFactory = originalFactory);
+    const decode = state.decoder.decode.bind(state.decoder);
+    window.failNextDecode = () => {
+      state.decoder.decode = async () => {
+        state.decoder.decode = decode;
+        throw new Error('Injected decode failure');
+      };
+    };
+  });
+  const drawn = () =>
+    page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return {
+        frame: state.frame.id,
+        presented: state.presentedFrame?.id,
+        pending: state.pendingFrame?.frame.id,
+      };
+    });
+  const first = (await drawn()).presented;
+  await page.locator('#next').click();
+  await page.waitForFunction(() => window.fireViewer.thermalAnalysis.client.pending);
+  await page.evaluate(() => {
+    const v = window.fireViewer;
+    window.failNextDecode();
+    return v.showFrame(v.state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  const held = await drawn();
+  expect(held.presented).toBe(first);
+  expect(held.frame).toBe(first);
+  expect(held.pending).not.toBe(first);
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.locator('#analysis-cancel').click();
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return !a.pending && !a.busy && !state.decoding;
+  });
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  const recovered = await drawn();
+  expect(recovered.presented).toBe(recovered.frame);
+  expect(recovered.frame).toBe(held.pending);
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(await page.evaluate(() => window.fireViewer.state.findings[0].frameId)).toBe(held.pending);
+});
+
+test('recovering a reopened recording presents its first frame with visible canvas and controls', async ({
+  page,
+}) => {
+  await openAnalysis(page);
+  await page.locator('#analysis-method').selectOption('matched');
+  await page.locator('#analysis-follow').check();
+  await page.waitForFunction(() => {
+    const v = window.fireViewer,
+      a = v.thermalAnalysis;
+    return !v.state.decoding && !a.busy && a.plane && !a.pending;
+  });
+  await page.evaluate(() => {
+    const a = window.fireViewer.thermalAnalysis,
+      originalFactory = a.client.workerFactory;
+    a.client.workerFactory = () => {
+      const worker = originalFactory();
+      worker.postMessage = () => {};
+      return worker;
+    };
+    window.restoreAnalysisWorker = () => (a.client.workerFactory = originalFactory);
+  });
+  // Reopen; the first frame's analysis is held, so nothing is presented yet.
+  await page.locator('#video-file').setInputFiles(fixture('thermal.mkv'));
+  await page.waitForFunction(() => {
+    const { state, thermalAnalysis: a } = window.fireViewer;
+    return state.pendingFrame && a.client.pending && state.frames.length > 1;
+  });
+  await page.evaluate(() => {
+    const { state, showFrame } = window.fireViewer,
+      decoder = state.decoder,
+      decode = decoder.decode.bind(decoder);
+    decoder.decode = async () => {
+      decoder.decode = decode;
+      throw new Error('Injected decode failure');
+    };
+    return showFrame(state.number + 1);
+  });
+  await expect(page.locator('#error-text')).toContainText('Injected decode failure');
+  await expect(page.locator('#video-canvas')).toBeHidden();
+  await expect(page.locator('#empty-video')).toBeVisible();
+  await expect(page.locator('#mark-finding')).toBeDisabled();
+  await page.locator('#analysis-cancel').click();
+  await page.evaluate(() => window.restoreAnalysisWorker());
+  await expect(page.locator('#video-canvas')).toBeVisible();
+  await expect(page.locator('#empty-video')).toBeHidden();
+  await expect(page.locator('#play')).toBeEnabled();
+  await expect(page.locator('#next')).toBeEnabled();
+  await expect(page.locator('#frame-number')).toContainText('Frame 1 /');
+  await expect(page.locator('#mark-finding')).toBeEnabled();
+  await page.locator('#mark-finding').click();
+  await expect(page.locator('#finding-count')).toHaveText('1');
+  expect(
+    await page.evaluate(() => {
+      const { state } = window.fireViewer;
+      return state.findings[0].frameId === state.frame.id && state.presentedFrame === state.frame;
+    }),
+  ).toBe(true);
+});

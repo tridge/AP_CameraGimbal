@@ -6,6 +6,9 @@
 #include <stdint.h>
 
 #include "camera_app/config.h"
+#include "camera_app/image_tracker.h"
+bool ca_a8_tracking_available();
+bool ca_a8_tracking_frame(ca_tracking_frame &frame);
 #include "apcam/target.h"
 
 /* SIYI A8 mini: SigmaStar SSC8836 (Mercury6) with a Sony IMX678.
@@ -14,6 +17,10 @@
 #define CA_A8_SENSOR_HEIGHT APCAM_LENS1_HEIGHT
 #define CA_A8_FRAME_RATE APCAM_FRAME_RATE
 #define CA_A8_MAX_ZOOM APCAM_ZOOM_MAX
+
+/* Frame-buffered ISP output feeds SCL device 1. Digital zoom can upscale
+ * beyond the sensor's pixel rate, which overruns the realtime SCL path. */
+#define CA_A8_SCL_DEV 1
 
 #define CA_A8_MAIN_VENC 0U
 #define CA_A8_SUB_VENC 1U

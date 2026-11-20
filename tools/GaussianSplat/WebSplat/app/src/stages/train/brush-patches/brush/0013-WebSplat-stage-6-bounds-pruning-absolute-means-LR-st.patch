@@ -1,0 +1,333 @@
+From 5ebc3fe2f53ee856a80af28779e6ed2cf60198d0 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Mon, 9 Nov 2026 00:12:06 +1100
+Subject: [PATCH] WebSplat stage 6: bounds pruning, absolute means LR, start
+ step, unbaked checkpoint PLY
+
+---
+ apps/brush-js/src/lib.rs                 | 14 ++++++
+ crates/brush-dataset/src/formats/mod.rs  | 23 +++++++++-
+ crates/brush-dataset/src/lib.rs          | 27 ++++++++++++
+ crates/brush-process/src/train_stream.rs |  4 ++
+ crates/brush-serde/src/export.rs         | 16 ++++++-
+ crates/brush-serde/src/lib.rs            |  2 +-
+ crates/brush-train/src/config.rs         |  6 +++
+ crates/brush-train/src/train.rs          | 56 ++++++++++++++++++++++--
+ 8 files changed, 142 insertions(+), 6 deletions(-)
+
+diff --git a/apps/brush-js/src/lib.rs b/apps/brush-js/src/lib.rs
+index bf68fb1..9b9c52c 100644
+--- a/apps/brush-js/src/lib.rs
++++ b/apps/brush-js/src/lib.rs
+@@ -404,6 +404,20 @@ impl Training {
+         Ok(js_sys::Uint8Array::from(bytes.as_slice()))
+     }
+ 
++    /// The current splats' raw trainable parameters as PLY bytes (3D-filter floor not
++    /// baked): a training checkpoint to resume from, not a result.
++    #[wasm_bindgen(js_name = exportCheckpoint)]
++    pub async fn export_checkpoint(&self) -> Result<js_sys::Uint8Array, JsValue> {
++        let splats = self
++            .splat_view
++            .latest()
++            .ok_or_else(|| js_err_str("no splats yet"))?;
++        let bytes = brush_serde::splat_to_ply_unbaked(splats)
++            .await
++            .map_err(|e| js_err_str(&format!("{e:#}")))?;
++        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
++    }
++
+     /// Render every eval view with the current splats as the eval does (black
+     /// background; numeric targets unquantised, clamped to [0, 1]). Returns an
+     /// array of `{name, width, height, psnr, data}` with `data` a `Float32Array`
+diff --git a/crates/brush-dataset/src/formats/mod.rs b/crates/brush-dataset/src/formats/mod.rs
+index ef25b30..83064ad 100644
+--- a/crates/brush-dataset/src/formats/mod.rs
++++ b/crates/brush-dataset/src/formats/mod.rs
+@@ -108,9 +108,11 @@ pub async fn load_dataset(
+         result.init_splat
+     };
+ 
++    let mut dataset = result.dataset;
++    dataset.prune_bounds = read_prune_bounds(&vfs).await?;
+     let result = DatasetLoadResult {
+         init_splat,
+-        dataset: result.dataset,
++        dataset,
+         warnings: result.warnings,
+     };
+     scale_to_meters(result, load_args.units_per_meter)
+@@ -185,6 +187,25 @@ fn opengl_c2w_to_pose(mut c2w: glam::Mat4) -> (glam::Vec3, glam::Quat) {
+     (translation, rotation)
+ }
+ 
++/// Optional `bounds.json` (see [`crate::PruneBounds`]), checked for a consistent grid.
++async fn read_prune_bounds(vfs: &BrushVfs) -> Result<Option<crate::PruneBounds>, FormatError> {
++    use tokio::io::AsyncReadExt;
++    let Some(path) = vfs.files_ending_in("bounds.json").min() else {
++        return Ok(None);
++    };
++    let mut text = String::new();
++    vfs.reader_at_path(path).await?.read_to_string(&mut text).await?;
++    let bounds: crate::PruneBounds = serde_json::from_str(&text)
++        .map_err(|e| FormatError::InvalidFormat(format!("bounds.json: {e}")))?;
++    let n = bounds.ceiling_n as usize;
++    if n == 0 || bounds.ceiling.len() != n * n || !(bounds.ceiling_cell > 0.0) || !(bounds.radius > 0.0) {
++        return Err(FormatError::InvalidFormat(
++            "bounds.json: inconsistent ceiling grid or radius".to_owned(),
++        ));
++    }
++    Ok(Some(bounds))
++}
++
+ /// Split views into (train, eval). A dataset file `eval_views.txt` (one image file
+ /// name per line) fixes the eval views by name; otherwise every
+ /// `eval_split_every`-th view is an eval view.
+diff --git a/crates/brush-dataset/src/lib.rs b/crates/brush-dataset/src/lib.rs
+index 6912b7b..880f259 100644
+--- a/crates/brush-dataset/src/lib.rs
++++ b/crates/brush-dataset/src/lib.rs
+@@ -117,6 +117,31 @@ pub fn compute_sorted_eigenvectors(matrix: Mat3) -> (Vec3, Vec3, Vec3) {
+ pub struct Dataset {
+     pub train: Scene,
+     pub eval: Option<Scene>,
++    /// Region the splats must stay in (from the dataset's `bounds.json`), if any.
++    pub prune_bounds: Option<PruneBounds>,
++}
++
++/// Spatial pruning region of a thermal (train.py-style) dataset, from `bounds.json`: a
++/// vertical cylinder `|xy - centre| <= radius`, `z >= z_min`, and `z <= ceiling(x, y)` from a
++/// grid of `n x n` cells of `cell` metres from `origin`, indexed `[i * n + j]` with
++/// `i = clamp(trunc((x - origin.x) / cell))` (east) and `j` likewise (north). Optionally,
++/// splats larger than `max_scale` metres on any axis are pruned while
++/// `scale_prune_from <= iter < scale_prune_until`.
++#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
++pub struct PruneBounds {
++    pub centre: [f32; 2],
++    pub radius: f32,
++    pub z_min: f32,
++    pub ceiling_origin: [f32; 2],
++    pub ceiling_cell: f32,
++    pub ceiling_n: u32,
++    pub ceiling: Vec<f32>,
++    #[serde(default)]
++    pub max_scale: Option<f32>,
++    #[serde(default)]
++    pub scale_prune_from: u32,
++    #[serde(default)]
++    pub scale_prune_until: u32,
+ }
+ 
+ impl Dataset {
+@@ -124,6 +149,7 @@ impl Dataset {
+         Self {
+             train: Scene::new(vec![]),
+             eval: None,
++            prune_bounds: None,
+         }
+     }
+ 
+@@ -135,6 +161,7 @@ impl Dataset {
+             } else {
+                 Some(Scene::new(eval_views))
+             },
++            prune_bounds: None,
+         }
+     }
+ 
+diff --git a/crates/brush-process/src/train_stream.rs b/crates/brush-process/src/train_stream.rs
+index 323958f..b61b101 100644
+--- a/crates/brush-process/src/train_stream.rs
++++ b/crates/brush-process/src/train_stream.rs
+@@ -161,6 +161,7 @@ pub(crate) async fn train_stream(
+     // Start with memory cleared out.
+     device.memory_cleanup();
+ 
++    let prune_bounds = dataset.prune_bounds.clone();
+     let mut eval_scene = dataset.eval;
+ 
+     let mut train_duration = Duration::from_secs(0);
+@@ -185,6 +186,9 @@ pub(crate) async fn train_stream(
+         process_config.seed,
+     );
+     trainer.set_view_cams(view_cams.clone());
++    trainer.set_prune_bounds(prune_bounds);
++    // a resumed run continues the learning-rate schedule (optimiser moments are not restored)
++    trainer.set_step_count(process_config.start_iter);
+ 
+     // Get the dataset name from the base path (if available) for interpolation.
+     let dataset_name = vfs
+diff --git a/crates/brush-serde/src/export.rs b/crates/brush-serde/src/export.rs
+index dc69fae..d69afd7 100644
+--- a/crates/brush-serde/src/export.rs
++++ b/crates/brush-serde/src/export.rs
+@@ -193,7 +193,21 @@ pub async fn splat_to_ply_with_comments(
+ ) -> Result<Vec<u8>, ExportError> {
+     // Fold any 3D-filter floor into the stored scales/opacity so the ply holds
+     // ordinary derived values — the floor is never written as a separate field.
+-    let splats = splats.bake_min_scale();
++    splat_to_ply_inner(splats.bake_min_scale(), up_axis, extra_comments).await
++}
++
++/// The trainable parameters as they are, without baking the 3D-filter floor: a training
++/// checkpoint that resumes from these does not apply the floor twice.
++pub async fn splat_to_ply_unbaked(splats: Splats) -> Result<Vec<u8>, ExportError> {
++    let comments = ["WebSplat checkpoint: raw parameters, 3D-filter floor not baked".to_owned()];
++    splat_to_ply_inner(splats, None, &comments).await
++}
++
++async fn splat_to_ply_inner(
++    splats: Splats,
++    up_axis: Option<Vec3>,
++    extra_comments: &[String],
++) -> Result<Vec<u8>, ExportError> {
+     let sh_degree = splats.sh_degree();
+     let ply = read_splat_data(splats.clone()).await?;
+ 
+diff --git a/crates/brush-serde/src/lib.rs b/crates/brush-serde/src/lib.rs
+index f508a29..0a0f9a2 100644
+--- a/crates/brush-serde/src/lib.rs
++++ b/crates/brush-serde/src/lib.rs
+@@ -6,7 +6,7 @@ pub mod ply_gaussian;
+ pub mod quant;
+ 
+ // Re-export main functionality
+-pub use export::{ExportError, splat_to_ply, splat_to_ply_with_comments};
++pub use export::{ExportError, splat_to_ply, splat_to_ply_unbaked, splat_to_ply_with_comments};
+ pub use import::{
+     ParseMetadata, SplatData, SplatMessage, load_splat_from_ply, stream_splat_from_ply,
+ };
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index 50b3c14..5bf9ac3 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -20,6 +20,12 @@ pub struct TrainConfig {
+     #[arg(long, help_heading = "Training options", default_value = "2e-7")]
+     pub lr_mean_end: f64,
+ 
++    /// Use --lr-mean / --lr-mean-end as absolute rates (metres per step, like train.py's
++    /// `1.6e-4 * extent`) instead of multiplying them by the splats' median scene size.
++    #[arg(long, help_heading = "Training options", default_value = "false")]
++    #[serde(default)]
++    pub lr_mean_absolute: bool,
++
+     /// How much noise to add to the mean parameters of low opacity gaussians.
+     #[arg(long, help_heading = "Training options", default_value = "50.0")]
+     pub mean_noise_weight: f32,
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index 94c289f..1c5d97a 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -9,7 +9,7 @@ use crate::{
+     splat_init::bounds_from_pos,
+     stats::RefineRecord,
+ };
+-use brush_dataset::scene::SceneBatch;
++use brush_dataset::{PruneBounds, scene::SceneBatch};
+ use brush_loss::{ImageLossConfig, image_loss};
+ use brush_render::bwd::render_splats;
+ use brush_render::gaussian_splats::Splats;
+@@ -87,6 +87,8 @@ pub struct SplatTrainer {
+     /// Mip-Splatting 3D filter. Empty disables it. The floor itself lives on
+     /// the splats (recomputed at each refine), not here.
+     view_cams: Vec<(glam::Vec3, f32)>,
++    /// train.py's spatial pruning (cylinder, floor, canopy ceiling, maximum size), at each refine.
++    prune_bounds: Option<PruneBounds>,
+     #[cfg(not(target_family = "wasm"))]
+     lpips: Option<lpips::LpipsModel>,
+ }
+@@ -185,6 +187,7 @@ impl SplatTrainer {
+         Self {
+             config,
+             lr_mean_decay: decay,
++            prune_bounds: None,
+             lr_scaling_fixed,
+             lr_mean_columns,
+             optim: None,
+@@ -211,6 +214,15 @@ impl SplatTrainer {
+         self.view_cams = view_cams;
+     }
+ 
++    pub fn set_prune_bounds(&mut self, bounds: Option<PruneBounds>) {
++        self.prune_bounds = bounds;
++    }
++
++    /// Steps already trained (a resumed run): the mean learning rate continues its schedule.
++    pub fn set_step_count(&mut self, steps: u32) {
++        self.step_count = steps;
++    }
++
+     pub async fn step(&mut self, batch: SceneBatch, splats: Splats) -> (Splats, TrainStepStats) {
+         let mut splats = splats;
+ 
+@@ -245,9 +257,14 @@ impl SplatTrainer {
+ 
+         let median_scale = self.bounds.median_size();
+ 
++        let lr_mean_scale = if self.config.lr_mean_absolute {
++            1.0
++        } else {
++            median_scale as f64
++        };
+         let lr_mean = self.config.lr_mean
+             * self.lr_mean_decay.powi(self.step_count as i32 - 1)
+-            * median_scale as f64;
++            * lr_mean_scale;
+         let masked_alpha = batch.alpha_mode == AlphaMode::Masked;
+         let do_alpha_match = has_alpha && !masked_alpha && self.config.match_alpha_weight > 0.0;
+ 
+@@ -526,10 +543,13 @@ impl SplatTrainer {
+             .await
+             .expect("Failed to count non-finite splats") as u32;
+ 
+-        let prune_mask = alpha_mask
++        let mut prune_mask = alpha_mask
+             .bool_or(scale_big)
+             .bool_or(bound_mask)
+             .bool_or(non_finite_mask);
++        if let Some(bounds) = &self.prune_bounds {
++            prune_mask = prune_mask.bool_or(outside_prune_bounds(&splats, bounds, iter));
++        }
+ 
+         let (mut splats, refiner, pruned_count) =
+             prune_points(splats, &mut optim, refiner, prune_mask).await;
+@@ -867,6 +887,36 @@ async fn prune_points(
+     (splats, refiner, start_splats - new_points)
+ }
+ 
++/// train.py's `outside()`: horizontally beyond the cylinder, below the floor or above the
++/// canopy ceiling (cell index truncated and clamped, as `.long().clamp()`), plus gsplat's
++/// too-big rule (any axis above `max_scale`) inside its iteration window.
++fn outside_prune_bounds(splats: &Splats, b: &PruneBounds, iter: u32) -> Tensor<1, Bool> {
++    let device = splats.device();
++    let means = splats.means();
++    let x: Tensor<1> = means.clone().slice(s![.., 0..1]).squeeze_dim(1);
++    let y: Tensor<1> = means.clone().slice(s![.., 1..2]).squeeze_dim(1);
++    let z: Tensor<1> = means.slice(s![.., 2..3]).squeeze_dim(1);
++    let dx = x.clone() - b.centre[0];
++    let dy = y.clone() - b.centre[1];
++    let r2 = dx.clone() * dx + dy.clone() * dy;
++    let n = b.ceiling_n as i32;
++    let i = ((x - b.ceiling_origin[0]) / b.ceiling_cell).int().clamp(0, n - 1);
++    let j = ((y - b.ceiling_origin[1]) / b.ceiling_cell).int().clamp(0, n - 1);
++    let grid = Tensor::<1>::from_floats(b.ceiling.as_slice(), &device);
++    let ceiling = grid.select(0, i * n + j);
++    let mut out = r2
++        .greater_elem(b.radius * b.radius)
++        .bool_or(z.clone().lower_elem(b.z_min))
++        .bool_or(z.greater(ceiling));
++    if let Some(max_scale) = b.max_scale
++        && iter >= b.scale_prune_from
++        && iter < b.scale_prune_until
++    {
++        out = out.bool_or(splats.scales().greater_elem(max_scale).any_dim(1).squeeze_dim(1));
++    }
++    out
++}
++
+ /// Sample a background color: base + uniform noise in [-strength, +strength], clamped to [0, 1].
+ fn sample_background_color<R: rand::Rng + ?Sized>(
+     base: glam::Vec3,
+-- 
+2.53.0
+

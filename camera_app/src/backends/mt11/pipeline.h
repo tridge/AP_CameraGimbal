@@ -30,6 +30,9 @@ struct ca_mt11_output_sizes {
     td_u32 height[3];
 };
 
+// experiment: CA_MT11_SINGLE_SENSOR=1 runs only the wide RGB sensor
+bool ca_mt11_single_sensor(void);
+#define CA_MT11_FIRST_PIPE (ca_mt11_single_sensor() ? CA_MT11_WIDE_PIPE : CA_MT11_ZOOM_PIPE)
 td_s32 ca_mt11_system_init(void);
 void ca_mt11_configure_vi(sample_vi_cfg *vi_cfg, td_bool wide);
 td_s32 ca_mt11_vpss_start(ot_vpss_grp group,
@@ -46,6 +49,6 @@ td_s32 ca_mt11_thermal_vpss_start(
     const struct ca_mt11_output_sizes *sizes);
 void ca_mt11_thermal_vpss_stop(void);
 td_s32 ca_mt11_thermal_send_yuyv(const td_u8 *yuyv);
-td_s32 ca_mt11_set_inverted(td_bool inverted);
+td_s32 ca_mt11_set_inverted(td_bool inverted, ot_vpss_grp record_group);
 
 #endif

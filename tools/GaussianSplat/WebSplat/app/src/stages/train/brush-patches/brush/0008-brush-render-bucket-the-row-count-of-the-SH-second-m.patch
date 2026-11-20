@@ -1,0 +1,66 @@
+From 145ed9c4e488dd6c47097d135a7f12d52f0446a3 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 18:02:30 +1100
+Subject: [PATCH 08/12] brush-render: bucket the row count of the SH
+ second-moment reduce
+
+The reduce's autotune key includes its row count, the number of visible
+splats, which changes every step, so every step tuned a new key (about a
+second each in wasm). Pad the rows with zeros to one of 8 sizes per octave;
+padded rows are never selected.
+---
+ crates/brush-render/src/bwd/burn_glue.rs | 27 +++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/crates/brush-render/src/bwd/burn_glue.rs b/crates/brush-render/src/bwd/burn_glue.rs
+index c544157..e5f066e 100644
+--- a/crates/brush-render/src/bwd/burn_glue.rs
++++ b/crates/brush-render/src/bwd/burn_glue.rs
+@@ -8,7 +8,7 @@ use crate::{
+     shaders::helpers::ProjectUniforms,
+ };
+ use burn::backend::autodiff::checkpoint::strategy::CheckpointStrategy;
+-use burn::backend::{Autodiff, ExtensionType, fusion::custom::TensorSpec};
++use burn::backend::{Autodiff, ExtensionType, TensorMetadata, fusion::custom::TensorSpec};
+ use burn::{
+     backend::{
+         AutodiffBackend, Backend,
+@@ -222,6 +222,22 @@ impl<B: Backend + SplatBwdOps> Backward<B, NUM_BWD_ARGS> for RenderBackwards {
+             let coeffs = state.project_uniforms.sh_degree;
+             let trailing = (sh_coeffs_for_degree(coeffs) * 3) as f32;
+             let sq = B::float_mul(compact_coeffs.clone(), compact_coeffs);
++            // The reduce's autotune key includes the row count, which is the visible
++            // count and changes every step; pad it to one of 8 sizes per octave so tuning
++            // results are reused (a fresh tune costs about a second per step in wasm).
++            // Padded rows are zero and never selected below.
++            let dims = sq.shape();
++            let (n, padded) = (dims[0], bucket_rows(dims[0]));
++            let sq = if padded > n {
++                let pad = B::float_zeros(
++                    Shape::new([padded - n, dims[1], dims[2]]),
++                    &sq.device(),
++                    sq.dtype().into(),
++                );
++                B::float_cat(vec![sq, pad], 0)
++            } else {
++                sq
++            };
+             let sq = B::float_sum_dims(sq, &[1, 2]);
+             let mean = B::float_div_scalar(sq, burn::tensor::Scalar::Float(trailing as f64));
+             grads.register::<B>(node.id, B::float_select(mean, 0, inv));
+@@ -229,6 +245,15 @@ impl<B: Backend + SplatBwdOps> Backward<B, NUM_BWD_ARGS> for RenderBackwards {
+     }
+ }
+ 
++/// `n` rounded up to a multiple of 1/8 of its power of two (at most 12.5% more).
++fn bucket_rows(n: usize) -> usize {
++    if n <= 64 {
++        return n;
++    }
++    let step = 1usize << (usize::BITS - 1 - n.leading_zeros() - 3);
++    n.div_ceil(step) * step
++}
++
+ pub struct SplatOutputDiff {
+     /// Rendered image, on the autodiff graph (this is what the loss backprops through).
+     pub img: Tensor<3>,

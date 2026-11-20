@@ -35,10 +35,34 @@ with tempfile.TemporaryDirectory(prefix='mp4-rollover-') as temp:
         assert len(rows)==expected
         assert [r['position']['lat_e7'] for r in rows]==[-353632610+i for i in range(expected)]
         print(f'PASS {name}: {len(files)} files, {len(rows)} frames, decoder headers and continuous telemetry')
+    for name,fs in [('fat',0x4d44),('exfat',0x2011bab0),('ext4',0xef53),('fuse',0x65735546)]:
+        path=root/('misb-'+name);path.mkdir();video=path/'video.ts'
+        result=run(BINARY,fixture,video,fs,'normal','misb',env=env)
+        expected=int(result.stdout.strip().split('=')[1]); assert expected==120
+        files=sorted(path.glob('*.ts'))
+        assert (len(files)>1)==(name=='fat'), (name,files)
+        count=0
+        for file in files:
+            frames=json.loads(run('ffprobe','-v','error','-select_streams','v:0','-show_frames',
+                '-show_entries','frame=key_frame,width,height','-of','json',file).stdout)['frames']
+            assert frames[0]['key_frame']==1
+            assert all((p['width'],p['height'])==(320,240) for p in frames)
+            assert not run('ffmpeg','-v','error','-i',file,'-map','0:v:0','-f','null','-').stderr
+            packets=json.loads(run('ffprobe','-v','error','-show_packets',
+                '-show_entries','packet=codec_type,pts','-of','json',file).stdout)['packets']
+            vpts=[p['pts'] for p in packets if p['codec_type']=='video']
+            kpts=[p['pts'] for p in packets if p['codec_type']=='data']
+            assert vpts==kpts==list(range(0,len(frames)*9000,9000))
+            count+=len(frames)
+        assert count==expected
+        print(f'PASS MISB {name}: {len(files)} files, {count} frames, cached decoder headers and synchronous KLV')
     collision=root/'collision';collision.mkdir()
     existing=collision/'video_part0002.mp4';existing.write_bytes(b'preserve existing recording')
     run(BINARY,fixture,collision/'video.mp4',0x4d44,'collision',env=env)
     assert existing.read_bytes()==b'preserve existing recording'
+    existing_ts=collision/'video_part0002.ts';existing_ts.write_bytes(b'preserve MISB recording')
+    run(BINARY,fixture,collision/'video.ts',0x4d44,'collision','misb',env=env)
+    assert existing_ts.read_bytes()==b'preserve MISB recording'
     run(BINARY,fixture,root/'fs-error.mp4',-1,'normal',env=env)
     assert not (root/'fs-error.mp4').exists()
     print('PASS collision and filesystem detection errors preserve recordings')

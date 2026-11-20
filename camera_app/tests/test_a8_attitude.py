@@ -133,14 +133,17 @@ def check_mount_commands(master, mavlink, client, inverted):
     mavlink.mav.gimbal_device_set_attitude_send(
         1, mavutil.mavlink.MAV_COMP_ID_GIMBAL, 0, [math.nan] * 4,
         math.nan, math.radians(6), math.radians(-12))
-    assert struct.unpack('<bb', next_command(0x07)) == (-20, 10)
+    actual_rate = struct.unpack('<bb', next_command(0x07))
+    # Calibrated A8 rate curves map -12 deg/s yaw and +6 deg/s pitch.
+    assert actual_rate == (-16, 8), actual_rate
 
     # Public SIYI commands retain vendor signs, bypassing MAVLink transforms.
     payload = struct.pack('<hh', 200, -100)
     client.send(siyi(1, 30, 0x0e, payload))
     assert next_command(0x0e) == payload
     client.send(siyi(1, 31, 0x07, struct.pack('<bb', -20, 10)))
-    assert struct.unpack('<bb', next_command(0x07)) == (-20, 10)
+    actual_rate = struct.unpack('<bb', next_command(0x07))
+    assert actual_rate == (-20, 10), actual_rate
 
 
 def test_upright_yaw(binary):

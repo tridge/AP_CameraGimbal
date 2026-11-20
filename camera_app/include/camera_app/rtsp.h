@@ -17,6 +17,11 @@ int ca_rtsp_open(struct ca_rtsp **server, unsigned port, const char *path,
 int ca_rtsp_add_video(struct ca_rtsp *server, const char *path,
                       enum ca_video_codec codec, unsigned frame_rate,
                       unsigned *stream_id);
+/* Serve an existing stream under an additional RTSP path such as the
+ * vendor's main.264. An empty alias is ignored. */
+int ca_rtsp_add_alias(struct ca_rtsp *server, unsigned stream_id, const char *alias);
+/* Add the configured [stream.main]/[stream.sub] aliases, logging failures. */
+void ca_rtsp_add_config_aliases(struct ca_rtsp *server, const struct ca_config *settings);
 int ca_rtsp_push_h264(struct ca_rtsp *server, const uint8_t *data,
                       size_t length, bool key_frame, float hfov_deg);
 int ca_rtsp_push_h264_stream(struct ca_rtsp *server, unsigned stream_id,

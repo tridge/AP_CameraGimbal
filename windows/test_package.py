@@ -1,21 +1,59 @@
 """Exercise the bundled PyQt launcher and real services with a tools-free PATH."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 import re
+import random
 import socket
 import struct
 import tempfile
 import time
 
 
+def check_video_size(target, thermal, width, height):
+    # Simple and terrain fixtures use 720p RGB. Thermal geometry belongs to
+    # each target: ZT30 retains its native 640x512 instead of MT11's 720p.
+    if thermal:
+        expected = (target['thermal_stream_width'], target['thermal_stream_height'])
+        assert (width, height) == expected, ((width, height), expected)
+    else:
+        assert width >= 1280 and height >= 720, (width, height)
+
+
+class TestPorts:
+    """Reserve all listeners in an endpoint group across packaged simulators."""
+    def __init__(self):
+        self.allocated = set()
+
+    def __call__(self, socktype, offsets=(0,)):
+        # Cygwin pipes also use loopback sockets: avoid adjacent single ports
+        # and probe every listener, including MT11 raw thermal at RTSP + 2.
+        for _ in range(100):
+            port = random.randrange(20000, 40000)
+            ports = {port + offset for offset in offsets}
+            if any(p + gap in self.allocated for p in ports for gap in (-1, 0, 1)):
+                continue
+            try:
+                with ExitStack() as probes:
+                    for candidate in sorted(ports):
+                        probe = probes.enter_context(socket.socket(socket.AF_INET, socktype))
+                        probe.bind(('127.0.0.1', candidate))
+            except OSError:
+                continue
+            self.allocated.update(ports)
+            return port
+        raise RuntimeError('No free test port group')
+
+
 def main():
     import faulthandler
     faulthandler.dump_traceback_later(180, repeat=True)
-    from sitl.target_properties import TARGETS
+    from sitl.target_properties import SITL_TARGETS, TARGETS
+    from sitl.launcher_config import vendor_stride
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--backend', choices=tuple(TARGETS) + ('all',), default='all')
+    parser.add_argument('--backend', choices=tuple(SITL_TARGETS) + ('all',), default='all')
     parser.add_argument('--video', choices=('simple', 'terrain'), default='simple')
     parser.add_argument('--orientation', choices=('upright', 'inverted'), default='upright')
     parser.add_argument('--show-window', action='store_true')
@@ -50,23 +88,7 @@ def main():
     import av
     from pymavlink import mavutil
     app = QtWidgets.QApplication([])
-    # Cygwin implements some pipes with loopback sockets. Do not select the
-    # next Windows ephemeral port and then let service startup consume it.
-    import random
-    allocated = set()
-    def reserve_port(socktype):
-        for _ in range(100):
-            port = random.randrange(20000, 40000)
-            if port in allocated or port - 1 in allocated or port + 1 in allocated:
-                continue
-            try:
-                with socket.socket(socket.AF_INET, socktype) as probe:
-                    probe.bind(('127.0.0.1', port))
-            except OSError:
-                continue
-            allocated.add(port)
-            return port
-        raise RuntimeError('No free test port')
+    reserve_port = TestPorts()
     output = args.output or Path(tempfile.mkdtemp(prefix='Camera SITL package test '))
     output.mkdir(parents=True, exist_ok=True)
     print(f'Test output: {output}', flush=True)
@@ -78,19 +100,12 @@ def main():
                 raise AssertionError('Timed out waiting for launcher: ' + window.status.text())
             time.sleep(.02)
         app.processEvents()
-    for backend in (tuple(TARGETS) if args.backend == 'all' else (args.backend,)):
+    for backend in (tuple(SITL_TARGETS) if args.backend == 'all' else (args.backend,)):
         cookies = http.cookiejar.CookieJar()
         browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
         prefix = backend.upper() + '_SITL_'
         camera_port, web_port, mav_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
-        while True:
-            rtsp_port = reserve_port(socket.SOCK_STREAM)
-            try:
-                with socket.socket() as probe:
-                    probe.bind(('127.0.0.1', rtsp_port + 1))
-                break
-            except OSError:
-                pass
+        rtsp_port = reserve_port(socket.SOCK_STREAM, offsets=(0, 1, 2))
         build = output / backend
         os.environ.update(CAMERA_GIMBAL_SITL_BUILD=str(build))
         for key, value in [('CAMERA_PORT', camera_port), ('WEB_PORT', web_port),
@@ -98,20 +113,28 @@ def main():
                            ('MAVLINK_UDP_PORT', 0)]:
             os.environ[prefix + key] = str(value)
         window = Launcher()
-        window.camera.setCurrentIndex(window.camera.findData(backend))
-        window.orientation.setCurrentIndex(window.orientation.findData(args.orientation))
-        window.video.setCurrentIndex(window.video.findData(args.video))
+        panel = window.simulators[0]
+        panel.camera.setCurrentIndex(panel.camera.findData(backend))
+        panel.orientation.setCurrentIndex(panel.orientation.findData(args.orientation))
+        panel.video.setCurrentIndex(panel.video.findData(args.video))
         window.show()
         link = None
         try:
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             print(f'{backend}: launcher running', flush=True)
-            assert window.web_button.isEnabled()
+            assert panel.web_button.isEnabled()
             window.grab().save(str(output / (backend + '-launcher.png')))
             login(web_port)
             print(f'{backend}: browser login and session cookie passed', flush=True)
+            # Exercise installed assets, not just the generated HTML links.
+            for asset, mime in (('/style.css', 'text/css'), ('/live.js', 'application/javascript'),
+                                ('/parameters.js', 'application/javascript')):
+                with web_request(web_port, asset) as response:
+                    assert response.headers.get_content_type() == mime
+                    assert len(response.read()) > 100
+
             with web_request(web_port, '/live') as response:
                 page = response.read().decode()
             csrf = re.search(r'data-csrf="([0-9a-f]{64})"', page).group(1)
@@ -184,7 +207,8 @@ def main():
                             if len(images) == 12:
                                 break
                         assert len(images) == 12
-                        assert images[0].width >= 1280 and images[0].height >= 720
+                        check_video_size(TARGETS[backend], stream == 'video2' and TARGETS[backend]['have_thermal'],
+                                         images[0].width, images[0].height)
                         images[-1].to_image().save(output / (backend + '-' + stream + '.png'))
                         print(f'{backend} {stream}: {images[0].width}x{images[0].height}, 12 decoded frames', flush=True)
                 with web_request(web_port, '/live/video1.mp4') as response:
@@ -205,15 +229,20 @@ def main():
             assert 'stopped' in (build / 'runtime/run/camera_app.log').read_text(), 'Camera did not finish graceful shutdown'
             (output / (backend + '-video-service.log')).write_bytes(
                 (build / 'runtime/run/camera_app.log').read_bytes())
-            recordings = list((build / 'runtime/mnt/DCIM/record').glob('*.mp4'))
+            # Factory settings record synchronous MISB KLV alongside H.264 in TS.
+            assert re.search(r'(?m)^telemetry\s*=\s*misb\s*$', config.read_text())
+            recordings = list((build / 'runtime/mnt/DCIM/record').glob('*.ts'))
             assert recordings, 'No recording created'
             for path in recordings:
                 with av.open(str(path)) as video:
-                    assert next(video.decode(video=0)).width >= 1280
+                    assert any(stream.type == 'data' for stream in video.streams), path
+                    frame = next(video.decode(video=0))
+                    check_video_size(TARGETS[backend], path.name.startswith('SITL_1_') and TARGETS[backend]['have_thermal'],
+                                     frame.width, frame.height)
             saved = config.read_bytes()
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             assert config.read_bytes() == saved, 'Saved configuration changed on restart'
             with web_request(web_port, '/') as response:
                 assert response.geturl().endswith('/login'), 'Old session survived web-server restart'
@@ -221,10 +250,10 @@ def main():
             print(f'{backend}: logout and session invalidation on restart passed', flush=True)
             window.stop_button.click()
             pump_until(lambda: window.phase == 'idle', 15)
-            window.clear_parameters.setChecked(True)
+            panel.clear_parameters.setChecked(True)
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
-            assert window.phase == 'running', window.log.toPlainText()
+            assert window.phase == 'running', panel.log.toPlainText()
             assert config.with_suffix('.ini.reset.bak').read_bytes() == saved
             assert 'autorecord = false' in config.read_text()
             assert all(path.exists() for path in recordings), 'Reset removed media'
@@ -234,7 +263,7 @@ def main():
                   'RTSP/live MP4, recording, restart and shutdown with no external tools', flush=True)
             # Windows exclusive binds produce the permission-denied failure
             # seen when a ground station already owns the camera's UDP port.
-            window.clear_parameters.setChecked(False)
+            panel.clear_parameters.setChecked(False)
             overrides = {prefix + 'MAVLINK_' + transport + '_PORT':
                          os.environ.pop(prefix + 'MAVLINK_' + transport + '_PORT')
                          for transport in ('TCP', 'UDP')}
@@ -271,7 +300,7 @@ def main():
                         config.write_text(set_ports(config.read_text(), ports))
                         window.start_button.click()
                         pump_until(lambda: window.phase in ('running', 'idle'), 60)
-                        assert window.phase == 'running', window.log.toPlainText()
+                        assert window.phase == 'running', panel.log.toPlainText()
                         login(web_port)
                         with web_request(web_port, '/live') as response:
                             csrf = re.search(r'data-csrf="([0-9a-f]{64})"', response.read().decode()).group(1)
@@ -306,10 +335,67 @@ def main():
         finally:
             if link:
                 link.close()
-            (output / (backend + '-launcher.log')).write_text(window.log.toPlainText(), encoding='utf-8')
+            (output / (backend + '-launcher.log')).write_text(panel.log.toPlainText(), encoding='utf-8')
             if window.phase != 'idle':
                 window.stop()
                 pump_until(lambda: window.phase == 'idle', 15)
+            window.close()
+    if args.backend == 'all':
+        os.environ['CAMERA_GIMBAL_SITL_BUILD'] = str(output / 'multi')
+        window = Launcher()
+        window.count.setValue(4)
+        endpoints = []
+        try:
+            for index, (backend, panel) in enumerate(zip(SITL_TARGETS, window.simulators)):
+                panel.camera.setCurrentIndex(panel.camera.findData(backend))
+                panel.orientation.setCurrentIndex(panel.orientation.findData(args.orientation))
+                panel.video.setCurrentIndex(panel.video.findData(args.video))
+                prefix = backend.upper() + '_SITL_'
+                web_port, camera_port, mav_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
+                rtsp_port = reserve_port(socket.SOCK_STREAM, offsets=(0, 1, 2))
+                for name, value, stride in (('WEB_PORT', web_port, 1), ('CAMERA_PORT', camera_port, vendor_stride(TARGETS[backend])),
+                                            ('RTSP_PORT', rtsp_port, 10), ('MAVLINK_TCP_PORT', mav_port, 10)):
+                    os.environ[prefix + name] = str(value - index * stride)
+                os.environ[prefix + 'MAVLINK_UDP_PORT'] = '0'
+                endpoints.append((web_port, mav_port, rtsp_port))
+            window.start()
+            pump_until(lambda: window.phase in ('running', 'idle'), 150)
+            assert window.phase == 'running', window.status.text() + '\n' + '\n'.join(p.log.toPlainText()[-3000:] for p in window.simulators)
+            for index, (web_port, mav_port, rtsp_port) in enumerate(endpoints):
+                with web_request(web_port, '/login') as response:
+                    assert response.status == 200
+                connection = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mav_port}', source_system=42, source_component=1)
+                try:
+                    connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_FIXED_WING,
+                                                 mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, 4)
+                    connection.mav.command_long_send(42, 100+index, mavutil.mavlink.MAV_CMD_REQUEST_CAMERA_INFORMATION,
+                                                     0, 1, 0, 0, 0, 0, 0, 0)
+                    info = connection.recv_match(type='CAMERA_INFORMATION', blocking=True, timeout=5)
+                    assert info and info.get_srcComponent() == 100+index, info
+                    assert info.gimbal_device_id == (154, 171, 172, 173)[index], info
+                finally:
+                    connection.close()
+                for stream in ('video1', 'video2'):
+                    with av.open(f'rtsp://127.0.0.1:{rtsp_port}/{stream}',
+                                 options={'rtsp_transport': 'tcp'}, timeout=15) as video:
+                        frames = 0
+                        for frame in video.decode(video=0):
+                            target = TARGETS[tuple(SITL_TARGETS)[index]]
+                            check_video_size(target, stream == 'video2' and target['have_thermal'], frame.width, frame.height)
+                            frames += 1
+                            if frames == 12:
+                                break
+                        assert frames == 12, f'Simulator {index+1} {stream} stopped streaming'
+                print(f'Concurrent simulator {index+1}: both streams decoded 12 frames', flush=True)
+            window.stop()
+            pump_until(lambda: window.phase == 'idle', 20)
+            assert all(not (p.runtime / 'camera-app.ready').exists() for p in window.simulators)
+            print('PASS four simultaneous packaged cameras: web, distinct MAVLink identities, video and stop-all', flush=True)
+        finally:
+            window.stop()
+            pump_until(lambda: window.phase == 'idle', 20)
+            for index, panel in enumerate(window.simulators):
+                (output / f'multi-{index+1}-launcher.log').write_text(panel.log.toPlainText(), encoding='utf-8')
             window.close()
     print('PASS standalone Windows package', flush=True)
     faulthandler.cancel_dump_traceback_later()

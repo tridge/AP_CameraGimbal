@@ -1,0 +1,256 @@
+From 0e08ba9527ce72edf4498596e504fdf7d43aca2a Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 20:41:34 +1100
+Subject: [PATCH 4/4] native: WebSplat entry: SIFT, mapping checkpoints and
+ exact resume
+
+- ws_sift: COLMAP SIFT (VLFeat CPU, FeatureExtractionOptions defaults) on
+  an 8-bit grey image in memory
+- ws_m_state / ws_prng_get / ws_prng_set: poses, camera and PRNG after a
+  round, for checkpoints; ws_m_prepare(digits, params) resumes from them
+- every round after the first starts from a model rebuilt from its own
+  poses and camera, so a round depends only on what a checkpoint stores
+---
+ native/entry/CMakeLists.txt |   2 +-
+ native/entry/websplat.cc    | 148 +++++++++++++++++++++++++++++++++---
+ 2 files changed, 137 insertions(+), 13 deletions(-)
+
+diff --git a/native/entry/CMakeLists.txt b/native/entry/CMakeLists.txt
+index d6688b4..03c4e27 100644
+--- a/native/entry/CMakeLists.txt
++++ b/native/entry/CMakeLists.txt
+@@ -68,5 +68,5 @@ target_link_libraries(colmap_websplat colmap_legacy313)
+ set_target_properties(colmap_websplat PROPERTIES OUTPUT_NAME websplat-colmap SUFFIX ".mjs")
+ target_link_options(colmap_websplat PRIVATE -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
+   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB -fexceptions -sFILESYSTEM=0
+-  -sEXPORTED_FUNCTIONS=_malloc,_free,_ws_error,_ws_reset_stop,_ws_v_begin,_ws_v_image,_ws_v_free_image,_ws_v_pair,_ws_v_config,_ws_v_inliers,_ws_v_model,_ws_v_end,_ws_m_begin,_ws_m_image,_ws_m_geometry,_ws_m_prepare,_ws_m_round,_ws_m_round_stats,_ws_m_export,_ws_m_export_data,_ws_m_export_size,_ws_m_end
++  -sEXPORTED_FUNCTIONS=_malloc,_free,_ws_error,_ws_sift,_ws_sift_keypoints,_ws_sift_descriptors,_ws_reset_stop,_ws_v_begin,_ws_v_image,_ws_v_free_image,_ws_v_pair,_ws_v_config,_ws_v_inliers,_ws_v_model,_ws_v_end,_ws_m_begin,_ws_m_image,_ws_m_geometry,_ws_m_prepare,_ws_m_round,_ws_m_round_stats,_ws_m_state,_ws_m_state_size,_ws_prng_get,_ws_prng_set,_ws_m_export,_ws_m_export_data,_ws_m_export_size,_ws_m_end
+   -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPF64,HEAP32,HEAPU32,UTF8ToString,stringToNewUTF8)
+diff --git a/native/entry/websplat.cc b/native/entry/websplat.cc
+index dc79ff3..943cfb0 100644
+--- a/native/entry/websplat.cc
++++ b/native/entry/websplat.cc
+@@ -11,7 +11,10 @@
+ #include "colmap/estimators/bundle_adjustment.h"
+ #include "colmap/estimators/bundle_adjustment_ceres.h"
+ #include "colmap/estimators/two_view_geometry.h"
++#include "colmap/feature/extractor.h"
++#include "colmap/feature/sift.h"
+ #include "colmap/feature/types.h"
++#include "colmap/sensor/bitmap.h"
+ #include "colmap/math/random.h"
+ #include "colmap/scene/database.h"
+ #include "colmap/scene/database_cache.h"
+@@ -83,6 +86,12 @@ Camera MakeCamera(const char* model, int width, int height, const double* params
+   return camera;
+ }
+ 
++// --- features
++std::unique_ptr<FeatureExtractor> g_sift;
++int g_sift_max = 0;
++std::vector<float> g_sift_keypoints;  // n x 6: x, y, a11, a12, a21, a22
++FeatureDescriptors g_sift_descriptors;
++
+ // --- verification
+ Camera g_v_camera;
+ std::vector<std::vector<Eigen::Vector2d>> g_v_points;  // by image index
+@@ -109,9 +118,46 @@ Camera g_m_camera;
+ std::vector<image_t> g_m_ids;
+ std::vector<PosePrior> g_m_priors;
+ std::ostringstream g_m_images_txt;
++std::vector<std::string> g_m_names;
++int g_m_rounds_done = 0;
+ Round g_round;
+ std::string g_export[5];
+ 
++// A fresh reconstruction (all images registered, no points) from COLMAP text: the camera with
++// `digits` significant digits, poses as given in images_txt.
++std::shared_ptr<Reconstruction> TextModel(const double* params, int digits,
++                                          const std::string& images_txt) {
++  auto rec = std::make_shared<Reconstruction>();
++  std::ostringstream cam;
++  cam << g_m_camera.camera_id << ' ' << g_m_camera.ModelName() << ' ' << g_m_camera.width << ' '
++      << g_m_camera.height << std::setprecision(digits);
++  for (size_t k = 0; k < g_m_camera.params.size(); ++k) cam << ' ' << params[k];
++  cam << '\n';
++  std::istringstream cam_in(cam.str()), img_in(images_txt), pts_in("");
++  ReadCamerasText(*rec, cam_in);
++  ReadImagesText(*rec, img_in);
++  ReadPoints3DText(*rec, pts_in);
++  return rec;
++}
++
++// Rebuilds g_rec from its own poses and camera at full precision. Done at the start of every
++// round after the first, so a round depends only on (poses, camera, PRNG state): exactly what
++// a checkpoint stores (no point-id counters or hash-table histories carried over).
++void RebuildModel() {
++  std::ostringstream txt;
++  txt << std::setprecision(17);
++  for (size_t k = 0; k < g_m_ids.size(); ++k) {
++    const Rigid3d pose = g_rec->Image(g_m_ids[k]).CamFromWorld();
++    const auto& q = pose.rotation();
++    const auto& t = pose.translation();
++    txt << g_m_ids[k] << ' ' << q.w() << ' ' << q.x() << ' ' << q.y() << ' ' << q.z() << ' '
++        << t(0) << ' ' << t(1) << ' ' << t(2) << ' ' << g_m_camera.camera_id << ' ' << g_m_names[k]
++        << "\n\n";
++  }
++  const std::vector<double> params = g_rec->Camera(g_m_camera.camera_id).params;
++  g_rec = TextModel(params.data(), 17, txt.str());
++}
++
+ // sfm.py prior_mapping() round, triangulation part: pycolmap.triangulate_points(rec, db,
+ // clear_points=True, options) = RunPointTriangulatorImpl + IncrementalPipeline::
+ // TriangulateReconstruction, without colour extraction (no images here).
+@@ -161,6 +207,44 @@ extern "C" {
+ EMSCRIPTEN_KEEPALIVE const char* ws_error() { return g_error.c_str(); }
+ EMSCRIPTEN_KEEPALIVE void ws_reset_stop() { g_stop = false; }
+ 
++// ---------------------------------------------------------------- features
++
++/** COLMAP SIFT (VLFeat, CPU) on an 8-bit grey image, row-major, top row first, with
++ *  FeatureExtractionOptions() defaults (sfm.py's: max_num_features, default 8192). Returns the
++ *  number of features (ws_sift_keypoints n x 6 floats, ws_sift_descriptors n x 128 bytes as
++ *  COLMAP stores them: L1-root, uint8). */
++EMSCRIPTEN_KEEPALIVE int ws_sift(const uint8_t* grey, int width, int height, int max_num_features) {
++  return Guard([&] {
++    InitLogging();
++    if (!g_sift || g_sift_max != max_num_features) {
++      FeatureExtractionOptions options(FeatureExtractorType::SIFT);
++      options.use_gpu = false;
++      options.num_threads = 1;
++      options.sift->max_num_features = max_num_features;
++      g_sift = FeatureExtractor::Create(options);
++      THROW_CHECK_NOTNULL(g_sift);
++      g_sift_max = max_num_features;
++    }
++    Bitmap bitmap(width, height, /*as_rgb=*/false);
++    std::copy(grey, grey + static_cast<size_t>(width) * height, bitmap.RowMajorData().begin());
++    FeatureKeypoints keypoints;
++    THROW_CHECK(g_sift->Extract(bitmap, &keypoints, &g_sift_descriptors));
++    THROW_CHECK_EQ(g_sift_descriptors.data.size(), keypoints.size() * 128);
++    g_sift_keypoints.resize(keypoints.size() * 6);
++    for (size_t i = 0; i < keypoints.size(); ++i) {
++      const FeatureKeypoint& k = keypoints[i];
++      const float v[6] = {k.x, k.y, k.a11, k.a12, k.a21, k.a22};
++      std::copy(v, v + 6, g_sift_keypoints.begin() + 6 * i);
++    }
++    return static_cast<int>(keypoints.size());
++  });
++}
++
++EMSCRIPTEN_KEEPALIVE const float* ws_sift_keypoints() { return g_sift_keypoints.data(); }
++EMSCRIPTEN_KEEPALIVE const uint8_t* ws_sift_descriptors() {
++  return reinterpret_cast<const uint8_t*>(g_sift_descriptors.data.data());
++}
++
+ // ---------------------------------------------------------------- verification
+ 
+ /** Shared camera for verification, e.g. SIMPLE_RADIAL [f, cx, cy, k1] (prior focal set). */
+@@ -268,6 +352,8 @@ EMSCRIPTEN_KEEPALIVE int ws_m_begin(const char* model, int width, int height, co
+     g_m_priors.clear();
+     g_m_images_txt.str("");
+     g_m_images_txt.clear();
++    g_m_names.clear();
++    g_m_rounds_done = 0;
+     g_rec.reset();
+     g_cache.reset();
+     return 0;
+@@ -308,6 +394,7 @@ EMSCRIPTEN_KEEPALIVE int ws_m_image(const char* name, const float* keypoints, in
+     for (int k = 0; k < 7; ++k) g_m_images_txt << ' ' << pose[k];
+     g_m_images_txt << ' ' << g_m_camera.camera_id << ' ' << name << "\n\n";
+     g_m_ids.push_back(image.ImageId());
++    g_m_names.push_back(name);
+     return static_cast<int>(g_m_ids.size()) - 1;
+   });
+ }
+@@ -327,24 +414,20 @@ EMSCRIPTEN_KEEPALIVE int ws_m_geometry(int i, int j, int config, const uint32_t*
+   });
+ }
+ 
+-/** Loads the database cache and the telemetry model (all images registered, no points). */
+-EMSCRIPTEN_KEEPALIVE int ws_m_prepare() {
++/** Loads the database cache and the initial model (all images registered, no points).
++ *  camera_digits: significant digits of the camera parameters in the initial model: 9 as
++ *  sfm.py's telemetry model, 17 to resume exactly from a checkpoint's camera. params (or null):
++ *  the initial model's camera parameters if not the database camera's (resume). */
++EMSCRIPTEN_KEEPALIVE int ws_m_prepare(int camera_digits, const double* params) {
+   return Guard([&] {
+     DatabaseCache::Options cache_options;
+     cache_options.min_num_matches = 15;
+     cache_options.load_all_images = true;
+     g_cache = DatabaseCache::Create(*g_db, cache_options);
+-    g_rec = std::make_shared<Reconstruction>();
+-    std::ostringstream cam;
+     // sfm.py prints the telemetry camera '%.9g'
+-    cam << g_m_camera.camera_id << ' ' << g_m_camera.ModelName() << ' ' << g_m_camera.width << ' '
+-        << g_m_camera.height << std::setprecision(9);
+-    for (const double p : g_m_camera.params) cam << ' ' << p;
+-    cam << '\n';
+-    std::istringstream cam_in(cam.str()), img_in(g_m_images_txt.str()), pts_in("");
+-    ReadCamerasText(*g_rec, cam_in);
+-    ReadImagesText(*g_rec, img_in);
+-    ReadPoints3DText(*g_rec, pts_in);
++    g_rec = TextModel(params ? params : g_m_camera.params.data(), camera_digits,
++                      g_m_images_txt.str());
++    g_m_rounds_done = 0;
+     return static_cast<int>(g_rec->NumRegImages());
+   });
+ }
+@@ -357,6 +440,7 @@ EMSCRIPTEN_KEEPALIVE int ws_m_round(double threshold, int round, int max_iterati
+     timer.Start();
+     g_round = Round{};
+     g_round.threshold = threshold;
++    if (g_m_rounds_done++ > 0) RebuildModel();
+     IncrementalPipelineOptions opts;
+     opts.triangulation.create_max_angle_error = std::max(2.0, threshold / 10);
+     opts.triangulation.continue_max_angle_error = std::max(2.0, threshold / 10);
+@@ -416,6 +500,46 @@ EMSCRIPTEN_KEEPALIVE const double* ws_m_round_stats() {
+   return out;
+ }
+ 
++/** Current poses (cam_from_world qw qx qy qz tx ty tz per input image) and camera parameters
++ *  (ws_m_state_size doubles: 7 per image, then the parameters), for checkpoints. */
++EMSCRIPTEN_KEEPALIVE const double* ws_m_state() {
++  static std::vector<double> out;
++  out.clear();
++  for (const image_t id : g_m_ids) {
++    const Rigid3d pose = g_rec->Image(id).CamFromWorld();
++    const auto& q = pose.rotation();
++    const auto& t = pose.translation();
++    out.insert(out.end(), {q.w(), q.x(), q.y(), q.z(), t(0), t(1), t(2)});
++  }
++  const Camera& cam = g_rec->Camera(g_m_camera.camera_id);
++  out.insert(out.end(), cam.params.begin(), cam.params.end());
++  return out.data();
++}
++EMSCRIPTEN_KEEPALIVE int ws_m_state_size() {
++  return static_cast<int>(7 * g_m_ids.size() + g_m_camera.params.size());
++}
++
++/** COLMAP's PRNG state (std::mt19937 text). It carries over between rounds (RANSAC in
++ *  triangulation and the prior alignment), so a resumed run must restore it to continue
++ *  exactly. */
++EMSCRIPTEN_KEEPALIVE const char* ws_prng_get() {
++  static std::string out;
++  if (PRNG == nullptr) SetPRNGSeed();
++  std::ostringstream s;
++  s << *PRNG;
++  out = s.str();
++  return out.c_str();
++}
++EMSCRIPTEN_KEEPALIVE int ws_prng_set(const char* state) {
++  return Guard([&] {
++    if (PRNG == nullptr) SetPRNGSeed();
++    std::istringstream s(state);
++    s >> *PRNG;
++    THROW_CHECK(!s.fail()) << "bad PRNG state";
++    return 0;
++  });
++}
++
+ /** Serialises the model as COLMAP binary: 0 cameras.bin, 1 images.bin, 2 points3D.bin,
+  *  3 rigs.bin, 4 frames.bin (ws_m_export_data / ws_m_export_size). */
+ EMSCRIPTEN_KEEPALIVE int ws_m_export() {
+-- 
+2.53.0
+

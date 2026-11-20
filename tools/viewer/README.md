@@ -1,0 +1,409 @@
+# <img src="../../assets/camera-gimbal.svg" alt="" width="40" height="40"> Video flight review
+
+A local-file web viewer for reviewing AP_CameraGimbal imagery and investigating
+thermal observations. It runs as a static site: videos, logs, raw thermal pixels
+and findings stay in the browser. There is no upload endpoint or video backend.
+A video alone supplies playback, embedded telemetry and its aircraft track.
+Optional flight logs add the mission, geofences, home and actual flight track.
+
+Click **ⓘ** beside the filename above the image for **Video information**. The
+popup shows codec and dimensions, average/nominal frame rates and timing gaps,
+duration, payload rate, decoder, telemetry formats/coverage, source clocks,
+thermal calibration and indexing diagnostics. Expand **All available metadata**
+or download its JSON for the full parsed track/current-frame metadata, including
+codec headers and provenance. Statistics update while indexing; unknown values
+stay unavailable. Opening the popup pauses playback for a stable frame snapshot.
+
+## Run locally
+
+Requires Node 24 or newer for development, and a current browser with WebGL.
+Qualification uses Google Chrome; H.264 decoding uses WebCodecs where supported.
+Other codecs use the included local software decoder. No system FFmpeg is needed
+for normal browser use.
+
+```sh
+cd tools/viewer
+npm ci
+npm run prepare:assets
+npm run dev
+```
+
+Open **http://127.0.0.1:5173/viewer/** and select a local recording. HTTPS is
+required when hosting away from localhost, including for native WebCodecs.
+The app is not intended to be opened directly as a `file://` document.
+
+```sh
+npm run build
+npm run preview
+# http://127.0.0.1:4173/viewer/
+```
+
+The deployment artifact is `dist/`. It includes the decoder, map library,
+workers, CSS and runtime configuration; no public CDN is needed. Browser
+runtime does not require Node or Python. Do not commit generated assets,
+`node_modules`, recordings or local test results.
+
+## Open from a URL
+
+`?url=` opens a video and `?log=` a flight log (`.bin` / `.tlog`) from an
+http(s) URL as if chosen locally, for example
+`https://plot.ardupilot.org/video/?url=https://example.org/flight2_thermal.mkv`.
+The download streams into the browser's origin-private file system (in memory
+if that is unavailable), shows progress and can be cancelled. Copies no open
+page is using are deleted when the next download starts. The server must send
+`Access-Control-Allow-Origin`, and the page's Content-Security-Policy
+`connect-src` (in `index.html`) must allow the file's origin. An https page
+cannot download from http.
+
+## Supported recordings
+
+| Container                                         | Video        | Embedded telemetry                                               |
+| ------------------------------------------------- | ------------ | ---------------------------------------------------------------- |
+| MP4 / MOV, including fragmented camera recordings | H.264 / HEVC | APCG JSON SEI                                                    |
+| MPEG-TS                                           | H.264 / HEVC | APCG JSON SEI and MISB ST0601 KLV                                |
+| APCG raw thermal Matroska                         | FFV1 gray16  | `apcg.thermal.v1` block additions and nested `apcg.telemetry.v1` |
+
+The two camera telemetry encodings are detected automatically. Co-carried APCG
+SEI takes precedence over KLV because it preserves additional fields and full
+precision. KLV checksums and invalid sentinels are checked; unavailable values
+stay unavailable. Standard full-range tags 90/91 supersede legacy pitch/roll
+fields, including when explicitly invalid. Existing raw thermal archives from
+`tools/thermal_to_video.py` retain native uint16 pixels and calibration.
+
+Synchronous KLV retains exact video-PTS association. Asynchronous KLV uses the
+nearest available transport timestamp, allowing a snapshot to trail by at most
+two seconds or lead by at most half a video frame (capped at 100 ms). Its pose
+ages include the timing difference; recorded KLV UTC is preserved. Legacy
+SCAR recordings with incorrectly unmarked complete metadata cells are accepted
+only when the entire cell contains one checksum-valid local set. These files
+show a compatibility diagnostic and an approximate-association timing label.
+
+The container index is incremental and uses bounded `File.slice()` reads.
+Playback begins before the full telemetry scan finishes. A malformed tail keeps
+its playable prefix and an explicit error. Indices scale with frame count; full
+video payloads and decoded images are not retained in them. See
+[codec details and measured limits](docs/CODECS.md).
+
+MP4 edit intervals control which images are presented; excluded keyframe preroll
+remains available to the decoder. Captures starting mid-GOP open at the first
+available decodable frame while retaining their original elapsed timeline.
+Saved review times are migrated with their original frame/UTC associations;
+observations outside an edited clip remain exportable and are labelled outside
+the clip. Calibration anchors may precede its first presented image.
+MPEG-TS indexing allows up to two decode-clock seconds or 180 video descriptors
+for delayed KLV; metadata beyond that bound is explicitly diagnosed.
+
+Native HEVC support varies by browser/platform. The bounded software fallback
+works with the tested 1080p/4K recordings, but 4K HEVC may review at approximately
+one frame per second on the tested machine. It is not a real-time 4K promise.
+Unsupported dimensions or excessively long/large decode groups fail explicitly.
+Raw thermal review is substantially faster and retains exact sensor values.
+
+## Review workflow
+
+1. **Open video.** Playback, frame stepping, absolute recorded UTC and pose UTC
+   are separate. Space plays/pauses, arrows step frames, and `M` marks the selected
+   pixel. Telemetry is outside the image. Raw X/Y fields allow keyboard pixel
+   selection; mouse hover also selects a sensor pixel.
+2. **Choose a palette and stretch.** White hot, black hot, Inferno, iron,
+   Viridis and GloryHot change only display pixels. Auto uses the 1st/99th
+   percentiles; Low/High show its current window and remain editable. Editing
+   either limit locks a linear window. Gamma window starts with the full sensor
+   range when selected from Auto, preserving the hot tail that percentile
+   clipping can saturate. Adjust Gamma from 0.1–5: 1 is linear, above 1 darkens
+   the background, and below 1 brightens lower values. Both window limits apply
+   to every palette and curve. GloryHot uses grayscale below Low and a
+   blue/cyan/green/yellow/red ramp above Low, reaching red at High. Raw Celsius
+   readings require explicit calibration; other raw images use detector counts
+   and encoded images use 0–255 intensity. Original RGB keeps its encoded colours
+   in Auto and supports manual levels/gamma. A change in display units resets
+   the window to Auto. Invalid edits retain the last valid display settings
+   while frames continue advancing. These controls never change raw temperature
+   readout, pixel coordinates or peak-finding data. Processed analysis results
+   retain their separate automatic window in score units; the original-image
+   window and gamma controls resume when Compare returns to Original.
+3. **Add a BIN or tlog** when mission/fence context is useful. Plan selection
+   defaults to the video pose time; the latest-log overview is explicit. Unknown
+   time, unknown home and unconfirmed/incomplete mission uploads are labelled.
+   Inclusion/exclusion polygons and circles retain their types in 2D and 3D.
+4. **Inspect ground positions.** The configured quantized terrain service supplies
+   pixel-to-ground intersections automatically, including in 2D. There are no
+   manual elevation files or flat-altitude controls. Missing/stale camera pose,
+   upward rays, missing terrain coverage and loading/network failures are
+   explained next to the pixel reading. Picking requires the terrain endpoint
+   to be reachable; it may be a local server for offline field use.
+   Images crossing the horizon show the ground-visible perimeter as open yellow
+   lines, with a partial-footprint explanation. Lines never close across sky or
+   unavailable terrain. Cameras at/below DEM height cannot produce a footprint.
+5. **Check alignment.** A telemetry offset selects earlier/later embedded pose
+   without changing the image or recorded UTC. Time anchors can map playback
+   seconds to corrected UTC piecewise; two or more anchors do not extrapolate
+   outside their interval. The offset is additional and remains visible.
+6. **Inspect thermal peaks and mark observations.** Local contrast highlights
+   assist visual review; they do not classify ignitions or prove a restored
+   surface temperature. Findings keep raw sensor coordinates, frame/PTS/UTC,
+   calibration, raw-orientation hypothesis, pose, terrain and clock provenance.
+   Add notes and export JSON/GeoJSON. Unmapped observations are retained.
+
+The projection uses raw sensor orientation 0. Display rotation 0/180° changes
+only presentation and pointer conversion. Existing metadata rotation is retained
+in findings; it does not silently change the projection hypothesis. Field FOV,
+boresight, timing and elevation calibration still determine ground accuracy.
+A horizontal FOV override is available in Settings and is recorded in findings.
+For raw thermal Matroska, the outer thermal HFOV defines the lens; the nested
+snapshot may describe RGB and is never used as a thermal FOV fallback. An
+explicit user override takes precedence and is identified in exported findings.
+Some cameras report commanded gimbal targets without physical angle feedback;
+unless telemetry identifies this, the viewer cannot distinguish the two. Check
+alignment while the camera is moving before interpreting projected locations.
+
+The **Follow** checkbox below the map is enabled by default. It centres on the
+current video's aligned aircraft position while preserving zoom and 3D camera
+orientation. Uncheck it to pan and inspect a fixed area; **Center** recentres
+once without enabling Follow. Dragging temporarily suspends automatic movement.
+
+The **Project video** checkbox beside **2D / 3D** places the current video image
+onto the terrain in either map mode. It starts off. The projection follows frame
+stepping, playback, the selected palette/contrast and applied thermal processing.
+It uses the aligned camera pose, FOV and terrain intersections sampled across a
+grid, then drapes a geographic image onto the rendered terrain. This avoids gaps
+where separate flat triangles would cut through hills or a different terrain LOD.
+Sky and
+unavailable terrain leave gaps; the status below the map explains missing or
+partial coverage. Stale or missing poses hide the image. Display rotation and
+video zoom affect presentation only. **Projection yaw stabilisation** in Settings
+defaults to a centred two-second, outlier-resistant fit of the earth-frame camera
+yaw; choose one second or Off to reduce or disable it. The image and footprint
+use this display stabilisation. Recorded telemetry, pixel inspection and exported
+findings retain the original aligned pose. Smoothing does not bridge missing or
+stale poses and gives the same result when seeking or playing backwards.
+No video frames are sent to the map provider.
+
+During playback the projection updates at up to five frames per second, slowing
+further when rendering is expensive. Intermediate projection frames are skipped;
+each update uses the latest video image and matching pose. The projected image,
+footprint and aircraft update together. Pausing or stepping a frame updates the
+projection immediately, and missing/stale poses still hide it immediately.
+
+Use the map's **+ / −** buttons, or keyboard **+ / −** (also **=** and numpad
+keys), to zoom in 2D and 3D. Follow retains the selected zoom. Shortcuts also work
+from the timeline or focused map buttons; text/number inputs, dialogs and browser
+Ctrl/Command zoom shortcuts keep their normal behaviour.
+
+The **video track** is colored by each frame's maximum temperature (TMAX) when
+thermal telemetry is available. Blue marks the coolest maxima and red the
+hottest, with a Celsius range legend below the map. Raw thermal archives use
+their image maximum; other recordings use valid, fresh embedded TMAX readings.
+The scale covers the available track and updates while indexing. RGB recordings
+without thermal telemetry, and intervals missing temperature, remain cyan.
+Long-track simplification retains brief temperature peaks to help locate hot
+spots. Small colored samples keep hot passes visible where tracks overlap.
+These are temperatures seen by the camera along the aircraft route,
+not mapped ground-temperature measurements.
+
+Click the **video track**, or within8 screen pixels, to pause and seek to
+that location in the recording. At overlapping passes the time closest to the
+current playback position wins. White log tracks and mission/fence overlays do
+not seek the video. Position/clock gaps stay disconnected, and the track is
+rebuilt when telemetry offsets or time anchors change. Long tracks build in
+chunks; a visible hint identifies any display simplification.
+
+Flight-log receipt UTC, autopilot boot-derived UTC and video PTS remain distinct.
+Loading a log does not replace valid camera pose with vehicle pose. When a log
+has multiple plan/home versions, frame-time selection avoids using a future
+upload or a later arming's home. Diagnostic details are in Settings.
+
+## Create a splat
+
+**Create splat** (map heading) hands part of a recording to
+[WebSplat](../GaussianSplat/WebSplat/), which builds a Gaussian splat in the
+browser. It works with APCG raw thermal MKVs (FFV1 gray16) and with H.264/HEVC
+RGB recordings (MPEG-TS with MISB KLV, MP4/TS with APCG SEI) whose frames carry
+camera pose and, for RGB, a horizontal FOV (recorded or the FOV override). The button is enabled once the file is
+indexed; its tooltip says why when it is not. The map switches to 3D and a
+panel opens above the map options:
+
+- **Range**: drag the `[` and `]` brackets on the seek bar (or focus one and
+  use the arrow keys, shift for 10 frames); clicking the bar still seeks. The
+  panel shows the start and end times and frame numbers. Only the in-range
+  track is drawn (**Show whole flight** dims the rest) and the dots show where
+  the camera looked; both follow a bracket once it stops moving.
+- **Target**: defaults to the median of those dots. **Pick on map** sets it
+  from the next map click; the height (m AMSL) can be edited or nudged by
+  1 m (shift: 10 m). A picked target needs a terrain height or an entered
+  one. For thermal, **Refine to the hot spot** lets WebSplat move it to the
+  hottest point nearby.
+- **Area**: **Radius** (m) around the target, by default the ground width
+  the camera sees (2 × the median camera-to-target distance × tan(HFOV / 2),
+  rounded to 10 m, 100-2000 m); clear the field to restore it. **Max height**
+  (5-300 m above the target, or Auto: WebSplat's own ceiling just above the
+  tree tops) drops everything higher. The map shows the area as a ring, or a
+  translucent cylinder up to the max height.
+- **Width** (RGB): the processing width, Full or 1920 / 1280 (default) / 960 /
+  640, never above the source. The panel shows the frames used (3 fps) and
+  the pixel workload; widths above 1280 may exceed GPU memory on small GPUs.
+- **View**: the splat opens from the 3D map's view at the moment Go is
+  pressed (in 2D, WebSplat picks its own).
+- **Go** opens WebSplat in a new tab and passes it the request and the open
+  file, without a second download. Allow pop-ups for the site. Keep this tab
+  open until the panel reports that WebSplat accepted the job.
+
+WebSplat uses the recorded telemetry, not the telemetry offset or time anchors
+set here, and the recording's FOV unless Settings overrides it. Its location
+is `websplatUrl` in `viewer-config.js` (default `../websplat/`, the same
+origin).
+
+## Maps and Google keys
+
+`public/viewer-config.js` is a **public runtime configuration template** copied
+to `dist/viewer-config.js`. Configure it before building, or maintain the deployed
+copy separately from application releases. All browser keys are public to the
+page; restrict Google keys to the intended hosting origin.
+
+```js
+window.VIEWER_CONFIG = {
+  imagery: 'google', // none, osm, satellite, google
+  googleMapsApiKey: 'YOUR_ORIGIN_RESTRICTED_MAP_TILES_API_KEY',
+  terrainUrl: 'https://plot.ardupilot.org/quantized/', // shared service, CORS enabled
+  terrainDatum: 'amsl', // plot SRTM tiles; use ellipsoid for ellipsoidal terrain
+  amslToEllipsoidMetres: 0,
+};
+```
+
+Esri satellite imagery is the default. Where detailed imagery is unavailable,
+zooming in retains the nearest available imagery instead of showing the provider's
+"Map data not yet available" tiles. This works in both 2D and 3D.
+Map tile requests reveal the viewport to
+the selected imagery provider, including the aircraft area once a video is opened.
+No file bytes are sent. OpenStreetMap and an offline globe are selectable. Google imagery uses the
+[Google2DImageryProvider Map Tiles API](https://cesium.com/learn/cesiumjs/ref-doc/Google2DImageryProvider.html).
+No Google account, Cesium ion token or cloud upload is needed for local review.
+Provider keys and terrain/imagery choices entered in Settings affect the current
+session. Review annotations and per-file alignment preferences use localStorage.
+
+The default terrain URL is `https://plot.ardupilot.org/quantized/`, so another
+static host does not need its own terrain files or proxy. The viewer permits
+this shared HTTPS endpoint and same-origin terrain services; its CSP allowlist
+includes the shared terrain path. If an installation already serves terrain,
+`terrainUrl: '/quantized/'` continues to work. The plot service supports public,
+credential-free GET/HEAD access and OPTIONS preflights. It does not receive
+recording/log bytes; terrain tile requests reveal the area being viewed.
+
+The configured quantized-mesh endpoint supplies both 3D visual terrain and camera
+ray intersections, independently of the visible map mode/zoom. The plot server's
+SRTM tiles store orthometric/EGM96 (AMSL) heights: set `terrainDatum: 'amsl'`.
+For an ellipsoidal terrain service use `terrainDatum: 'ellipsoid'` and set
+`amslToEllipsoidMetres` to the local geoid separation. The picker then subtracts
+that offset from terrain heights to match AMSL camera altitude. Displayed AMSL
+entities use the same reference as the terrain. Findings retain the datum,
+source URL, sampling level and tile keys.
+
+CPU-side tile interpolation uses a bounded cache and an index of mesh triangles.
+Each ray keeps a fixed available level (up to12); missing coverage at that level
+has no flat/ellipsoid fallback. The tile service must advertise availability.
+Map tiles connect to the selected provider; source file bytes are never sent
+with them. Choose Offline globe for no external imagery requests.
+
+## Deployment prefixes
+
+The default development prefix is `/viewer/`. Set `VIEWER_BASE_PATH` at build
+and preview time to install at another prefix, including map workers and WASM:
+
+```sh
+VIEWER_BASE_PATH=/video/ npm run build
+VIEWER_BASE_PATH=/video/ npm run preview
+# http://127.0.0.1:4173/video/
+```
+
+Copy **all** of `dist/` to the static web directory. Do not copy only
+`index.html`. See [the plot installation](docs/DEPLOYMENT.md) for the isolated
+release layout, runtime terrain configuration and rollback procedure.
+
+Example nginx shape (adapt the filesystem path to the server):
+
+```nginx
+location = /viewer { return 301 /viewer/; }
+location /viewer/ {
+    alias /srv/fire-viewer/;
+    index index.html;
+    add_header X-Content-Type-Options nosniff always;
+}
+```
+
+Serve JavaScript/CSS/WASM with their normal MIME types (`application/wasm` for
+`.wasm`). Single-thread decoding deliberately does not require cross-origin
+isolation headers, which can interfere with map imagery. The HTML CSP permits
+same-origin assets/workers and the listed imagery providers. `unsafe-eval` is
+needed by Cesium's bundled Knockout widget binding; filenames/log text are never
+inserted as executable HTML. There are no remote script/CDN dependencies.
+
+Deploy releases atomically and preserve the public runtime configuration.
+Dependency assets use versioned paths to avoid mixing cached workers/WASM after
+upgrades. Keep old release assets available while old tabs remain open. Verify
+`/viewer/`, a native RGB frame, a raw thermal frame and both map modes after a
+server update. The deployed About / licences link includes full licence text, notices and the pinned dependency manifest. Third-party notices/source references are in
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Structure and future live sources
+
+[Architecture and extension contracts](docs/ARCHITECTURE.md) describe the module
+boundaries. In brief:
+
+- `src/media`: file-backed containers, telemetry decoders, worker index, native
+  WebCodecs and bounded software decoder. Source PTS and raw payloads stay here.
+- `src/domain`: independent clocks, calibrated thermal tools, projection/DEM and
+  flight-log models. These modules have no DOM or map-library dependency.
+- `src/map`: one map/entity model shared by2D and 3D; atomic provider changes.
+- `src/ui`: layout and styling. `src/main.js` coordinates review state and events.
+- `tests`: format golden vectors, domain tests, real-file opt-ins, and headed
+  browser qualification with reproducible small generated fixtures.
+
+SupportProxy live ingestion is the next source adapter, not implemented yet.
+It should emit the same frame/track batches and `readPacket` API, with bounded
+packet retention, generation/cancellation, PTS discontinuity handling and explicit
+clock provenance. An HTTPS-hosted viewer will require an HTTPS/CORS-capable proxy
+endpoint; raw RTSP is not a browser transport. The playback, telemetry, thermal
+and map layers can then be reused.
+
+## Checks
+
+```sh
+npm test
+npm run build
+# On a desktop, start an isolated test display:
+Xephyr :99 -screen 1500x1000 -ac -noreset -nolisten tcp
+# In another terminal:
+npm run preview
+VIEWER_TEST_DISPLAY=:99 npm run test:browser
+```
+
+Browser fixtures additionally require Python with PyAV/NumPy, system FFmpeg and
+a C++ toolchain. No real flight recording is committed. See
+[TESTING.md](docs/TESTING.md) for real-data opt-ins and screenshot/network audits,
+[REVIEWS.md](docs/REVIEWS.md) for the staged Claude reviews, and
+[PLAN.md](docs/PLAN.md) for the accepted plan and feasibility evidence.
+
+## Video navigation and map height
+
+Use **Video zoom** to show the image at 1×, 2×, 4× or 8× its source size, and scroll
+the video viewport to inspect a region. At **1×**, one source pixel occupies one
+CSS pixel; numeric zoom stays fixed when the viewport resizes. **Fit** is the
+default and scales the whole frame to the available viewport. Zoom is
+a display operation; raw pixel coordinates, temperatures and exported findings
+are unchanged, including with 180° display rotation.
+
+Type a displayed frame number (starting at 1) beside the frame counter and
+press **Go** or Enter to pause and jump. While indexing, only currently indexed
+frames can be selected. Move the pointer over the map to read terrain height
+in metres AMSL below the map. Missing terrain is shown as unavailable rather
+than as zero; height sampling follows the same configured terrain datum in both
+2D and 3D.
+
+## Thermal analysis workbench
+
+Raw thermal recordings support histograms, region statistics, background and
+local-contrast filters, matched/scale-space detection aids, CLAHE and exploratory
+Richardson–Lucy/Wiener deconvolution. Processing is local and cancellable;
+original detector values remain the source of temperatures and map positions.
+See [Thermal image analysis](docs/THERMAL_ANALYSIS.md) for operation, scientific
+assumptions, reproducible exports and qualification limits.

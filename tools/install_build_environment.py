@@ -13,8 +13,8 @@ import platform
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
+from safe_tar import safe_extract
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -43,6 +43,11 @@ def sha256(path):
     return digest.hexdigest()
 
 
+# Unpack the downloaded compiler archive into a temporary directory
+def extract_toolchain(archive, destination):
+    safe_extract(archive, destination)
+
+
 def toolchain(name):
     directory, url, digest, prefix = TOOLCHAINS[name]
     base = BUILD / 'toolchains'
@@ -62,12 +67,12 @@ def toolchain(name):
         if sha256(archive) != digest:
             raise RuntimeError(f'Toolchain checksum mismatch: {archive}')
         with tempfile.TemporaryDirectory(prefix='extract-', dir=base) as work:
-            with tarfile.open(archive) as tar:
-                tar.extractall(work, filter='data')
+            extract_toolchain(archive, work)
             (Path(work) / directory).rename(target)
         stamp.write_text(digest + '\n')
     compiler = str(target / 'bin' / prefix)
     run(compiler + 'gcc', '-dumpmachine')
+    run(compiler + 'g++', '-dumpmachine')
     return compiler
 
 
@@ -90,8 +95,10 @@ def ax_headers():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-system', action='store_true')
-    parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
-                        default=['mt11', 'a8', 'zr10', 'z1mini'])
+    parser.add_argument('--with-tool-build-deps', action='store_true',
+                        help='also install prerequisites for rebuilding the prebuilt MT11 tools')
+    parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'zt30', 'z1mini'],
+                        default=['mt11', 'a8', 'zr10', 'zt30', 'z1mini'])
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
         parser.error('Hardware toolchains require x86_64 Linux; see windows/ for Windows SITL')
@@ -100,12 +107,13 @@ def main():
         if shutil.which('apt-get') is None:
             parser.error('Use Debian/Ubuntu, or install prerequisites yourself and use --skip-system')
         run(*prefix, 'apt-get', 'update')
+        tool_build_deps = (['autoconf', 'automake', 'libtool', 'pkg-config',
+                            'bison', 'flex', 'gawk'] if args.with_tool_build_deps else [])
         run(*prefix, 'apt-get', 'install', '-y', 'build-essential', 'gcc-aarch64-linux-gnu',
             'g++-aarch64-linux-gnu', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
-            'autoconf', 'automake', 'libtool', 'pkg-config', 'bison', 'flex', 'gawk',
             'mtd-utils', 'fakeroot', 'zlib1g-dev', 'liblzo2-dev', 'libzstd-dev', 'liblzma-dev',
-            'openssl', 'patch', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
-            'python3-av', 'python3-opencv')
+            'openssl', 'patch', 'rsync', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
+            'python3-av', 'python3-opencv', *tool_build_deps)
     BUILD.mkdir(exist_ok=True)
     env = BUILD / 'environment'
     if not (env / 'bin/python3').exists():
@@ -115,8 +123,12 @@ def main():
     run('git', 'submodule', 'update', '--init', '--recursive')
     run('sh', 'tools/bootstrap_dependencies.sh', str(BUILD / 'deps'))
     settings = {}
-    if 'a8' in args.targets:
-        settings['A8_CROSS_COMPILE'] = toolchain('a8')
+    if 'a8' in args.targets or 'zt30' in args.targets:
+        compiler = toolchain('a8')
+        if 'a8' in args.targets:
+            settings['A8_CROSS_COMPILE'] = compiler
+        if 'zt30' in args.targets:
+            settings['ZT30_CROSS_COMPILE'] = compiler
     if 'zr10' in args.targets:
         run('sh', 'tools/bootstrap_zr10_toolchain.sh')
     if 'z1mini' in args.targets:

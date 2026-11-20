@@ -1,0 +1,27 @@
+From fd4995cd181c76c0635c7334a9f4559152cf0396 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Mon, 9 Nov 2026 18:20:00 +1100
+Subject: [PATCH] native: remap source paths (-ffile-prefix-map) so the wasm
+ names no local directories
+
+---
+ native/build.sh | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/native/build.sh b/native/build.sh
+index 6605789..5036cb6 100755
+--- a/native/build.sh
++++ b/native/build.sh
+@@ -13,7 +13,8 @@ if [ -z "$COLMAP_WASM_SYSTEM_TOOLCHAIN" ]; then
+ fi
+ JOBS=${JOBS:-8}
+ mkdir -p $B $P/lib $P/include $R/inc; ln -sfn $BOOST_INC/boost $R/inc/boost
+-FLAGS="-O3 -fexceptions${WASM_SIMD:+ -msimd128}"
++# source paths in assert/log strings name the build trees, not this machine's directories
++FLAGS="-O3 -fexceptions${WASM_SIMD:+ -msimd128} -ffile-prefix-map=$R=/colmap-wasm -ffile-prefix-map=$(dirname "$H")=/colmap-wasm-fork"
+ common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_PREFIX_PATH=$P -DCMAKE_FIND_ROOT_PATH=$P
+         -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF "-DCMAKE_C_FLAGS=$FLAGS" "-DCMAKE_CXX_FLAGS=$FLAGS"
+         -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+-- 
+2.53.0
+

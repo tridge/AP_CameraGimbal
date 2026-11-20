@@ -18,6 +18,7 @@ int ca_raw_thermal_server_publish(struct ca_raw_thermal_server *server,
                                   const uint16_t *pixels,
                                   const struct timespec *captured_at);
 unsigned ca_raw_thermal_server_port(const struct ca_raw_thermal_server *server);
+void ca_raw_thermal_server_source_timeout(struct ca_raw_thermal_server *, unsigned milliseconds);
 void ca_raw_thermal_server_close(struct ca_raw_thermal_server *server);
 
 #endif

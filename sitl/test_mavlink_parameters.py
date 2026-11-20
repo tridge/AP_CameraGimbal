@@ -19,17 +19,31 @@ os.environ.setdefault("MAVLINK20", "1")
 import pexpect
 from pymavlink import mavutil
 
+
+def survey_status_path(config):
+    """Match apcam_survey_status_path(), including isolated SITL configs."""
+    value = 14695981039346656037
+    for byte in os.fsencode(config):
+        value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
+    root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else os.environ.get("TMP") or "/tmp")
+    return pathlib.Path(root) / f"apcam-survey-{value:016x}.json"
+
+
 M = mavutil.mavlink
 CAMERA = M.MAV_COMP_ID_CAMERA
 GIMBAL = M.MAV_COMP_ID_GIMBAL
 EXPECTED = {
-    "LOG_DISARMED",
+    "SURV_PATTERN", "SURV_LENS", "SURV_OVERLAP", "SURV_FORE", "SURV_AFT", "SURV_BURST", "SURV_BURST_MS",
+    "SURV_DWELL_MS", "SURV_SETTLE_MS", "SURV_ERROR_CD", "SURV_RATE_CD", "SURV_TERR_MS",
+    "SURV_TERR_M", "SURV_TERR_TOL", "SURV_MIN_SPEED", "SURV_TURN_DEG", "SURV_AIM",
+    "LOG_DISARMED", "OSD_CROSS", "OSD_THERMAL_FOV", "OSD_RECORD",
     "PHOTO_SCOPE", "MOUNT_ORIENT", "UART_PROTOCOL", "THERMAL_PALETTE",
-    "REC_AUTOSTART", "REC_RESOLUTION", "VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC",
+    "RAW_STREAM_FPS", "RAW_RECORD_FPS",
+    "REC_AUTOSTART", "REC_RESOLUTION", "VIDEO_META_FMT", "VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC",
     "VIDEO_SUB_RES", "VIDEO_SUB_CODEC", "IMG_BRIGHTNESS", "IMG_SATURATION",
     "IMG_CONTRAST", "IMG_EXPOSURE", "IMG_ISO", "IMG_SHUTTER", "IMG_METERING",
     "IMG_WHITE_BAL", "MAV_POS_TARGET", "TRACK_METHOD", "MAV_TCP_PORT", "MAV_UDP_PORT", "MAV_SYSID", "MAV_CAM_COMP_ID",
-    "PROXY_ENABLE", "PROXY_MAV_PORT", "PROXY_SIGN", "PROXY_SIGN_ID", "PROXY_VID1_PORT", "PROXY_VID2_PORT",
+    "PROXY_ENABLE", "PROXY_MAV_PORT", "PROXY_SIGN", "PROXY_SIGN_ID", "PROXY_VID1_PORT", "PROXY_VID2_PORT", "PROXY_VID3_PORT",
 }
 
 
@@ -109,7 +123,8 @@ def check_identity(link, system, component=CAMERA):
         if message.get_type() == "HEARTBEAT":
             assert message.autopilot == M.MAV_AUTOPILOT_INVALID
             seen.add(message.get_srcComponent())
-    assert seen == {component, GIMBAL}, seen
+    gimbal = (154, 171, 172, 173, 174, 175)[component - CAMERA]
+    assert seen == {component, gimbal}, seen
 
 
 def check_telemetry_requests(link, system):
@@ -178,6 +193,8 @@ def main():
     parser.add_argument("--build", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
+    if args.backend != "mt11":
+        EXPECTED.difference_update({"OSD_THERMAL_FOV", "RAW_STREAM_FPS", "RAW_RECORD_FPS", "PROXY_VID3_PORT"})
     repo = pathlib.Path(__file__).resolve().parents[1]
     build = (args.build or repo / "build" / ("sitl" if args.backend == "mt11" else "a8-sitl")).resolve()
     directory = (args.output or pathlib.Path(tempfile.mkdtemp(prefix="camera-mavlink-test-"))).resolve()

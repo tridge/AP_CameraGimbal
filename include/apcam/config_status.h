@@ -7,7 +7,7 @@
 /* Identifies the exact saved INI acknowledged by the app. Not a security hash. */
 static inline uint64_t apcam_config_hash(const void *data, size_t length, uint64_t hash)
 {
-    const unsigned char *bytes = data;
+    const unsigned char *bytes = (const unsigned char*)(data);
     for (size_t i = 0; i < length; i++) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
     return hash;
 }

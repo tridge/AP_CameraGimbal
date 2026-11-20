@@ -20,20 +20,25 @@
 #define APCAM_ZOOM_NATIVE_RATE 0
 #define APCAM_ZOOM_CONTROL_MAX APCAM_ZOOM_MAX
 #define APCAM_WEB_CONTROL_MAVLINK 0
+#define APCAM_HAVE_OVERLAY_RECORDING_SELECT 1
 #define APCAM_HAVE_GIMBAL_RATES 1
 #define APCAM_SUPPRESS_DUPLICATE_ANGLES 1
 #define APCAM_WEB_CENTER_COMMAND 3
 #define APCAM_HAVE_OPTICAL_ZOOM 1
 #define APCAM_HAVE_FOCUS 1
 #define APCAM_HAVE_IMAGE_CONTROLS 1
-#define APCAM_HAVE_EXTERNAL_UART 1
+/* The external connector is handled by the gimbal MCU, not Linux UART4. */
+#define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 1
 #define APCAM_HAVE_SOC_TEMPERATURE 1
 #define APCAM_VENDOR_PORT 37260
 #define APCAM_WEB_PORT 80
 #define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS1_NAME "Wide RGB"
-#define APCAM_LENS1_FOV_H 88.0f
+/* Wide lens: 84-degree diagonal on the full 4:3 sensor. Retain its width
+ * when cropping to 16:9 video: H=2*atan(tan(84/2)*4/5)=71.532165 degrees,
+ * V=2*atan(tan(H/2)*9/16)=44.113793 degrees. See include/apcam/README.md. */
+#define APCAM_LENS1_FOV_H 71.532165f
 #define APCAM_LENS1_FOV_H_TELE 0.0f
 #define APCAM_LENS1_FOV_MODEL APCAM_FOV_FOCAL_LENGTH
 #define APCAM_LENS1_OPTICAL_ZOOM_MAX 1
@@ -50,21 +55,30 @@
 #define APCAM_STREAM_CODECS 3
 #define APCAM_DEFAULT_MAIN_RESOLUTION 1
 #define APCAM_DEFAULT_SUB_RESOLUTION 0
-#define APCAM_DEFAULT_RECORDING_RESOLUTION 1
+#define APCAM_DEFAULT_RECORDING_RESOLUTION APCAM_RES_2160P
 #define APCAM_DEFAULT_SYSTEM_ID 0
 #define APCAM_DEFAULT_POSITION_TARGETING 1
 #define APCAM_DEFAULT_ORIENTATION 0
 #define APCAM_DEFAULT_PHOTO_SCOPE 1
-#define APCAM_DEFAULT_TIMEZONE "GMT-10"
+#define APCAM_DEFAULT_TIMEZONE "GMT"
+/* vendor-compatible RTSP path aliases for /video1 and /video2 */
+#define APCAM_DEFAULT_MAIN_ALIAS "main.264"
+#define APCAM_DEFAULT_SUB_ALIAS ""
 #define APCAM_GIMBAL_PITCH_MIN -90.0f
 #define APCAM_GIMBAL_PITCH_MAX 30.0f
 #define APCAM_GIMBAL_YAW_CONTINUOUS 1
 #define APCAM_GIMBAL_YAW_MIN -180.0f
 #define APCAM_GIMBAL_YAW_MAX 180.0f
-#define APCAM_GIMBAL_RATE_MAX 60.0f
+/* Upright bench sweeps confirmed approximately 100 deg/s on both axes.
+ * Shared by firmware tracking limits and SITL angle movement. */
+#define APCAM_GIMBAL_RATE_MAX 100.0f
 /* MT11 bench BIN: normalized yaw speed 100 is approximately 100 deg/s. */
 #define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
 #define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f
+/* Minimum moving rates from the upright bench sweep. Tracking uses short
+ * pulses below these rates; ordinary SDK/MAVLink rate commands are unchanged. */
+#define APCAM_TRACKING_MIN_PITCH_RATE 6.0f
+#define APCAM_TRACKING_MIN_YAW_RATE 6.0f
 /* Isolated upright bench sweeps, 2026-09-15: both axes hold still at
  * +/-1..5; above the threshold motion is approximately 1 deg/s per command
  * unit. Pitch measured through +/-100, yaw has more noise and asymmetry.
@@ -75,6 +89,8 @@
 /* Approximate command/actuator lag from onset and stopping motion; includes
  * unseparated transport/feedback latency. See docs/mt11-rate-calibration.md. */
 #define APCAM_SIM_RATE_TIME_CONSTANT 0.04f
+/* E5739 calibration selects the first factor at or above the request. */
+#define APCAM_SIM_OPTICAL_ZOOM_STEP 0.1f
 
 #define APCAM_LENS2_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS2_NAME "Zoom RGB"

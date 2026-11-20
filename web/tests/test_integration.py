@@ -2,6 +2,8 @@
 
 import base64
 import http.client
+import hashlib
+import json
 import html
 import os
 from pathlib import Path
@@ -16,6 +18,9 @@ import time
 import urllib.parse
 
 from test_parameters_browser import check_parameters_browser
+from test_reboot_browser import check_reboot_browser
+from test_live_language_browser import check_live_browser, check_language_browser, check_login_language_browser
+from test_terrain_upload import check_terrain_upload
 
 
 binary = Path(sys.argv[1]).resolve()
@@ -23,6 +28,7 @@ root = Path(sys.argv[2]).resolve()
 shutil.rmtree(root, ignore_errors=True)
 (root / "app" / "dropbear").mkdir(parents=True)
 (root / "mnt").mkdir()
+shutil.copytree(Path(__file__).resolve().parents[1] / "webroot", root / "webroot")
 (root / "app" / "web.pass").write_text("initial-password\n", encoding="utf-8")
 os.chmod(root / "app" / "web.pass", 0o600)
 (root / "app" / "dropbear" / "authorized_keys").write_text("", encoding="utf-8")
@@ -92,6 +98,8 @@ camera_events = {
     "attitude_requests": 0,
     "lidar_enabled": False,
     "lidar_controls": [],
+    "zoom": 5.6,
+    "zoom_delay": 0,
 }
 
 
@@ -118,6 +126,10 @@ def camera_api_mock():
             camera_events["attitude_requests"] += 1
             response_opcode = opcode
             payload = struct.pack("<hhhhhh", 1234, -456, 78, 19, -20, 3)
+        elif opcode == 0x18:
+            response_opcode = opcode
+            tenths = round(camera_events['zoom'] * 10)
+            payload = bytes((tenths // 10, tenths % 10))
         elif opcode == 0x0C and packet[8:-2] == b"\x00":
             camera_events["captures"] += 1
             capture = root / "mnt" / "DCIM" / "capture" / "2026-09-01"
@@ -160,6 +172,9 @@ def manual_mock():
         assert magic == 0x4d434131
         assert action == 1 or token == manual_token
         manual_events.append((action, value))
+        if action == 9:
+            time.sleep(camera_events['zoom_delay'])
+            camera_events['zoom'] = value
         manual_socket.sendto(struct.pack("=II16sfi", magic, action, manual_token, value, 0), peer)
 
 
@@ -218,7 +233,7 @@ def authorization(password):
 
 
 def request(method, path, password, body=None, headers=None):
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=120 if path == "/survey/terrain" else 5)
     all_headers = {"Authorization": authorization(password)}
     if headers:
         all_headers.update(headers)
@@ -366,6 +381,58 @@ def test_login_and_languages(csrf):
     assert status == 200 and b"lang-login" in body
     subprocess.run(["node", "--check"], input=body, check=True)
 
+    status, stylesheet, style_headers = raw_request("GET", "/style.css")
+    assert status == 200 and b".live-video" in stylesheet
+    assert dict(style_headers)["Content-Type"].startswith("text/css")
+    assert "style-src 'self'" in dict(style_headers)["Content-Security-Policy"]
+    for private_asset in ("/head.html", "/webroot/head.html", "/../head.html", "/%2e%2e/head.html"):
+        status, _, _ = request("GET", private_asset, "initial-password")
+        assert status == 404, private_asset
+
+    for route, name, mime in (("/mpegts.js", "mpegts.js", "application/javascript"),
+                              ("/recording.js", "recording.js", "application/javascript"),
+                              ("/mpegts-license", "mpegts-license.html", "text/html")):
+        assert raw_request("GET", route)[0] == 401, route
+        status, body, headers = request("GET", route, "initial-password")
+        assert status == 200 and headers["Content-Type"].startswith(mime), route
+        assert body == (root / "webroot" / name).read_bytes()
+        assert "media-src 'self' blob:" in headers["Content-Security-Policy"]
+        assert "script-src 'self'" in headers["Content-Security-Policy"]
+    assert hashlib.sha256((root / "webroot/mpegts.js").read_bytes()).hexdigest() == "e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0"
+    notices = (root / "webroot/mpegts-license.html").read_text()
+    for attribution in ("Apache License", "Bilibili", "Copyright Joyent", "Yehuda Katz",
+                        "Roman Shtylman", "Boris Sirota", "JS Foundation", "Dailymotion", "StarBrilliant"):
+        assert attribution in notices, attribution
+    for suffix, mime in (("ts", "video/mp2t"), ("mp4", "video/mp4")):
+        recording = root / "mnt" / ("viewer-test." + suffix)
+        payload = b"original telemetry and video bytes" * 20
+        recording.write_bytes(payload)
+        query = urllib.parse.urlencode({"path": str(recording)})
+        status, body, _ = request("GET", "/view?" + query, "initial-password")
+        assert status == 200 and b"download=1" in body
+        assert b"href=/mpegts-license" not in body
+        assert (b"id=recording-player" in body) == (suffix == "ts")
+        assert (b"controls preload=metadata" in body) == (suffix == "mp4")
+        status, body, headers = request("GET", "/file?" + query + "&download=1", "initial-password")
+        assert status == 200 and body == payload and headers["Content-Type"] == mime
+        assert headers["Content-Disposition"].startswith("attachment;")
+        status, body, headers = request("GET", "/file?" + query, "initial-password", headers={"Range": "bytes=7-31"})
+        assert status == 206 and body == payload[7:32]
+        assert headers["Content-Range"] == f"bytes 7-31/{len(payload)}"
+        recording.unlink()
+    print("PASS authenticated TS player assets, CSP, MP4/TS viewing and original range downloads")
+
+    # A partial/missing install must report an asset failure, never empty 200
+    # or a misleading allocation error. Keep the source tree untouched.
+    head = root / "webroot/head.html"
+    head.rename(root / "saved-head.html")
+    for route in ("/", "/login", "/parameters", "/rebooting"):
+        status, body, _ = request("GET", route, "initial-password") if route != "/login" else raw_request("GET", route)
+        assert status == 503 and b"assets unavailable" in body, (route, status, body)
+        assert b"Out of memory" not in body
+    (root / "saved-head.html").rename(head)
+    assert request("GET", "/rebooting", "initial-password")[0] == 200
+
     # wrong password, expired form token
     status, body, headers = login_form("wrong-password")
     assert status == 401 and b"Incorrect username or password" in body
@@ -466,6 +533,10 @@ def test_login_and_languages(csrf):
     )
     assert status == 303 and dict(headers)["Location"] == "/users"
     assert set_cookies(headers)["lang"][0] == "ja"
+    status, _, fragment_headers = raw_request('POST', '/language',
+        {'Content-Type':'application/x-www-form-urlencoded', 'Cookie':cookie_header(jar)},
+        urllib.parse.urlencode({'csrf':csrf,'lang':'ja','next':'/parameters#network'}).encode())
+    assert status == 303 and dict(fragment_headers)['Location'] == '/parameters#network'
     jar["lang"] = "ja"
     status, body, _ = raw_request("GET", "/users", {"Cookie": cookie_header(jar)})
     assert status == 200 and b"<html lang=ja>" in body
@@ -566,6 +637,27 @@ def test_login_and_languages(csrf):
     assert request("GET", "/", "wrong-password")[0] == 401
 
 
+def test_reboot_redirect(csrf):
+    # a confirmed reboot redirects so a page refresh cannot reboot again
+    status, body, _ = form("/reboot", "initial-password", csrf, {})
+    assert status == 400 and b"Reboot confirmation was not checked" in body
+    status, body, headers = form("/reboot", "initial-password", csrf, {"confirm": "yes"})
+    assert status == 303 and headers["Location"] == "/rebooting", (status, body)
+    status, body, page_headers = request("GET", "/rebooting", "initial-password")
+    assert status == 200 and b"<h1 id=reboot-heading>Camera rebooting</h1>" in body
+    script_status, script, _ = raw_request("GET", "/reboot.js")
+    assert script_status == 200  # It still loads after the login session expires.
+    auth_status, _, auth_headers = raw_request("GET", "/upgrade-status",
+        headers={"Cookie": "session=" + "a" * 64, "Accept": "*/*"})
+    assert auth_status == 401
+    assert "www-authenticate" not in {key.lower() for key, _ in auth_headers}
+    check_reboot_browser(body, script, page_headers["Content-Security-Policy"], dict(auth_headers))
+    status, token, _ = request("GET", "/upgrade-status", "initial-password")
+    assert status == 200 and token.decode() == csrf
+    # Reloading the GET page never submits another reboot request.
+    assert request("GET", "/rebooting", "initial-password")[0] == 200
+
+
 try:
     deadline = time.monotonic() + 5
     while True:
@@ -578,7 +670,9 @@ try:
             time.sleep(0.05)
 
     test_large_recording_download()
+    check_terrain_upload(request, root, csrf, port)
     test_login_and_languages(csrf)
+    test_reboot_redirect(csrf)
 
     status, body, _ = request("GET", "/users", "initial-password")
     assert status == 200 and b"Authorized SSH keys" in body
@@ -594,6 +688,8 @@ try:
     assert b"Firmware version</th><td id=firmware-version>" in body
     assert b" (<span id=firmware-git-hash>" in body
     assert b"id=time-sync" in body and b">Sync</button>" in body
+    # the configured [general] timezone (GMT-10 is fixed UTC+10) applies to page times
+    assert b" GMT (UTC+1000)<form id=time-sync" in body
     assert b"ArduPilot camera app" in body and b"replacement app" not in body
     status, script, headers = request("GET", "/status.js", "initial-password")
     assert status == 200 and b"Date.now()" in script
@@ -601,36 +697,54 @@ try:
     subprocess.run(["node", "--check"], input=script, check=True)
 
     status, body, _ = request("GET", "/parameters", "initial-password")
-    assert status == 200 and b"camera-app parameters" in body
-    assert b'name="mavlink_tcp_port"' in body and b'value="14550"' in body
+    assert status == 200 and b"<h1>Parameters</h1>" in body
+    assert b'name="mavlink_tcp_port"' in body and b'value="16001"' in body
     assert b'name="mavlink_system_id" id="mavlink_system_id" type=number min="0" max="255" step="1" value="0"' in body
     assert b'<option value="100" selected>Camera 1 (100)</option>' in body
     assert b'<option value="105">Camera 6 (105)</option>' in body
-    for name in (b"proxy_video1_port", b"proxy_video2_port"):
+    for name in (b"proxy_video1_port", b"proxy_video2_port", b"proxy_video3_port"):
         assert re.search(rb'<input[^>]*name="' + name + rb'"[^>]*value="0"', body)
     assert b'name="position_targeting"' in body
+    assert b'name="osd_cross"' in body and b'name="osd_thermal_fov"' in body
     assert b'value="true" selected' in body
-    assert b'name="uart_protocol"' in body and b'>None</option>' in body
+    assert b'name="uart_protocol"' not in body
+    assert b'The external UART is handled by the gimbal controller.' in body
     assert b'<option value="while_armed">While Armed</option>' in body
+    assert b'<select required name="timezone" id="timezone">' in body
+    assert b'<option selected value="GMT-10">GMT-10</option>' in body
+    for zone in (b"GMT", b"Europe/London", b"America/New_York", b"Australia/Sydney", b"Asia/Kathmandu"):
+        assert b'<option value="' + zone + b'">' + zone + b'</option>' in body
     replacement_parameters = {
-        "timezone": "GMT-10",
+        "survey_pattern": "both", "survey_lens": "thermal", "survey_overlap": "50", "survey_fore_pct": "50",
+        "survey_aft_pct": "50", "survey_burst": "1", "survey_burst_ms": "100",
+        "survey_dwell_ms": "1200", "survey_settle_ms": "200", "survey_error_cd": "100",
+        "survey_rate_cd": "100", "survey_terrain_ms": "3000", "survey_terrain_m": "500",
+        "survey_terrain_tol": "25", "survey_min_speed": "5", "survey_turn_deg": "15", "survey_aim": "rows",
+        "timezone": "Asia/Kathmandu",
         "photo_scope": "all",
         "orientation": "auto",
-        "uart_protocol": "mavlink",
         "mavlink_system_id": "42",
         "mavlink_camera_component_id": "105",
         "mavlink_tcp_port": "14600",
         "mavlink_udp_port": "14601",
         "position_targeting": "false",
         "tracking_method": "angle",
+        "osd_cross": "true",
+        "osd_recording": "true",
+        "osd_thermal_fov": "true",
         "log_disarmed": "false",
         "thermal_palette": "white_hot",
+        "raw_stream_fps": "8",
+        "raw_record_fps": "3",
         "autorecord": "while_armed",
         "recording_resolution": "1920x1080",
         "main_resolution": "1920x1080",
         "main_codec": "h264",
+        "video_telemetry": "apcg",
         "sub_resolution": "1280x720",
         "sub_codec": "h264",
+        "main_alias": "main.264",
+        "sub_alias": "",
         "brightness": "50",
         "saturation": "50",
         "contrast": "50",
@@ -648,27 +762,55 @@ try:
         "proxy_video1_port": "40001",
         "proxy_video1_name": "video1",
         "proxy_video2_port": "40002",
+        "proxy_video3_port": "40003",
+        "proxy_video3_name": "Raw Thermal",
         "proxy_video2_name": "video2",
         "proxy_publish_password": "",
-        "proxy_network_interface": "eth0",
-        "proxy_network_address": "",
-        "proxy_network_gateway": "",
+        "network_capture": "false",
+        "network_interface": "eth0",
+        "network_primary_address": "",
+        "network_secondary_address": "",
+        "network_gateway": "",
         "action": "save",
     }
     status, body, _ = form(
         "/parameters", "initial-password", csrf, replacement_parameters
     )
-    assert status == 200 and b"Parameters saved" in body
+    assert status == 200 and b"Parameters saved" in body, (status, body.decode())
+    status, _, headers = form("/survey", "initial-password", csrf, {"survey_mode": "2"})
+    assert status == 303 and headers["Location"] == "/parameters#survey"
+    assert (root / "app" / "camera.ini.survey.command").read_text().strip() == "2"
+    assert form("/survey", "initial-password", csrf, {"survey_mode": "9"})[0] == 400
+    # Match the shared runtime filename and verify both live and stale status.
+    config_hash = 14695981039346656037
+    for byte in os.fsencode(root / "app" / "camera.ini"):
+        config_hash = ((config_hash ^ byte) * 1099511628211) & 0xffffffffffffffff
+    runtime_root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else "/tmp")
+    status_path = Path(runtime_root) / f"apcam-survey-{config_hash:016x}.json"
+    try:
+        status_path.write_text('{"state":"surveying","captured":17}')
+        status, body, _ = request("GET", "/survey/status", "initial-password")
+        assert status == 200 and json.loads(body)["captured"] == 17, (status, body)
+        stale = time.time() - 10
+        os.utime(status_path, (stale, stale))
+        status, body, _ = request("GET", "/survey/status", "initial-password")
+        assert status == 200 and json.loads(body)["state"] == "camera unavailable"
+    finally:
+        status_path.unlink(missing_ok=True)
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
-    assert saved_config.count("[uart]") == 1
-    assert 'protocol = "mavlink"' in saved_config
-    assert 'system_id = "42"' in saved_config
-    assert 'camera_component_id = "105"' in saved_config
-    assert 'tcp_port = "14600"' in saved_config
-    assert 'udp_port = "14601"' in saved_config
-    assert 'position_targeting = "false"' in saved_config
-    assert 'autorecord = "while_armed"' in saved_config
+    assert "[uart]" not in saved_config
+    assert 'system_id = 42' in saved_config
+    assert 'camera_component_id = 105' in saved_config
+    assert 'tcp_port = 14600' in saved_config
+    assert 'udp_port = 14601' in saved_config
+    assert 'position_targeting = false' in saved_config
+    assert 'cross = true' in saved_config and 'thermal_fov = true' in saved_config
+    assert 'recording = true' in saved_config
+    assert 'autorecord = while_armed' in saved_config
+    assert 'stream_fps = 8' in saved_config
+    assert 'record_fps = 3' in saved_config
+    assert 'alias = main.264' in saved_config and 'alias = ""' in saved_config
     assert "retained from an installation" in saved_config
     status, body, _ = request("GET", "/parameters", "initial-password")
     assert status == 200
@@ -679,15 +821,25 @@ try:
     assert b'<h2>SupportProxy</h2>' in body
     assert b'name="proxy_publish_password" id="proxy_publish_password" type=password' in body
     assert b'<input required name="proxy_publish_password"' not in body
+    assert 'timezone = Asia/Kathmandu' in (root / "app/camera.ini").read_text()
+    status, timezone_page, _ = request("GET", "/parameters", "initial-password")
+    assert status == 200 and b'<option value="Asia/Kathmandu" selected>' in timezone_page
+    status, timezone_status, _ = request("GET", "/", "initial-password")
+    assert status == 200 and b"(UTC+0545)" in timezone_status
+    status, _, _ = form("/parameters", "initial-password", csrf,
+                        dict(replacement_parameters, timezone="Asia/Typo"))
+    assert status == 400
+    assert 'timezone = Asia/Kathmandu' in (root / "app/camera.ini").read_text()
+
     valid_proxy = dict(replacement_parameters, proxy_enabled="true", proxy_host="localhost",
                        proxy_signing="true", proxy_signing_passphrase=" a signing phrase ",
                        proxy_publish_password="publish&?=secret", proxy_video1_name="Front Camera",
-                       proxy_network_address="192.0.2.25/24", proxy_network_gateway="192.0.2.1")
+                       network_secondary_address="192.0.2.25/24", network_gateway="192.0.2.1")
     status, proxy_body, _ = form("/parameters", "initial-password", csrf, valid_proxy)
     assert status == 200 and b"Parameters saved" in proxy_body
     proxy_config = (root / "app" / "camera.ini").read_text()
     assert 'signing_passphrase = " a signing phrase "' in proxy_config
-    assert 'video1_name = "Front Camera"' in proxy_config
+    assert 'video1_name = Front Camera' in proxy_config
 
     def input_value(page, name):
         match = re.search(r'<input[^>]* name="' + re.escape(name) +
@@ -710,17 +862,24 @@ try:
     _, saved_proxy, _ = form("/parameters", "initial-password", csrf, browser_proxy)
     assert b"Parameters saved" in saved_proxy
     assert (root / "app" / "camera.ini").read_text() == proxy_config
-    assert b'Additional IPv4 address/prefix' in loaded_proxy
-    assert b'placeholder="192.168.2.97/24" pattern=' in loaded_proxy
-    for changes in ({"proxy_network_address": "192.168.2.97"},
-                    {"proxy_network_address": "192.0.2.25/33"},
-                    {"proxy_network_gateway": "bad"}, {"proxy_host": "bad/host"},
+    assert b'Secondary IPv4 address/prefix' in loaded_proxy
+    assert b'placeholder="192.168.2.97/24"' not in loaded_proxy
+    assert b'For example 192.168.144.27/24' in loaded_proxy
+    for changes in ({"network_primary_address": "192.168.2.97"},
+                    {"network_primary_address": "192.0.2.0/24"},
+                    {"network_primary_address": "192.0.2.255/24"},
+                    {"network_primary_address": "192.0.2.25/24"},
+                    {"network_primary_address": "198.51.100.27/24", "network_gateway": "203.0.113.1"},
+                    {"network_secondary_address": "192.168.2.97"},
+                    {"network_secondary_address": "192.0.2.25/33"},
+                    {"network_gateway": "bad"}, {"proxy_host": "bad/host"},
                     {"proxy_signing_passphrase": ""}, {"proxy_video2_port": "40001"},
+                    {"proxy_video3_port": "40002"}, {"proxy_video3_name": ""},
                     {"proxy_video1_name": ""}, {"proxy_mavlink_port": "65536"}):
         _, invalid_body, _ = form("/parameters", "initial-password", csrf, dict(valid_proxy, **changes))
         assert b"Parameters saved" not in invalid_body
-        if "proxy_network_address" in changes:
-            assert b"Optional address/prefix, for example 192.168.20.25/24" in invalid_body
+        if "network_secondary_address" in changes:
+            assert b"Optional second address, for example 192.168.20.25/24" in invalid_body
         assert (root / "app" / "camera.ini").read_text() == proxy_config
         for name, value in dict(valid_proxy, **changes).items():
             if name.startswith("proxy_") and name not in ("proxy_enabled", "proxy_signing"):
@@ -734,6 +893,27 @@ try:
     assert input_value(rejected_body, "proxy_video1_name") == rejected["proxy_video1_name"]
     assert b'<script>alert("camera")</script>' not in rejected_body
     assert (root / "app" / "camera.ini").read_text() == proxy_config
+    # Network configuration is independent of SupportProxy and survives a reload.
+    network_parameters = dict(replacement_parameters, network_primary_address="198.51.100.27/24",
+                              network_secondary_address="192.0.2.25/24", network_gateway="192.0.2.1")
+    _, network_body, _ = form("/parameters", "initial-password", csrf, network_parameters)
+    assert b"Parameters saved" in network_body
+    _, network_body, _ = request("GET", "/parameters", "initial-password")
+    for name in ("network_primary_address", "network_secondary_address", "network_gateway"):
+        assert input_value(network_body, name) == network_parameters[name]
+    # Old enabled SupportProxy fields appear in the new Network panel, but
+    # explicit empty new fields must suppress legacy fallback after removal.
+    legacy = "[support_proxy]\nenabled=true\nhost=localhost\nnetwork_interface=eth1\nnetwork_address=192.0.2.25/24\nnetwork_gateway=192.0.2.1\n"
+    (root / "app" / "camera.ini").write_text(legacy)
+    _, legacy_body, _ = request("GET", "/parameters", "initial-password")
+    assert input_value(legacy_body, "network_interface") == "eth1"
+    assert input_value(legacy_body, "network_secondary_address") == "192.0.2.25/24"
+    assert input_value(legacy_body, "network_gateway") == "192.0.2.1"
+    (root / "app" / "camera.ini").write_text(legacy + '[network]\nsecondary_address=""\ngateway=""\n')
+    _, legacy_body, _ = request("GET", "/parameters", "initial-password")
+    assert input_value(legacy_body, "network_secondary_address") == ""
+    assert input_value(legacy_body, "network_gateway") == ""
+    (root / "app" / "camera.ini").write_text(proxy_config)
     # Restore disabled defaults, including clearing both optional secrets.
     status, _, _ = form("/parameters", "initial-password", csrf, replacement_parameters)
     assert status == 200 and (root / "app" / "camera.ini").read_text() == saved_config
@@ -760,8 +940,8 @@ try:
     assert status == 200 and b"Parameters saved" in body
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
-    assert 'tcp_port = "14700"' in saved_config
-    assert 'udp_port = "14701"' in saved_config
+    assert 'tcp_port = 14700' in saved_config
+    assert 'udp_port = 14701' in saved_config
     status, _, _ = form(
         "/time/sync", "initial-password", "0" * 64, {"time_ms": "1767225600123"}
     )
@@ -779,7 +959,7 @@ try:
     assert b"id=select-firmware type=button" in body
     assert b"class=danger type=submit>Upgrade Firmware" not in body
     status, body, headers = request("GET", "/upgrade.js", "initial-password")
-    assert status == 200 and b"waitTimeout = 60000" in body
+    assert status == 200 and b"waitTimeout = 120000" in body
     assert b"check.status === 401" in body and b"/login" in body
     assert b"automatic firmware upgrade" in body
     assert b"/upgrade-status" in body and b"progress.value = 100" in body
@@ -859,6 +1039,7 @@ try:
     assert status == 200
     assert b'"yaw_deg":-123.4' in body and b'"pitch_deg":-45.6' in body
     assert b'"roll_deg":7.8' in body and b'"yaw_rate_dps":-1.9' in body
+    assert json.loads(body)['zoom'] == 5.6
     assert headers["Cache-Control"] == "no-store"
     assert camera_events["attitude_requests"] == 1
     status, body, headers = request("GET", "/live/video1.mp4", "initial-password")
@@ -886,6 +1067,28 @@ try:
     assert [a for a, v in manual_events] == [1, 4, 9, 2, 3]
     assert manual_events[1][1] == 30
     assert not camera_events["controls"]
+
+    # The slow optical operation must succeed regardless of UI language. The
+    # former one-second UDP timeout rejected it and the browser dropped its lease.
+    camera_events['zoom_delay'] = 1.25
+    for language in ('en', 'zh', 'ja'):
+        payload = urllib.parse.urlencode({'csrf': csrf, 'action': 'zoom',
+                    'value': '10.0', 'lease': manual_token.hex()}).encode()
+        status, body, _ = request('POST', '/live/control', 'initial-password', payload,
+                    {'Content-Type':'application/x-www-form-urlencoded', 'Cookie':'lang='+language})
+        assert status == 200, (language, body)
+        status, data, _ = request('GET', '/live/attitude.json', 'initial-password')
+        assert status == 200 and json.loads(data)['zoom'] == 10
+        status, page, _ = request('GET', '/live', 'initial-password', headers={'Cookie':'lang='+language})
+        status, script, _ = request('GET', '/live.js', 'initial-password', headers={'Cookie':'lang='+language})
+        check_live_browser(page, script, language)
+        status, page, _ = request('GET', '/parameters', 'initial-password', headers={'Cookie':'lang='+language})
+        status, script, _ = request('GET', '/language.js', 'initial-password', headers={'Cookie':'lang='+language})
+        check_language_browser(page, script, language)
+        status, page, _ = raw_request('GET', '/login?lang='+language)
+        assert status == 200
+        check_login_language_browser(page, script, language)
+    camera_events['zoom_delay'] = 0
 
     status, _, _ = form("/sensors/capture", "initial-password", "0" * 64, {})
     assert status == 400 and camera_events["captures"] == 0

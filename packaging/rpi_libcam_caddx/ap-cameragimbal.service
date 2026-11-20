@@ -1,0 +1,20 @@
+[Unit]
+Description=AP_CameraGimbal camera service (Raspberry Pi + libcamera + CADDX)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CAMERA_APP_CONFIG=/etc/ap_cameragimbal/camera.ini
+Environment=CAMERA_APP_RECORD_ROOT=/var/lib/ap_cameragimbal/record
+Environment=CAMERA_APP_CAPTURE_ROOT=/var/lib/ap_cameragimbal/capture
+Environment=CAMERA_APP_LOG_ROOT=/var/lib/ap_cameragimbal/logs
+StateDirectory=ap_cameragimbal
+ExecStartPre=/bin/mkdir -p /var/lib/ap_cameragimbal/record /var/lib/ap_cameragimbal/capture /var/lib/ap_cameragimbal/logs
+ExecStart=/usr/local/bin/ap-camera-app --backend rpi_libcam_caddx
+# The web interface restarts camera-app by stopping it; systemd starts it again.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

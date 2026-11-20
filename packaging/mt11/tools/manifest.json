@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "versions": "musl 1.2.5\nrsync 3.5.0\nstrace 7.1\nlibpcap 1.10.6\ntcpdump 4.99.6\nlibxcrypt 4.5.2\ndropbear 2026.94\nltrace 0.8.1\nelfutils 0.196\nzlib 1.3.2\n",
+  "build_script_sha256": "b11f71077ce8616dc3360f1dae6ca7da34e197acf109894a549b5763c3b6bcf7",
+  "binaries": {
+    "rsync": {
+      "size": 869312,
+      "sha256": "b023e5903e2b33413da0608c0bed5e57b3cd7c3079d0e25827de5fc485f8bc0f",
+      "xz_sha256": "3bf0a0f5ba190c68a895e0802b41783d1b3e6747f305ca7222fd8fe2babbe848"
+    },
+    "strace": {
+      "size": 2295816,
+      "sha256": "40e7220cd22031b596b8ece8c8ed9fa1409a56fba762b4eca03ecf9b395c4804",
+      "xz_sha256": "de0816a9af7f43e1dc208e417643fee235eea8f822cddc8d2f2919b52c06d09f"
+    },
+    "tcpdump": {
+      "size": 1458112,
+      "sha256": "0278654c9346e85bfc206555199b5c4c09ea5743659823ba525ff0d55cfab648",
+      "xz_sha256": "5878e1836ded050e0d4bbd398a369d3e6ac06d157cfeb9ade86b8ed6542da8c2"
+    },
+    "ltrace": {
+      "size": 1328808,
+      "sha256": "4a0ff00c9247795506d2db21d3bc1910aa7c478200833432daf1c8392f65b6e9",
+      "xz_sha256": "157ad3f0b00863ab052dc505e61280bb223783bdf8dbf8210306c7a589e90fbb"
+    },
+    "dropbear": {
+      "size": 592856,
+      "sha256": "ae6b33dbf34829eeeb797350d6d536c76e3c7dd84aa4581027cfc023bea59095",
+      "xz_sha256": "0909847751b1c1b35f344f33266df2c5c4c42b37755d7cead781813ef1aaa3b1"
+    },
+    "dropbearkey": {
+      "size": 264016,
+      "sha256": "5da0d7613de8db9dccb9bd77e03fc06225f32d48f3a129c6c9c236de9317360a",
+      "xz_sha256": "f3859033ba72d173b8d094aa9803d6ccd28f029a1650c92e5ea19779ec530451"
+    }
+  }
+}

@@ -1,0 +1,386 @@
+--- a/net/BufferWriter.cpp
++++ b/net/BufferWriter.cpp
+@@ -81,7 +81,7 @@
+     }
+
+     Packet pkt;
+-    pkt.data.reset(new char[size+512]);
++    pkt.data.reset(new char[size+512], std::default_delete<char[]>());
+     memcpy(pkt.data.get(), data, size);
+     pkt.size = size;
+     pkt.writeIndex = index;
+--- a/net/EpollTaskScheduler.cpp
++++ b/net/EpollTaskScheduler.cpp
+@@ -55,7 +55,7 @@
+ void EpollTaskScheduler::Update(int operation, ChannelPtr& channel)
+ {
+ #if defined(__linux) || defined(__linux__)
+-    struct epoll_event event = {0};
++    struct epoll_event event = {};
+
+     if(operation != EPOLL_CTL_DEL) {
+         event.data.ptr = channel.get();
+@@ -84,7 +84,7 @@
+ bool EpollTaskScheduler::HandleEvent(int timeout)
+ {
+ #if defined(__linux) || defined(__linux__)
+-    struct epoll_event events[512] = {0};
++    struct epoll_event events[512] = {};
+     int num_events = -1;
+
+     num_events = epoll_wait(epollfd_, events, 512, timeout);
+--- a/net/EventLoop.cpp
++++ b/net/EventLoop.cpp
+@@ -69,13 +69,13 @@
+         threads_.push_back(thread);
+     }
+
+-    const int priority = TASK_SCHEDULER_PRIORITY_REALTIME;
+
+     for (auto iter : threads_)
+     {
+ #if defined(__linux) || defined(__linux__)
+
+ #elif defined(WIN32) || defined(_WIN32)
++        const int priority = TASK_SCHEDULER_PRIORITY_REALTIME;
+         switch (priority)
+         {
+         case TASK_SCHEDULER_PRIORITY_LOW:
+--- a/net/MemoryManager.cpp
++++ b/net/MemoryManager.cpp
+@@ -50,7 +50,7 @@
+     }
+ }
+
+-void* MemoryPool::Alloc(uint32_t size)
++void* MemoryPool::Alloc(uint32_t /*size*/)
+ {
+     std::lock_guard<std::mutex> locker(mutex_);
+     if (head_ != nullptr) {
+--- a/net/Socket.h
++++ b/net/Socket.h
+@@ -9,6 +9,7 @@
+ #include <sys/socket.h>
+ #include <sys/ioctl.h>
+ #include <netinet/in.h>
++#include <netinet/tcp.h>
+ #include <netinet/ether.h>
+ #include <netinet/ip.h>
+ #include <netpacket/packet.h>
+--- a/net/SocketUtil.cpp
++++ b/net/SocketUtil.cpp
+@@ -9,7 +9,7 @@
+
+ bool SocketUtil::Bind(SOCKET sockfd, std::string ip, uint16_t port)
+ {
+-    struct sockaddr_in addr = {0};
++    struct sockaddr_in addr = {};
+     addr.sin_family = AF_INET;
+     addr.sin_addr.s_addr = inet_addr(ip.c_str());
+     addr.sin_port = htons(port);
+@@ -75,7 +75,7 @@
+ {
+ #ifdef TCP_NODELAY
+     int on = 1;
+-    int ret = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&on, sizeof(on));
++    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&on, sizeof(on));
+ #endif
+ }
+
+@@ -87,6 +87,7 @@
+
+ void SocketUtil::SetNoSigpipe(SOCKET sockfd)
+ {
++    (void)sockfd; // SO_NOSIGPIPE is not available on every platform.
+ #ifdef SO_NOSIGPIPE
+     int on = 1;
+     setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, (char *)&on, sizeof(on));
+@@ -105,7 +106,7 @@
+
+ std::string SocketUtil::GetPeerIp(SOCKET sockfd)
+ {
+-    struct sockaddr_in addr = { 0 };
++    struct sockaddr_in addr = {};
+     socklen_t addrlen = sizeof(struct sockaddr_in);
+     if (getpeername(sockfd, (struct sockaddr *)&addr, &addrlen) == 0)
+     {
+@@ -116,7 +117,7 @@
+
+ std::string SocketUtil::GetSocketIp(SOCKET sockfd)
+ {
+-    struct sockaddr_in addr = {0};
++    struct sockaddr_in addr = {};
+     char str[INET_ADDRSTRLEN] = "127.0.0.1";
+     if (GetSocketAddr(sockfd, &addr) == 0) {
+         inet_ntop(AF_INET, &addr.sin_addr, str, sizeof(str));
+@@ -132,7 +133,7 @@
+
+ uint16_t SocketUtil::GetPeerPort(SOCKET sockfd)
+ {
+-    struct sockaddr_in addr = { 0 };
++    struct sockaddr_in addr = {};
+     socklen_t addrlen = sizeof(struct sockaddr_in);
+     if (getpeername(sockfd, (struct sockaddr *)&addr, &addrlen) == 0)
+     {
+@@ -164,7 +165,7 @@
+         SocketUtil::SetNonBlock(sockfd);
+     }
+
+-    struct sockaddr_in addr = { 0 };
++    struct sockaddr_in addr = {};
+     socklen_t addrlen = sizeof(addr);
+     addr.sin_family = AF_INET;
+     addr.sin_port = htons(port);
+--- a/net/TaskScheduler.h
++++ b/net/TaskScheduler.h
+@@ -26,9 +26,9 @@
+     void RemoveTimer(TimerId timerId);
+     bool AddTriggerEvent(TriggerEvent callback);
+
+-    virtual void UpdateChannel(ChannelPtr channel) { };
+-    virtual void RemoveChannel(ChannelPtr& channel) { };
+-    virtual bool HandleEvent(int timeout) { return false; };
++    virtual void UpdateChannel(ChannelPtr /*channel*/) { };
++    virtual void RemoveChannel(ChannelPtr& /*channel*/) { };
++    virtual bool HandleEvent(int /*timeout*/) { return false; };
+
+     int GetId() const
+     { return id_; }
+--- a/net/TcpSocket.cpp
++++ b/net/TcpSocket.cpp
+@@ -27,7 +27,7 @@
+
+ bool TcpSocket::Bind(std::string ip, uint16_t port)
+ {
+-    struct sockaddr_in addr = {0};
++    struct sockaddr_in addr = {};
+     addr.sin_family = AF_INET;
+     addr.sin_addr.s_addr = inet_addr(ip.c_str());
+     addr.sin_port = htons(port);
+@@ -52,7 +52,7 @@
+
+ SOCKET TcpSocket::Accept()
+ {
+-    struct sockaddr_in addr = {0};
++    struct sockaddr_in addr = {};
+     socklen_t addrlen = sizeof addr;
+
+     SOCKET socket_fd = ::accept(sockfd_, (struct sockaddr*)&addr, &addrlen);
+--- a/xop/H264Source.cpp
++++ b/xop/H264Source.cpp
+@@ -127,7 +127,7 @@
+ uint32_t H264Source::GetTimestamp()
+ {
+ /* #if defined(__linux) || defined(__linux__)
+-    struct timeval tv = {0};
++    struct timeval tv = {};
+     gettimeofday(&tv, NULL);
+     uint32_t ts = ((tv.tv_sec*1000)+((tv.tv_usec+500)/1000))*90; // 90: _clockRate/1000;
+     return ts;
+--- a/xop/H265Source.cpp
++++ b/xop/H265Source.cpp
+@@ -147,7 +147,7 @@
+ uint32_t H265Source::GetTimestamp()
+ {
+ /* #if defined(__linux) || defined(__linux__)
+-    struct timeval tv = {0};
++    struct timeval tv = {};
+     gettimeofday(&tv, NULL);
+     uint32_t ts = ((tv.tv_sec*1000)+((tv.tv_usec+500)/1000))*90; // 90: _clockRate/1000;
+     return ts;
+--- a/xop/MediaSession.h
++++ b/xop/MediaSession.h
+@@ -119,7 +119,7 @@
+     {
+         std::lock_guard<std::mutex> lock(mutex_);
+         std::string addr_str;
+-        struct sockaddr_in addr = { 0 };
++        struct sockaddr_in addr = {};
+         std::random_device rd;
+
+         for (int n = 0; n <= 10; n++) {
+--- a/xop/RtspMessage.cpp
++++ b/xop/RtspMessage.cpp
+@@ -254,7 +254,7 @@
+     return false;
+ }
+
+-bool RtspRequest::ParseMediaChannel(std::string& message)
++bool RtspRequest::ParseMediaChannel(std::string& /*message*/)
+ {
+     channel_id_ = channel_0;
+
+--- a/xop/RtspPusher.cpp
++++ b/xop/RtspPusher.cpp
+@@ -30,13 +30,13 @@
+     media_session_.reset(session);
+ }
+
+-void RtspPusher::RemoveSession(MediaSessionId sessionId)
++void RtspPusher::RemoveSession(MediaSessionId /*sessionId*/)
+ {
+     std::lock_guard<std::mutex> locker(mutex_);
+     media_session_ = nullptr;
+ }
+
+-MediaSession::Ptr RtspPusher::LookMediaSession(MediaSessionId session_id)
++MediaSession::Ptr RtspPusher::LookMediaSession(MediaSessionId /*session_id*/)
+ {
+     return media_session_;
+ }
+--- a/xop/rtsp.h
++++ b/xop/rtsp.h
+@@ -86,10 +86,10 @@
+ protected:
+     friend class RtspConnection;
+
+-    virtual MediaSession::Ptr LookMediaSession(const std::string& suffix)
++    virtual MediaSession::Ptr LookMediaSession(const std::string& /*suffix*/)
+     { return nullptr; }
+
+-    virtual MediaSession::Ptr LookMediaSession(MediaSessionId sessionId)
++    virtual MediaSession::Ptr LookMediaSession(MediaSessionId /*sessionId*/)
+     { return nullptr; }
+
+     bool has_auth_info_ = false;
+--- a/xop/RtpConnection.h
++++ b/xop/RtpConnection.h
+@@ -5,6 +5,7 @@
+ #define XOP_RTP_CONNECTION_H
+
+ #include <cstdint>
++#include <atomic>
+ #include <vector>
+ #include <string>
+ #include <memory>
+@@ -64,6 +65,8 @@
+
+     std::string GetMulticastIp(MediaChannelId channel_id) const;
+
++    bool IsPlaying() const { return playing_.load(); }
++
+     void Play();
+     void Record();
+     void Teardown();
+@@ -94,6 +97,7 @@
+     TransportMode transport_mode_;
+     bool is_multicast_ = false;
+
++    std::atomic_bool playing_{false};
+     bool is_closed_ = false;
+     bool has_key_frame_ = false;
+
+--- a/xop/RtpConnection.cpp
++++ b/xop/RtpConnection.cpp
+@@ -156,11 +156,14 @@
+
+ void RtpConnection::Play()
+ {
++    bool playing = false;
+     for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
+         if (media_channel_info_[chn].is_setup) {
+             media_channel_info_[chn].is_play = true;
+-        }
+-    }
++            playing = true;
++        }
++    }
++    playing_.store(playing);
+ }
+
+ void RtpConnection::Record()
+@@ -175,6 +178,7 @@
+
+ void RtpConnection::Teardown()
+ {
++    playing_.store(false);
+     if(!is_closed_) {
+         is_closed_ = true;
+         for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
+--- a/xop/MediaSession.h
++++ b/xop/MediaSession.h
+@@ -62,6 +62,8 @@
+
+     MediaSessionId GetMediaSessionId()
+     { return session_id_; }
++
++    bool HasPlayingClients();
+
+     uint32_t GetNumClient() const
+     { return (uint32_t)clients_.size(); }
+--- a/xop/MediaSession.cpp
++++ b/xop/MediaSession.cpp
+@@ -212,6 +212,16 @@
+     return true;
+ }
+
++bool MediaSession::HasPlayingClients()
++{
++    std::lock_guard<std::mutex> lock(map_mutex_);
++    for (const auto &entry : clients_) {
++        auto client = entry.second.lock();
++        if (client && client->IsPlaying()) return true;
++    }
++    return false;
++}
++
+ bool MediaSession::AddClient(SOCKET rtspfd, std::shared_ptr<RtpConnection> rtp_conn)
+ {
+     std::lock_guard<std::mutex> lock(map_mutex_);
+--- a/xop/RtspServer.h
++++ b/xop/RtspServer.h
+@@ -25,6 +25,8 @@
+     MediaSessionId AddSession(MediaSession* session);
+     void RemoveSession(MediaSessionId sessionId);
+
++    bool HasPlayingClients(MediaSessionId sessionId);
++
+     bool PushFrame(MediaSessionId sessionId, MediaChannelId channelId, AVFrame frame);
+
+ private:
+--- a/xop/RtspServer.cpp
++++ b/xop/RtspServer.cpp
+@@ -75,6 +75,12 @@
+     return nullptr;
+ }
+
++bool RtspServer::HasPlayingClients(MediaSessionId session_id)
++{
++    auto session = LookMediaSession(session_id);
++    return session && session->HasPlayingClients();
++}
++
+ bool RtspServer::PushFrame(MediaSessionId session_id, MediaChannelId channel_id, AVFrame frame)
+ {
+     std::shared_ptr<MediaSession> sessionPtr = nullptr;
+--- a/xop/RtpConnection.cpp
++++ b/xop/RtpConnection.cpp
+@@ -62,6 +62,6 @@
+     media_channel_info_[channel_id].rtp_channel = rtp_channel;
+     media_channel_info_[channel_id].rtcp_channel = rtcp_channel;
+-    rtpfd_[channel_id] = conn->GetSocket();
+-    rtcpfd_[channel_id] = conn->GetSocket();
++    // Interleaved RTP uses conn->Send(). TcpConnection owns this socket;
++    // keeping it in the UDP arrays would close it again in our destructor.
+     media_channel_info_[channel_id].is_setup = true;
+     transport_mode_ = RTP_OVER_TCP;
+@@ -96,4 +96,5 @@
+         if(!SocketUtil::Bind(rtpfd_[channel_id], "0.0.0.0",  local_rtp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             continue;
+         }
+@@ -102,5 +103,7 @@
+         if(!SocketUtil::Bind(rtcpfd_[channel_id], "0.0.0.0", local_rtcp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             SocketUtil::Close(rtcpfd_[channel_id]);
++            rtcpfd_[channel_id] = 0;
+             continue;
+         }
+@@ -137,4 +140,5 @@
+         if (!SocketUtil::Bind(rtpfd_[channel_id], "0.0.0.0", local_rtp_port_[channel_id])) {
+             SocketUtil::Close(rtpfd_[channel_id]);
++            rtpfd_[channel_id] = 0;
+             continue;
+         }

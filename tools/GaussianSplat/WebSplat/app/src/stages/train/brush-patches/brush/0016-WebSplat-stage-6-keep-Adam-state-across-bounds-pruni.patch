@@ -1,0 +1,229 @@
+From 3b901675f7c347f273a7167aa2e75670a5b5bf61 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Mon, 9 Nov 2026 10:40:38 +1100
+Subject: [PATCH] WebSplat stage 6: keep Adam state across bounds pruning,
+ refine start gate, floor on resume, fail an emptied model
+
+---
+ crates/brush-process/src/train_stream.rs |  12 ++-
+ crates/brush-train/src/config.rs         |   6 ++
+ crates/brush-train/src/train.rs          | 121 ++++++++++++++++++++---
+ 3 files changed, 124 insertions(+), 15 deletions(-)
+
+diff --git a/crates/brush-process/src/train_stream.rs b/crates/brush-process/src/train_stream.rs
+index cf10e8a..e7b52a2 100644
+--- a/crates/brush-process/src/train_stream.rs
++++ b/crates/brush-process/src/train_stream.rs
+@@ -189,6 +189,11 @@ pub(crate) async fn train_stream(
+     trainer.set_prune_bounds(prune_bounds);
+     // a resumed run continues the learning-rate schedule (optimiser moments are not restored)
+     trainer.set_step_count(process_config.start_iter);
++    // checkpoints do not carry the 3D-filter floor; refine, which sets it, may not run again
++    if process_config.start_iter > 0 {
++        splats = trainer.restore_min_scale(splats);
++        slot.set(0, splats.clone());
++    }
+ 
+     // Get the dataset name from the base path (if available) for interpolation.
+     let dataset_name = vfs
+@@ -338,6 +343,7 @@ pub(crate) async fn train_stream(
+             && phase_iter.is_multiple_of(train_stream_config.train_config.refine_every)
+             && phase_progress <= 0.95
+             && (current_lod > 0 || refine_stop == 0 || phase_iter < refine_stop)
++            && (current_lod > 0 || phase_iter > train_stream_config.train_config.refine_start_iter)
+         {
+             let (new_splats, refine_stats) = trainer.refine(iter, splats).await;
+             splats = new_splats;
+@@ -354,7 +360,11 @@ pub(crate) async fn train_stream(
+         };
+         let prune_every = train_stream_config.train_config.prune_bounds_every;
+         if prune_every > 0 && iter.is_multiple_of(prune_every) {
+-            splats = trainer.prune_bounds(iter, splats).await.0;
++            splats = trainer
++                .prune_bounds(iter, splats)
++                .await
++                .map_err(anyhow::Error::msg)?
++                .0;
+         }
+         slot.set(0, splats.clone());
+         let refine_dur = refine_start.elapsed();
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index a41cea7..fe0d8d1 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -26,6 +26,12 @@ pub struct TrainConfig {
+     #[serde(default)]
+     pub lr_mean_absolute: bool,
+ 
++    /// Refine only after this step (gsplat's `refine_start_iter`: refinement while
++    /// start < step); 0 refines from the first refine period.
++    #[arg(long, help_heading = "Refine options", default_value = "0")]
++    #[serde(default)]
++    pub refine_start_iter: u32,
++
+     /// Stop all refinement (growth, screen-size splitting, opacity pruning and decay) at this step,
+     /// as gsplat's `refine_stop_iter`; 0 keeps Brush's own cutoff (95% of training).
+     #[arg(long, help_heading = "Refine options", default_value = "0")]
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index e5f963f..f8a5726 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -501,21 +501,25 @@ impl SplatTrainer {
+     }
+ 
+     /// train.py's bounds pruning (`--prune-bounds-every`): removes Gaussians outside the bounds,
+-    /// with their optimiser state, refine statistics and 3D-filter floor; nothing replaces them.
+-    pub async fn prune_bounds(&mut self, iter: u32, mut splats: Splats) -> (Splats, u32) {
++    /// with their optimiser state, refine statistics (when gathered since the last refine) and
++    /// 3D-filter floor; nothing replaces them. Errors if no Gaussian would remain.
++    pub async fn prune_bounds(&mut self, iter: u32, mut splats: Splats) -> Result<(Splats, u32), String> {
+         let mask = match &self.prune_bounds {
+             Some(b) => outside_prune_bounds(&splats, b, iter),
+-            None => return (splats, 0),
+-        };
+-        let (Some(mut optim), Some(mut refiner)) = (self.optim.take(), self.refine_record.take()) else {
+-            return (splats, 0);
++            None => return Ok((splats, 0)),
+         };
+         let n = splats.num_splats();
+         let keep = mask.bool_not().argwhere_async().await;
+         let kept = keep.dims()[0] as u32;
+-        if kept > 0 && kept < n {
+-            let keep = keep.squeeze_dim(1);
+-            splats.min_scale = splats.min_scale.map(|m| m.select(0, keep.clone()));
++        if kept == 0 {
++            return Err(format!("bounds pruning at step {iter} would remove all {n} Gaussians"));
++        }
++        if kept == n {
++            return Ok((splats, 0));
++        }
++        let keep = keep.squeeze_dim(1);
++        splats.min_scale = splats.min_scale.map(|m| m.select(0, keep.clone()));
++        if let Some(mut optim) = self.optim.take() {
+             splats = map_splats_and_opt(
+                 splats,
+                 &mut optim,
+@@ -526,11 +530,29 @@ impl SplatTrainer {
+                 |x| x.select(0, keep.clone()),
+                 |x| x.select(0, keep.clone()),
+             );
+-            refiner = refiner.keep(keep.without_autodiff());
++            self.optim = Some(optim);
++        } else {
++            splats.transforms = splats.transforms.map(|x| x.select(0, keep.clone()));
++            splats.sh_coeffs = splats.sh_coeffs.map(|x| x.select(0, keep.clone()));
++            splats.raw_opacities = splats.raw_opacities.map(|x| x.select(0, keep.clone()));
++        }
++        // after a refine the record is gone until the next step starts a new one
++        self.refine_record = self.refine_record.take().map(|r| r.keep(keep.without_autodiff()));
++        Ok((splats, n - kept))
++    }
++
++    /// The 3D-filter floor for splats that have none (a run resumed from a checkpoint, which does
++    /// not store it): recomputed from their positions as refine does; refine only runs before
++    /// `--refine-stop-iter`, so a later resume would otherwise train without the floor.
++    pub fn restore_min_scale(&self, splats: Splats) -> Splats {
++        if splats.min_scale.is_some() {
++            return splats;
++        }
++        let means = splats.means();
++        match compute_min_scale(&means, &self.view_cams, self.config.min_scale_factor) {
++            Some(f) => splats.with_min_scale(f),
++            None => splats,
+         }
+-        self.optim = Some(optim);
+-        self.refine_record = Some(refiner);
+-        (splats, if kept > 0 { n - kept } else { 0 })
+     }
+ 
+     pub async fn refine(&mut self, iter: u32, splats: Splats) -> (Splats, RefineStats) {
+@@ -1097,7 +1119,7 @@ mod websplat_tests {
+             scale_prune_until: 0,
+         }));
+         let (s, _) = trainer.step(batch(), splats(&device).train()).await;
+-        let (s, removed) = trainer.prune_bounds(100, s.valid()).await;
++        let (s, removed) = trainer.prune_bounds(100, s.valid()).await.unwrap();
+         let inside = (0..N)
+             .filter(|i| {
+                 let (x, y) = (((i % 8) as f32 - 3.5) * 0.4, ((i / 8) as f32 - 3.5) * 0.4);
+@@ -1112,6 +1134,77 @@ mod websplat_tests {
+         assert_eq!(next.num_splats() as usize, inside, "training continues on the pruned set");
+     }
+ 
++    fn cylinder(radius: f32) -> PruneBounds {
++        PruneBounds {
++            centre: [0.0, 0.0],
++            radius,
++            z_min: 0.0,
++            ceiling_origin: [-10.0, -10.0],
++            ceiling_cell: 20.0,
++            ceiling_n: 1,
++            ceiling: vec![100.0],
++            max_scale: None,
++            scale_prune_from: 0,
++            scale_prune_until: 0,
++        }
++    }
++
++    // codex round 2: a prune right after refine (no refine record) must keep the optimiser
++    #[tokio::test]
++    async fn prune_after_refine_keeps_adam_state() {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig { prune_bounds_every: 100, total_train_iters: 3000, ..Default::default() };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        trainer.set_prune_bounds(Some(cylinder(1.0)));
++        let mut s = splats(&device);
++        for _ in 0..3 {
++            s = trainer.step(batch(), s.train()).await.0.valid();
++        }
++        let (s, _) = trainer.refine(200, s).await;
++        assert!(trainer.refine_record.is_none(), "refine consumes the record");
++        let (s, removed) = trainer.prune_bounds(200, s).await.unwrap();
++        assert!(removed > 0, "the cylinder removes Gaussians");
++        let optim = trainer.optim.as_ref().expect("the optimiser survives the prune");
++        let m = optim.transforms.momentum.as_ref().expect("Adam moments survive");
++        assert_eq!(m.time, 3, "Adam's step counter continues");
++        assert_eq!(m.moment_1.dims()[0] as u32, s.num_splats(), "moments follow the pruning");
++        let s = trainer.step(batch(), s.train()).await.0;
++        let m = trainer.optim.as_ref().unwrap().transforms.momentum.as_ref().unwrap();
++        assert_eq!(m.time, 4, "training continues the same Adam state");
++        assert_eq!(m.moment_1.dims()[0] as u32, s.num_splats());
++    }
++
++    #[tokio::test]
++    async fn prune_that_empties_the_model_fails() {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig { prune_bounds_every: 100, ..Default::default() };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        trainer.set_prune_bounds(Some(cylinder(0.01)));
++        let s = trainer.step(batch(), splats(&device).train()).await.0.valid();
++        let err = trainer.prune_bounds(100, s).await.err().expect("an emptied model is an error");
++        assert!(err.contains("all 64 Gaussians"), "{err}");
++    }
++
++    // codex round 2: a run resumed after refine stops gets its 3D-filter floor back
++    #[tokio::test]
++    async fn resume_after_refine_stop_restores_the_floor() {
++        let device: Device = brush_cube::test_helpers::test_device().await.into();
++        let config = TrainConfig { refine_stop_iter: 15000, total_train_iters: 30000, ..Default::default() };
++        let bounds = BoundingBox::from_min_max(glam::Vec3::splat(-3.0), glam::Vec3::splat(6.0));
++        let mut trainer = SplatTrainer::new(&config, &device, bounds);
++        trainer.set_view_cams(vec![(glam::Vec3::ZERO, 20.0)]);
++        trainer.set_step_count(16000);
++        let s = splats(&device);
++        assert!(s.min_scale.is_none(), "a checkpoint carries no floor");
++        let s = trainer.restore_min_scale(s);
++        let floor = s.min_scale.clone().expect("the floor is restored");
++        assert_eq!(floor.dims()[0], N);
++        let s = trainer.step(batch(), s.train()).await.0.valid();
++        assert!(s.min_scale.is_some(), "training keeps the floor");
++    }
++
+     #[tokio::test]
+     async fn inactive_bands_and_moments_stay_zero() {
+         // steps 1-5: degree 0, bands 1.. are not rendered
+-- 
+2.53.0
+

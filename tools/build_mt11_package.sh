@@ -149,6 +149,7 @@ repacked_rootfs=$(sha256sum "$system/rootfs" | awk '{print $1}')
 
 install -m 0755 "$camera_app" "$overlay/bin/camera-app"
 install -m 0755 "$web_app" "$overlay/bin/mt11-web"
+cp -R "$script_dir/../web/webroot" "$overlay/webroot"
 install -m 0755 "$thermal_socket" "$overlay/bin/thermal_socket"
 install -m 0755 "$timesync" "$overlay/bin/mt11-timesync.sh"
 install -m 0755 "$rsync_bin" "$overlay/bin/rsync"
@@ -168,7 +169,7 @@ printf '%s\n' "$web_password" >"$overlay/web.pass.default"
 # not contain siyi_camera_app_tmp: product_upgrade's final mv then fails
 # harmlessly and leaves the already-installed vendor application intact.
 tar --owner=0 --group=0 -czf "$system/app.tar.gz" -C "$overlay" \
-    app_init.sh app_selection.sh bin dropbear camera.ini.default web.pass.default
+    app_init.sh app_selection.sh bin dropbear webroot camera.ini.default web.pass.default
 tar -tzf "$system/app.tar.gz" | grep -qx 'camera.ini.default' || {
     echo "Application overlay is missing camera.ini.default" >&2
     exit 1

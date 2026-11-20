@@ -2,7 +2,7 @@
 
 AP CameraGimbal provides MAVLink and XFRobot control, a web UI, video streaming
 and recording on the Z1-Mini. Release packages use native capture with separate
-1080p live video and 4K recording.
+1080p live video and selectable 1080p or 4K recording.
 
 ## Build
 
@@ -20,19 +20,46 @@ camera SDK libraries are not redistributed. Common build dependencies provide
 the pinned XOP RTSP and minimp4 sources.
 
 The output folder contains the `.gcu` application overlay, installation/update
-instructions, build information and checksums. `make z1mini_native_package`
-builds the same native overlay directly. `make z1mini_package` builds an
-alternative which receives video from the retained vendor ISP service.
+instructions, build information and checksums. `make z1mini_package` is an
+alias for `make z1mini_native_package`, which builds the self-contained
+native-capture release package. `make z1mini_retained_isp_package` is for
+development only; set `Z1MINI_RETAINED_ISP_PACKAGE_OUT` to choose its output.
+Retained-ISP packages cannot be uploaded through the web installer.
 
 ## Installation and updates
 
-Use the XFRobot `.gcu` updater and the per-release README. The Windows updater,
-power-cycle recovery and interrupted-update handling still need hardware
-verification; installations so far used direct Ethernet deployment.
-ArduPilot web firmware upload and SD-card boot installation are not implemented
-for this target.
+Use the XFRobot `.gcu` updater and the per-release README. The updater
+replaces the whole `/opt/bin/gcu` directory with the package contents, so the
+vendor camera programs are removed and the package ships the `ipc/run.sh`
+boot hook that `/etc/init.d/rcS` launches. Power-cycle recovery and
+interrupted-update handling still need hardware verification.
 
-The package installs the AP application and its startup hook. It retains the
+Older AP builds from before the external webroot reject the new asset files
+in the web update archive. Use the XFRobot `.gcu` updater once when moving
+from one of those builds; later updates work through the AP web UI.
+
+If a web server with recovery support is installed without its webroot files,
+open the camera's main URL. Its built-in firmware recovery page lets you log in
+with the existing password and upload the complete `.gcu` package. Missing or
+partial webroot contents do not disable this recovery uploader.
+
+Once the AP application is running, later packages can be uploaded on the web
+**Status** page. The server streams the `.gcu` to RAM, checks the archive
+listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
+`SHA256SUMS` and the manifest target, exchanges it with the running
+installation and reboots. A rejected package leaves the installation untouched.
+When updating an older retained-ISP installation to a native package, the web
+server moves from port 8080 to port 80; open the camera at its new address if
+the browser does not reconnect automatically.
+SD-card boot installation is not implemented for this target. The retained-ISP
+package depends on the vendor `ipc/` files. The XFRobot updater also replaces
+the complete GCU tree, so the retained-ISP package is only for development on
+a camera where the vendor ISP has been installed separately; it is not a
+deployable release package. `make z1mini_package` therefore builds the
+self-contained native package. The web upload refuses retained-ISP packages
+because that update would remove the vendor ISP files.
+
+The package installs the AP application and its startup hooks. It retains the
 kernel, root filesystem, bootloader, SDK libraries and calibration. Stop the AP
 service before an updater replaces its running executables, and keep power
 connected until installation completes. Boot checks reject incomplete payloads;
@@ -40,14 +67,14 @@ reinstall the package if needed. The overlay cannot recover damaged platform
 partitions. Use the original XFRobot firmware to restore vendor operation.
 
 Settings and web credentials in `/opt/ap_cameragimbal` survive updates. New
-native installations default to 4K recording; existing installations retain
+native installations default to 1080p recording; existing installations retain
 their saved resolution. Logs are bounded in `/tmp`. Recordings require a
 mounted microSD card and are stored under `/mnt/mmc/DCIM/record`.
 
 ## Operation
 
 - Native web UI: `http://CAMERA/`, initial login **admin / ardupilot**.
-- MAVLink: TCP/UDP 14550. System ID 0 selects a flight controller automatically.
+- MAVLink: TCP/UDP 16001. System ID 0 selects a flight controller automatically.
 - XFRobot: TCP 2332 and UDP 2337, with replies on UDP 2338.
 - RTSP: `rtsp://CAMERA:8554/video1` and `/video2`.
 
@@ -56,6 +83,13 @@ transforms and FOV are defined in `include/apcam/target_z1mini.h`; release
 hardware checks in both orientations are still required. Geographic targeting
 is disabled by default. Still capture, tracking, zoom/focus and manual image
 adjustments are not implemented.
+
+Native capture supports upright and inverted mounting. Select the physical
+orientation in Parameters and restart the camera app. Inverted mounting adds
+180 degrees of sensor rotation to both live video and recordings, without
+software frame processing. Auto currently uses upright orientation; this camera
+does not report automatic mount detection. The retained-ISP package supports
+upright video only.
 
 Native capture owns the sensor/ISP and hardware encoders. It requires a CPU
 temperature below 70 C to start and stops at 75 C, leaving web recovery

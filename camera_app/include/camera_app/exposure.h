@@ -1,5 +1,6 @@
 #ifndef CAMERA_APP_EXPOSURE_H
 #define CAMERA_APP_EXPOSURE_H
+#include "apcam/compiler.h"
 #include <stdint.h>
 #include <math.h>
 
@@ -27,11 +28,15 @@ struct __attribute__((packed)) ca_exposure {
     int32_t result;
     float shutter_us, analog_gain, digital_gain, isp_gain, luma, target, error;
 };
-_Static_assert(sizeof(struct ca_exposure)==46, "AE log/IPC layout");
+APC_STATIC_ASSERT(sizeof(struct ca_exposure)==46, "AE log/IPC layout");
 static inline struct ca_exposure ca_exposure_empty(unsigned lens, uint64_t time_us)
 {
-    return (struct ca_exposure){.time_us=time_us, .lens=lens, .mode=CA_AE_UNKNOWN,
-        .shutter_us=NAN, .analog_gain=NAN, .digital_gain=NAN, .isp_gain=NAN,
-        .luma=NAN, .target=NAN, .error=NAN};
+    struct ca_exposure result = {};
+    result.time_us = time_us;
+    result.lens = (uint8_t)lens;
+    result.mode = CA_AE_UNKNOWN;
+    result.shutter_us = result.analog_gain = result.digital_gain = result.isp_gain = NAN;
+    result.luma = result.target = result.error = NAN;
+    return result;
 }
 #endif

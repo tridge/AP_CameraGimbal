@@ -80,6 +80,10 @@ fi
 killall boa 2>/dev/null || true
 # The vendor leaves loopback down on some boots; local web/API/video uses it.
 ifconfig lo 127.0.0.1 up
+# Apply the SIYI multicast receive-filter workaround before discovery starts.
+# The A8 vendor driver drops group traffic without ALLMULTI; keep ZR10's
+# retained driver configured the same way. This is not promiscuous mode.
+ifconfig eth0 allmulti || echo 'warning: could not enable Ethernet multicast reception' >&2
 [ "$sd_available" = false ] || mkdir -p /mnt/DCIM/record /mnt/DCIM/capture
 [ -e "$CONFIG_ROOT/camera.ini" ] || cp "$APP_ROOT/camera.ini.default" "$CONFIG_ROOT/camera.ini"
 [ -e "$CONFIG_ROOT/web.pass" ] || cp "$APP_ROOT/web.pass.default" "$CONFIG_ROOT/web.pass"

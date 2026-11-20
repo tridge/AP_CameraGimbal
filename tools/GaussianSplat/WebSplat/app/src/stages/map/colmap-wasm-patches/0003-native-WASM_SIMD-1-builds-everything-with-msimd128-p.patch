@@ -1,0 +1,37 @@
+From 4fcf1f7d16ea8a8b8c0dc3b5c7836c181b09608a Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 20:41:34 +1100
+Subject: [PATCH 3/4] native: WASM_SIMD=1 builds everything with -msimd128
+ (prefix-simd/, build-simd/)
+
+---
+ native/build.sh | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/native/build.sh b/native/build.sh
+index aebf501..6605789 100755
+--- a/native/build.sh
++++ b/native/build.sh
+@@ -3,7 +3,9 @@
+ # Output: $COLMAP_WASM_DIR/build/colmap/: colmap.{mjs,wasm} (browser, src/worker.ts) and the
+ # Node tools colmap_sift / colmap_gm (NODERAWFS, for comparisons with native COLMAP).
+ set -e
+-R=${COLMAP_WASM_DIR:?set COLMAP_WASM_DIR}; H=$(cd "$(dirname "$0")" && pwd); S=$R/src; P=$R/prefix; B=$R/build
++R=${COLMAP_WASM_DIR:?set COLMAP_WASM_DIR}; H=$(cd "$(dirname "$0")" && pwd); S=$R/src
++# WASM_SIMD=1: build everything with -msimd128 into prefix-simd/ and build-simd/
++SFX=${WASM_SIMD:+-simd}; P=$R/prefix$SFX; B=$R/build$SFX
+ BOOST_INC=${BOOST_INC:-/opt/homebrew/include}
+ if [ -z "$COLMAP_WASM_SYSTEM_TOOLCHAIN" ]; then
+   export EMSDK_PYTHON=${PYTHON:-python3} EMSDK_QUIET=1; source $R/emsdk/emsdk_env.sh
+@@ -11,7 +13,7 @@ if [ -z "$COLMAP_WASM_SYSTEM_TOOLCHAIN" ]; then
+ fi
+ JOBS=${JOBS:-8}
+ mkdir -p $B $P/lib $P/include $R/inc; ln -sfn $BOOST_INC/boost $R/inc/boost
+-FLAGS="-O3 -fexceptions"
++FLAGS="-O3 -fexceptions${WASM_SIMD:+ -msimd128}"
+ common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_PREFIX_PATH=$P -DCMAKE_FIND_ROOT_PATH=$P
+         -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF "-DCMAKE_C_FLAGS=$FLAGS" "-DCMAKE_CXX_FLAGS=$FLAGS"
+         -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+-- 
+2.53.0
+

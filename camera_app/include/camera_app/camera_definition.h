@@ -4,21 +4,27 @@
 #include "camera_app/config.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
-#define CA_CAMERA_DEFINITION_VERSION 4
+/* XML document revision; MAVLink cache version is derived from the XML CRC. */
+#define CA_CAMERA_DEFINITION_VERSION 6
 #define CA_CAMERA_DEFINITION_PATH "/camera.xml"
 
 enum ca_camera_operation {
-    CA_CAMERA_CONFIG, CA_CAMERA_MODE, CA_CAMERA_ZOOM, CA_CAMERA_AUTOFOCUS,
+    CA_CAMERA_MODE, CA_CAMERA_CONFIG, CA_CAMERA_ZOOM, CA_CAMERA_OPTICAL_ZOOM, CA_CAMERA_AUTOFOCUS,
     CA_CAMERA_LENS, CA_CAMERA_SOURCE, CA_CAMERA_PALETTE, CA_CAMERA_GAIN,
 };
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct ca_camera_parameter {
     const char *name;
     const char *description;
     enum ca_camera_operation operation;
-    /* MAV_PARAM_EXT_TYPE: INT32=6, REAL32=9. */
+    /* MAV_PARAM_EXT_TYPE: UINT8=1 (boolean), INT32=6, REAL32=9. */
     unsigned type;
     float initial, minimum, maximum;
     const struct ca_config_option *options;
@@ -33,4 +39,11 @@ bool ca_camera_param_valid(const struct ca_camera_parameter *parameter, float va
 /* Caller owns the returned, NUL-terminated XML. No configuration values or
  * credentials are included: only target capabilities and factory defaults. */
 char *ca_camera_definition(size_t *length);
+/* CRC-16/CCITT-FALSE of the exact exported bytes, excluding the terminating NUL.
+ * Map zero to 0xffff: MAVLink reserves version zero for unknown. */
+uint16_t ca_camera_definition_version(const char *xml, size_t length);
+#ifdef __cplusplus
+}
+#endif
+
 #endif

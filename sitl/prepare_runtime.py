@@ -32,6 +32,15 @@ def main():
     if args.reset_parameters or not camera_config.exists():
         temporary = camera_config.with_suffix('.ini.new')
         shutil.copyfile(args.camera_config, temporary)
+        # Seed each launcher's camera identity and MAVLink ports once. Saved
+        # web settings continue to take effect on subsequent launches.
+        instance = os.environ.get('CAMERA_GIMBAL_SITL_INSTANCE')
+        if instance:
+            try:
+                from .launcher_config import initial_config
+            except ImportError:
+                from launcher_config import initial_config
+            temporary.write_text(initial_config(temporary.read_text(), int(instance)))
         os.replace(temporary, camera_config)
     write_if_missing(root / "app/config.ini", b"# vendor configuration is unavailable in SITL\n")
     write_if_missing(root / "app/web.pass", b"ardupilot\n", 0o600)

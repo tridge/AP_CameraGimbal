@@ -53,10 +53,19 @@ are NaN. A failed read never reuses old values as a fresh successful sample.
 Diagnostics are optional: a missing query symbol must not stop video. SDK errors
 are recorded, without generating repeated text-log messages. Z1 cached samples
 older than one second are marked unavailable, as are stalled SITL samples.
-Initial A8 bench readback has been verified (Auto, stable, approximately 30 ms
-shutter and 8x sensor gain). Illumination-response testing is still needed, as is
-physical verification on MT11, ZR10 and Z1-Mini. Host tests and cross-compilation
-cannot establish that the running ISP responds correctly to illumination changes.
+A8 lamp testing found that the inherited 5653 us minimum shutter prevented AE
+from reaching its brightness target at minimum gain. Auto shutter now allows
+the lower minimum in the camera's exposure table (147 us in the tested tuning),
+while keeping maximum shutter, gain limits and explicit shutter settings.
+The selected Auto limits are printed in the camera-app log. Empty rows and
+rows above the current maximum shutter are ignored. An unavailable table,
+invalid row count or table with no usable rows retains the inherited limits
+and logs a warning.
+
+In the hardware test, lowering this minimum let shutter decrease from 5646 us
+to 444 us and AE converge at brightness 520 against a target of 510. Restoring
+the old minimum reproduced the overexposure. Physical illumination-response
+verification is still needed on MT11, ZR10 and Z1-Mini.
 
 ## SITL
 
@@ -76,7 +85,8 @@ visual model, not a claim of physical AE fidelity.
 
 ## Tests
 
-`make -C camera_app exposure-test` checks SigmaStar field layout/unit conversion,
+`make -C camera_app exposure-test` checks the A8 Auto/manual shutter limits and
+mixed usable/unusable exposure rows, invalid-table fallback, SigmaStar field layout/unit conversion,
 unknown fields, fragmented Z1 exposure/video IPC, invalid packet rejection and
 continued exposure polling during blocked thermal I/O.
 

@@ -19,6 +19,21 @@ case "$backend" in
         video2="$build/thermal.h264"
         build_hint="make sitl"
         ;;
+    zt30)
+        build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/zt30-sitl}
+        web_binary=zt30-web
+        label=ZT30
+        camera_backend_args="--backend zt30"
+        config_template="$repo/packaging/zt30/camera.ini"
+        gimbal_port=${ZT30_SITL_GIMBAL_PORT:-0}
+        camera_port=${ZT30_SITL_CAMERA_PORT:-37260}
+        rtsp_port=${ZT30_SITL_RTSP_PORT:-8554}
+        web_port=${ZT30_SITL_WEB_PORT:-8081}
+        orientation=${ZT30_SITL_ORIENTATION:-upright}
+        video1="$build/rgb.h264"
+        video2="$build/thermal.h264"
+        build_hint="make zt30_sitl"
+        ;;
     a8)
         build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/a8-sitl}
         web_binary=a8-web
@@ -103,33 +118,18 @@ esac
 # overrides when the caller explicitly supplied them; exporting default values
 # here would make every web-triggered camera restart ignore the saved INI.
 unset CAMERA_APP_MAVLINK_TCP_PORT CAMERA_APP_MAVLINK_UDP_PORT
-if [ "$backend" = zr10 ]; then
-    if [ "${ZR10_SITL_MAVLINK_TCP_PORT+set}" = set ]; then
-        CAMERA_APP_MAVLINK_TCP_PORT=$ZR10_SITL_MAVLINK_TCP_PORT
-        export CAMERA_APP_MAVLINK_TCP_PORT
+for transport in TCP UDP; do
+    key="${label}_SITL_MAVLINK_${transport}_PORT"
+    # Only these fixed backend/transport names are evaluated, never values.
+    eval "present=\${${key}+set}"
+    if [ "$present" = set ]; then
+        eval "port=\${${key}}"
+        export "CAMERA_APP_MAVLINK_${transport}_PORT=$port"
+    elif [ "$backend" = a8 ] && [ -z "${CAMERA_GIMBAL_SITL_INSTANCE:-}" ]; then
+        # Preserve standalone A8 isolation; GUI slots seed their own ports.
+        export "CAMERA_APP_MAVLINK_${transport}_PORT=0"
     fi
-elif [ "$backend" = a8 ]; then
-    # Keep standalone A8 SITL isolated from any ArduPilot instance already
-    # broadcasting on the production port. Otherwise its gimbal manager can
-    # continuously replace manual web commands with its own attitude target.
-    CAMERA_APP_MAVLINK_TCP_PORT=${A8_SITL_MAVLINK_TCP_PORT:-0}
-    export CAMERA_APP_MAVLINK_TCP_PORT
-elif [ "$backend" = mt11 ] && [ "${MT11_SITL_MAVLINK_TCP_PORT+set}" = set ]; then
-    CAMERA_APP_MAVLINK_TCP_PORT=$MT11_SITL_MAVLINK_TCP_PORT
-    export CAMERA_APP_MAVLINK_TCP_PORT
-fi
-if [ "$backend" = zr10 ]; then
-    if [ "${ZR10_SITL_MAVLINK_UDP_PORT+set}" = set ]; then
-        CAMERA_APP_MAVLINK_UDP_PORT=$ZR10_SITL_MAVLINK_UDP_PORT
-        export CAMERA_APP_MAVLINK_UDP_PORT
-    fi
-elif [ "$backend" = a8 ]; then
-    CAMERA_APP_MAVLINK_UDP_PORT=${A8_SITL_MAVLINK_UDP_PORT:-0}
-    export CAMERA_APP_MAVLINK_UDP_PORT
-elif [ "$backend" = mt11 ] && [ "${MT11_SITL_MAVLINK_UDP_PORT+set}" = set ]; then
-    CAMERA_APP_MAVLINK_UDP_PORT=$MT11_SITL_MAVLINK_UDP_PORT
-    export CAMERA_APP_MAVLINK_UDP_PORT
-fi
+done
 
 stop_processes()
 {
@@ -157,7 +157,7 @@ if python3 "$repo/sitl/check_running.py" "$web_port" \
     exit 1
 fi
 exec 9>"$launcher_lock"
-if ! flock -n 9; then
+if ! python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)'; then
     echo "$label SITL is already running; stop its original launcher with Ctrl-C" >&2
     exit 1
 fi
@@ -236,17 +236,24 @@ MT11_WEB_LIVE_PORT="$((rtsp_port + 1))" \
     "$build/$web_binary" -p "$web_port" >"$runtime/run/web.log" 2>&1 9>&- &
 web_pid=$!
 
-sleep 0.1
-if ! kill -0 "$web_pid" 2>/dev/null; then
-    echo "web service failed to start; see $runtime/run/web.log" >&2
-    exit 1
-fi
+# Starting the process is not proof that it is listening (notably on macOS
+# during the first launch). Only enable the launcher's web button when ready.
+web_attempts=0
+until python3 "$repo/sitl/check_running.py" "$web_port" "$runtime/app/web.pass"; do
+    web_attempts=$((web_attempts + 1))
+    if ! kill -0 "$web_pid" 2>/dev/null || [ "$web_attempts" -ge 20 ]; then
+        echo "web service failed to become ready; see $runtime/run/web.log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
 
 echo "$label SITL running"
 echo "  Web UI:   http://127.0.0.1:$web_port/ (admin / ardupilot)"
 echo "  SIYI API: 127.0.0.1:$camera_port (UDP and TCP)"
 echo "  Gimbal:   udp://$gimbal_host:$gimbal_port ($orientation)"
-if [ "$backend" = a8 ] && [ "${CAMERA_APP_MAVLINK_TCP_PORT:-0}" = 0 ] &&
+if [ "$backend" = a8 ] && [ -z "${CAMERA_GIMBAL_SITL_INSTANCE:-}" ] &&
+        [ "${CAMERA_APP_MAVLINK_TCP_PORT:-0}" = 0 ] &&
         [ "${CAMERA_APP_MAVLINK_UDP_PORT:-0}" = 0 ]; then
     echo "  MAVLink:  disabled (set ${label}_SITL_MAVLINK_TCP_PORT and/or ${label}_SITL_MAVLINK_UDP_PORT)"
 fi

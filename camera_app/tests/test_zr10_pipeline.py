@@ -51,10 +51,10 @@ static unsigned char data[]={0,0,0,1,0x65,0xaa};
       return 0;
     }\n"""
     (tmp/'sdk.c').write_text(code)
-    run(['cc','-shared','-fPIC','-I'+str(backend),str(tmp/'sdk.c'),'-o',str(tmp/'sdk.so')])
+    run(['cc','-shared','-fPIC','-I'+str(root.parent/'include'),'-I'+str(backend),str(tmp/'sdk.c'),'-o',str(tmp/'sdk.so')])
     for name in ['cam_os_wrapper','mi_sys','mi_sensor','mi_vif','ispalgo','cus3a','mi_isp','mi_vpe','mi_venc']:
         (tmp/('lib'+name+'.so')).symlink_to(tmp/'sdk.so')
-    (tmp/'main.c').write_text('''#define _POSIX_C_SOURCE 200809L
+    (tmp/'main.cpp').write_text('''#define _POSIX_C_SOURCE 200809L
 #include "pipeline.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,7 +91,7 @@ int main(void) {
  return r ? 1:0;
 }
 ''')
-    run(['cc','-std=c11','-DAPCAM_TARGET=APCAM_TARGET_ZR10','-I'+str(root.parent/'include'),'-DCA_ZR10_FAKE_SDK','-I'+str(backend),'-I'+str(root/'include'),str(tmp/'main.c'),str(backend/'pipeline.c'),'-ldl','-o',str(tmp/'test')])
+    run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers','-std=gnu++17','-DAPCAM_TARGET=APCAM_TARGET_ZR10','-I'+str(root.parent/'include'),'-DCA_ZR10_FAKE_SDK','-I'+str(backend),'-I'+str(root/'include'),str(tmp/'main.cpp'),str(backend/'pipeline.cpp'),'-ldl','-o',str(tmp/'test')])
     env=dict(os.environ,LD_LIBRARY_PATH=str(tmp),MOCK_LOG=str(tmp/'calls'))
     run([str(tmp/'test')],env=env)
     baseline=(tmp/'calls').read_text().splitlines()

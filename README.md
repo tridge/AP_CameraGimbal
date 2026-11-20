@@ -1,4 +1,4 @@
-# AP_CameraGimbal
+# <img src="assets/camera-gimbal.svg" alt="" width="40" height="40"> AP_CameraGimbal
 
 AP_CameraGimbal is an firmware for camera/gimbal devices. It provides
 MAVLink Camera Protocol v2, MAVLink Gimbal Protocol v2 and vendor
@@ -9,7 +9,9 @@ The following hardware is currently supported:
  - SIYI MT11
  - SIYI A8-mini
  - SIYI ZR10
+ - SIYI ZT30 (application updates for cameras with the AP launchers installed)
  - XFRobot Z1-Mini
+ - Raspberry Pi CM4 with an IMX477 CSI camera and CADDX gimbal (see [`packaging/rpi_libcam_caddx/README.md`](packaging/rpi_libcam_caddx/README.md))
 
 Adding support for new hardware is usually fairly straight forward.
 
@@ -38,10 +40,14 @@ Key features of the firmware:
 
 - `camera_app/` contains the camera service, reusable protocol and media code,
   backend interface, tests and detailed configuration documentation.
-- `camera_app/src/backends/` contains the camera-specific MT11, A8, ZR10 and Z1-Mini backends.
+- `camera_app/src/backends/` contains the camera-specific MT11, A8, ZR10, Z1-Mini and Raspberry Pi backends.
 - `web/` contains the shared administration and live-view service.
 - `packaging/` and `tools/` contain camera-specific installation and package
   builders.
+- `tools/GaussianSplat/` builds 3D Gaussian splats and georeferenced thermal maps from the
+  cameras' recordings, with a static browser viewer; examples at
+  https://uav.tridgell.net/Splats/ (see
+  [`tools/GaussianSplat/README.md`](tools/GaussianSplat/README.md)).
 - `sitl/` contains the host simulator used for local development and CI.
 - `tests/` contains end-to-end ArduPilot integration tests.
 - `lua/` contains the legacy ArduPilot SIYI control script.
@@ -64,7 +70,8 @@ The submodule provides the MAVLink message definitions and pymavlink; builds
 generate the camera application's MAVLink C bindings from them as needed.
 
 The simulation exposes the web interface on `http://127.0.0.1:8081/`, SIYI on
-TCP/UDP 37260, MAVLink on TCP/UDP 14550, and RTSP on port 8554. See
+TCP/UDP 37260, MAVLink on TCP/UDP 16001, and RTSP on port 8554. Existing
+runtime configurations retain their saved ports. See
 [`sitl/README.md`](sitl/README.md) for prerequisites, endpoints and overrides.
 
 Run the camera application's host tests with:
@@ -94,13 +101,41 @@ Build the hardware installation packages with:
 
 ```sh
 python3 tools/install_build_environment.py
-make release
+make -j10 release
 # Or build just the camera being tested:
-make release RELEASE_TARGETS=A8
+make -j10 release RELEASE_TARGETS=A8
 ```
 
+Builds support parallel compilation, including multiple camera targets in one
+invocation, for example `make -j10 sitl a8_sitl zr10_sitl z1mini_sitl`.
+Shared generated inputs are prepared before the camera builds start. Recursive
+builds, including the thermal codecs, share the same job limit; CI uses eight
+jobs. Release packages are published one camera at a time, with parallel
+compilation inside each build. Run `make clean` separately before a clean build;
+`make -j10 clean all` would delete files while they are being compiled.
+Both `make clean` and `make sitl-clean` preserve downloaded dependencies and
+toolchains.
+
+Output defaults to short progress messages such as `Compiling main.cpp` and
+`Linking camera-app`. Compiler diagnostics and test output remain visible. Add
+`VERBOSE=1` to any Make invocation to see the full commands, for example
+`make -j10 release VERBOSE=1`.
+
 The output is `release/<version>/`, where `<version>` is the latest reachable
-`vX.y` tag (currently `v1.0`). Checkpoint tags such as `post-refactor` are ignored.
+`vX.y` or `vX.y.z` tag (for example, `v1.0.1`). Checkpoint tags such as
+`post-refactor` are ignored.
+Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10`, `SIYI_ZT30` and
+`XFRobot_Z1-Mini` (for example, `release/v1.0/SIYI_A8/`).
+
+ZT30 releases contain `ZT30_AP_<version>_<revision>.apbundle` for the web
+upgrader on cameras with the stable AP launchers installed. Build only that
+bundle with `make release RELEASE_TARGETS=ZT30`. The required retained runtime
+libraries are pinned under `packaging/zt30/platform`; they are checked during
+the build and on the receiving camera, and are not included in the update.
+See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md) for installation
+requirements and recovery behavior.
+Native parameter behavior, FOV assumptions and hardware limits are described in
+[`packaging/zt30/NATIVE_SETTINGS.md`](packaging/zt30/NATIVE_SETTINGS.md).
 
 ## Adding camera support
 
@@ -117,7 +152,7 @@ reverse-engineering notes.
 
 ## MT11 firmware packages
 
-Create a version tag of the form `vX.y`, then run:
+Create a version tag of the form `vX.y` or `vX.y.z`, then run:
 
 ```sh
 make mt11_package

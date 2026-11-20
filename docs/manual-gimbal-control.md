@@ -10,6 +10,11 @@ Untick the checkbox to release control. Closing or leaving the page also release
 it; if the browser or connection disappears, the lease expires after five seconds.
 Only one live-view page can own control at a time. Direction buttons send bounded
 180 ms rate pulses, stopped by the camera app even if the browser disconnects.
+Any active pan/tilt pulse is stopped before a synchronous optical zoom move.
+The web control endpoint waits up to five seconds for lens moves and queued
+renewals. A rejected command reports an error while keeping a valid lease;
+renewal failure still disables control. The zoom display follows camera feedback,
+including after a language change, and rapid zoom changes are coalesced.
 
 This setting is not saved in camera.ini. Rebooting or restarting the camera app
 clears it, and an already-open page cannot reacquire control without another

@@ -1,0 +1,157 @@
+From 7b879792770c545c857e94f4ca6f24b1f54127ae Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:24:15 +1100
+Subject: [PATCH 06/12] brush-js: PLY export and eval renders for a hosting
+ worker
+
+Training.exportPly(comments) returns the current splats as PLY bytes with
+extra header comments; Training.renderEval() renders the dataset's eval views
+as the eval does and returns channel 0 as Float32Arrays, so a worker can score
+held-out views and hand the result to the page.
+---
+ Cargo.lock               |  3 ++
+ apps/brush-js/Cargo.toml |  3 ++
+ apps/brush-js/src/lib.rs | 79 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 85 insertions(+)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 1691ac2..819109c 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1081,8 +1081,11 @@ dependencies = [
+ name = "brush-js"
+ version = "1.0.0"
+ dependencies = [
++ "brush-dataset",
+  "brush-process",
+  "brush-render",
++ "brush-serde",
++ "brush-train",
+  "burn",
+  "console_error_panic_hook",
+  "getrandom 0.3.4",
+diff --git a/apps/brush-js/Cargo.toml b/apps/brush-js/Cargo.toml
+index 3ea1ab3..348f758 100644
+--- a/apps/brush-js/Cargo.toml
++++ b/apps/brush-js/Cargo.toml
+@@ -12,6 +12,9 @@ crate-type = ["cdylib", "rlib"]
+ [dependencies]
+ brush-process.path = "../../crates/brush-process"
+ brush-render.path = "../../crates/brush-render"
++brush-dataset.path = "../../crates/brush-dataset"
++brush-serde.path = "../../crates/brush-serde"
++brush-train.path = "../../crates/brush-train"
+ rrfd.path = "../../crates/rrfd"
+ 
+ burn.workspace = true
+diff --git a/apps/brush-js/src/lib.rs b/apps/brush-js/src/lib.rs
+index 4ef4cd9..8a0de6e 100644
+--- a/apps/brush-js/src/lib.rs
++++ b/apps/brush-js/src/lib.rs
+@@ -312,6 +312,7 @@ impl BrushApp {
+         Training {
+             stream: Mutex::new(process.stream),
+             splat_view: process.splat_view,
++            dataset: std::sync::Mutex::new(None),
+         }
+     }
+ }
+@@ -322,6 +323,8 @@ impl BrushApp {
+ pub struct Training {
+     stream: Mutex<Pin<Box<dyn ProcessStream>>>,
+     splat_view: Slot<Splats>,
++    /// The loaded dataset, kept for evaluation renders.
++    dataset: std::sync::Mutex<Option<brush_dataset::Dataset>>,
+ }
+ 
+ #[wasm_bindgen]
+@@ -349,6 +352,9 @@ impl Training {
+             match stream.next().await {
+                 Some(Ok(ProcessMessage::TrainMessage(TrainMessage::TrainConfig { .. }))) => {}
+                 Some(Ok(msg)) => {
++                    if let ProcessMessage::TrainMessage(TrainMessage::Dataset { dataset }) = &msg {
++                        *self.dataset.lock().expect("dataset lock") = Some(dataset.clone());
++                    }
+                     let is_step = matches!(
+                         &msg,
+                         ProcessMessage::TrainMessage(TrainMessage::TrainStep { .. })
+@@ -367,6 +373,79 @@ impl Training {
+         }
+     }
+ 
++    /// The current splats as PLY bytes, with `comments` as extra header
++    /// comment lines (e.g. `apcg_splat {...}` thermal metadata).
++    #[wasm_bindgen(js_name = exportPly)]
++    pub async fn export_ply(&self, comments: Vec<String>) -> Result<js_sys::Uint8Array, JsValue> {
++        let splats = self
++            .splat_view
++            .latest()
++            .ok_or_else(|| js_err_str("no splats yet"))?;
++        let bytes = brush_serde::splat_to_ply_with_comments(splats, None, &comments)
++            .await
++            .map_err(|e| js_err_str(&format!("{e:#}")))?;
++        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
++    }
++
++    /// Render every eval view with the current splats as the eval does (black
++    /// background; numeric targets unquantised, clamped to [0, 1]). Returns an
++    /// array of `{name, width, height, psnr, data}` with `data` a `Float32Array`
++    /// of channel 0, row-major.
++    #[wasm_bindgen(js_name = renderEval)]
++    pub async fn render_eval(&self) -> Result<js_sys::Array, JsValue> {
++        let err = |e: &dyn std::fmt::Display| js_err_str(&format!("{e:#}"));
++        let splats = self
++            .splat_view
++            .latest()
++            .ok_or_else(|| js_err_str("no splats yet"))?;
++        let eval = self
++            .dataset
++            .lock()
++            .expect("dataset lock")
++            .as_ref()
++            .and_then(|d| d.eval.clone())
++            .ok_or_else(|| js_err_str("no eval views"))?;
++        let device = splats.device();
++        let out = js_sys::Array::new();
++        for view in eval.views.iter() {
++            let img = view.image.load().await.map_err(|e| err(&e))?;
++            let sample = brush_train::eval::eval_stats(
++                splats.clone(),
++                &view.camera,
++                img,
++                view.image.alpha_mode(),
++                &device,
++            )
++            .await
++            .map_err(|e| err(&e))?;
++            let dims = sample.rendered.dims();
++            let psnr = sample
++                .psnr
++                .clone()
++                .into_scalar_async::<f32>()
++                .await
++                .map_err(|e| err(&e))?;
++            let data = sample
++                .rendered
++                .clone()
++                .into_data_async()
++                .await
++                .map_err(|e| err(&e))?
++                .try_to_vec::<f32>()
++                .map_err(|e| err(&format!("{e:?}")))?;
++            let ch0: Vec<f32> = data.chunks_exact(dims[2]).map(|p| p[0]).collect();
++            let row = js_sys::Object::new();
++            let set = |k: &str, v: &JsValue| js_sys::Reflect::set(&row, &k.into(), v);
++            set("name", &view.image.img_name().into())?;
++            set("width", &(dims[1] as u32).into())?;
++            set("height", &(dims[0] as u32).into())?;
++            set("psnr", &psnr.into())?;
++            set("data", &js_sys::Float32Array::from(ch0.as_slice()).into())?;
++            out.push(&row);
++        }
++        Ok(out)
++    }
++
+     /// Snapshot the current splats. Returns `null` if no splats have been
+     /// produced yet.
+     #[wasm_bindgen(js_name = currentSplats)]

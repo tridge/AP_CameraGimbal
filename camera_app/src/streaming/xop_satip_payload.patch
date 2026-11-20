@@ -1,31 +1,31 @@
 --- RtpConnection.cpp
 +++ RtpConnection.cpp
-@@ -8,6 +8,9 @@
+@@ -5,7 +5,12 @@
+ #include "RtspConnection.h"
+ #include "net/SocketUtil.h"
++#include <chrono>
+
  using namespace std;
  using namespace xop;
-
++
 +extern "C" bool ca_rtsp_is_satip_client(const void *client);
 +extern "C" void ca_rtsp_unmark_satip_client(const void *client);
-+
- RtpConnection::RtpConnection(std::weak_ptr<TcpConnection> rtsp_connection)
-     : rtsp_connection_(rtsp_connection)
- {
-@@ -29,6 +33,7 @@
++extern "C" size_t ca_rtsp_sender_report(uint8_t *, uint32_t, uint64_t, uint32_t, uint32_t, uint32_t);
 
+ RtpConnection::RtpConnection(std::weak_ptr<TcpConnection> rtsp_connection)
+@@ -32,4 +37,5 @@
  RtpConnection::~RtpConnection()
  {
 +    ca_rtsp_unmark_satip_client(this);
      for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
          if(rtpfd_[chn] > 0) {
-             SocketUtil::Close(rtpfd_[chn]);
-@@ -222,6 +227,46 @@
-         return -1;
+@@ -245,19 +251,78 @@
      }
 
 +    /* VLC's SAT>IP module does not perform H.264 RTP depacketisation. For
 +     * aggregate-SETUP clients only, turn each RFC 6184 payload back into a
 +     * contiguous Annex-B byte stream after VLC strips the RTP headers. */
-+    if (ca_rtsp_is_satip_client(this) &&
++    if (ca_rtsp_is_satip_client(this) && media_channel_info_[channel_id].rtp_header.payload != 33 &&
 +        pkt.size > RTP_TCP_HEAD_SIZE + RTP_HEADER_SIZE) {
 +        const uint8_t *payload = pkt.data.get() + RTP_TCP_HEAD_SIZE +
 +                                 RTP_HEADER_SIZE;
@@ -64,4 +64,46 @@
 +
      RtspConnection *rtsp_conn = (RtspConnection *)conn.get();
 
-     bool ret = rtsp_conn->task_scheduler_->AddTriggerEvent([this, channel_id, pkt] {
+-    bool ret = rtsp_conn->task_scheduler_->AddTriggerEvent([this, channel_id, pkt] {
++    bool ret = rtsp_conn->task_scheduler_->AddTriggerEvent([this, conn, channel_id, pkt] {
+         this->SetFrameType(pkt.type);
+         this->SetRtpHeader(channel_id, pkt);
+         if((media_channel_info_[channel_id].is_play || media_channel_info_[channel_id].is_record) && has_key_frame_ ) {
+-            if(transport_mode_ == RTP_OVER_TCP) {
+-                SendRtpOverTcp(channel_id, pkt);
++            const int sent = transport_mode_ == RTP_OVER_TCP
++                ? SendRtpOverTcp(channel_id, pkt) : SendRtpOverUdp(channel_id, pkt);
++            if (sent <= 0) return;
++
++            auto &info = media_channel_info_[channel_id];
++            info.packet_count++;
++            info.octet_count += pkt.size - RTP_TCP_HEAD_SIZE - RTP_HEADER_SIZE;
++            const uint64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::system_clock::now().time_since_epoch()).count();
++            const uint64_t ntp = ((ns / 1000000000ULL + 2208988800ULL) << 32) |
++                (((ns % 1000000000ULL) << 32) / 1000000000ULL);
++            if (info.last_rtcp_ntp_time == 0 ||
++                ntp - info.last_rtcp_ntp_time >= (uint64_t(5) << 32)) {
++                uint8_t report[68];
++                const size_t length = ca_rtsp_sender_report(report + 4,
++                    ntohl(info.rtp_header.ssrc), ntp, ntohl(info.rtp_header.ts),
++                    uint32_t(info.packet_count), uint32_t(info.octet_count));
++                if (transport_mode_ == RTP_OVER_TCP) {
++                    report[0] = '$'; report[1] = info.rtcp_channel;
++                    report[2] = length >> 8; report[3] = length;
++                    conn->Send(reinterpret_cast<const char *>(report), length + 4);
++                } else {
++                    (void)sendto(rtcpfd_[channel_id], report + 4, length, 0,
++                        reinterpret_cast<struct sockaddr *>(&peer_rtcp_sddr_[channel_id]),
++                        sizeof(struct sockaddr_in));
++                }
++                info.last_rtcp_ntp_time = ntp;
+             }
+-            else {
+-                SendRtpOverUdp(channel_id, pkt);
+-            }
+-
+-            //media_channel_info_[channel_id].octetCount  += pkt.size;
+-            //media_channel_info_[channel_id].packetCount += 1;
+         }
+     });

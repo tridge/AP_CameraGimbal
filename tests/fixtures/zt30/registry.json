@@ -1,0 +1,709 @@
+{
+  "scope": "Flat16-byte-envelope snapshot registry candidates; all23 whole pre-call construction sequences matched. No native-call ABI or field semantics inferred beyond shown copy positions. Runtime device identity still required. Kernel MI common dispatcher16/length/pointer audit separate.",
+  "sources": {
+    "libmi_scl.so": "f32582f766ae96e6b90b2a1ea497c8970802d0705f884993f14659ac6a65ca45",
+    "libmi_vif.so": "fe16adedfdcb8e27bdeeb08bac77797e122f9b19b4fae2ef31e4d8659b8eec9b",
+    "libmi_sensor.so": "c8e3ed0a67e0126a963ea05723af31e0bb0329c35558388f119f5183a10e87e6",
+    "libmi_isp.so": "c7096c4346adbf1706644d121fd6052cc0da74eec592b224877cfef504273fc4",
+    "libmi_venc.so": "0ad9ad9cc1a6936dbcab4c1b1b03a2cd7372d0c3e7554bcfad80ce94d333aeaa",
+    "libmi_sys.so": "9c3f519c1db5d9ebdfa608736484c8a2696ab523f462b45094aa2c889e11fbbf"
+  },
+  "vendor_sha256": "6550ebc63e2bfa540522b886d3afdd67ad0cc8ee85b9339d6317d0365d71047d",
+  "entries": [
+    {
+      "device": "sys",
+      "function": "MI_SYS_BindChnPort",
+      "request": "40306902",
+      "length": 48,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "source port16,destination port16,frame-rate fields8,remaining8 not initialised in this stub",
+      "sdk_library": "libmi_sys.so",
+      "embedded_matches": [
+        {
+          "site": "ffdea",
+          "matched_pre_call_instructions": 29
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        63
+      ],
+      "pre_read_length": 40,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": [
+        [
+          40,
+          8
+        ]
+      ]
+    },
+    {
+      "device": "sys",
+      "function": "MI_SYS_BindChnPort2",
+      "request": "40306903",
+      "length": 48,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "source port16,destination port16,frame rates/type/parameter16",
+      "sdk_library": "libmi_sys.so",
+      "embedded_matches": [
+        {
+          "site": "ffe84",
+          "matched_pre_call_instructions": 35
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        63
+      ],
+      "pre_read_length": 48,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sys",
+      "function": "MI_SYS_InitPtsBase",
+      "request": "40086908",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "64-bit PTS value copied from r2/r3; chip r0 not part of payload",
+      "sdk_library": "libmi_sys.so",
+      "embedded_matches": [
+        {
+          "site": "10001e",
+          "matched_pre_call_instructions": 12
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        63
+      ],
+      "pre_read_length": 8,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sys",
+      "function": "MI_SYS_SyncPts",
+      "request": "40086909",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "64-bit PTS value copied from r2/r3; chip r0 not part of payload",
+      "sdk_library": "libmi_sys.so",
+      "embedded_matches": [
+        {
+          "site": "1000da",
+          "matched_pre_call_instructions": 12
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        63
+      ],
+      "pre_read_length": 8,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sys",
+      "function": "MI_SYS_SetChnOutputPortDepth",
+      "request": "40186915",
+      "length": 24,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "port16,user depth4,buffer depth4",
+      "sdk_library": "libmi_sys.so",
+      "embedded_matches": [
+        {
+          "site": "100970",
+          "matched_pre_call_instructions": 21
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        63
+      ],
+      "pre_read_length": 24,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_GetPadInfo",
+      "request": "c0386902",
+      "length": 56,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": true,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,pad info52",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "110e4c",
+          "matched_pre_call_instructions": 29
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 4,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": [
+        [
+          4,
+          52
+        ]
+      ]
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_GetPlaneInfo",
+      "request": "c0506903",
+      "length": 80,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": true,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,plane4,plane info72",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "110ef4",
+          "matched_pre_call_instructions": 21
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": [
+        [
+          8,
+          72
+        ]
+      ]
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_SetFps",
+      "request": "40086905",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,FPS4",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "110fd2",
+          "matched_pre_call_instructions": 12
+        },
+        {
+          "site": "112eae",
+          "matched_pre_call_instructions": 12
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_QueryResCount",
+      "request": "c0086908",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": true,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,count4",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "11113e",
+          "matched_pre_call_instructions": 14
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 4,
+      "padding": null,
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": [
+        [
+          4,
+          4
+        ]
+      ]
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_GetRes",
+      "request": "c03c6909",
+      "length": 60,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": true,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,index1,padding3,resolution52",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "1111e2",
+          "matched_pre_call_instructions": 33
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": [
+        5,
+        3
+      ],
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": [
+        [
+          8,
+          52
+        ]
+      ]
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_SetRes",
+      "request": "4008690b",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,index1,padding3",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "111346",
+          "matched_pre_call_instructions": 16
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": [
+        5,
+        3
+      ],
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_SetOrien",
+      "request": "4008690c",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,mirror1,flip1,padding2",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "1113b2",
+          "matched_pre_call_instructions": 16
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": [
+        6,
+        2
+      ],
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "sensor",
+      "function": "MI_SNR_SetPlaneMode",
+      "request": "4008690e",
+      "length": 8,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "pad4,plane mode1,padding3",
+      "sdk_library": "libmi_sensor.so",
+      "embedded_matches": [
+        {
+          "site": "1114a2",
+          "matched_pre_call_instructions": 16
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        62
+      ],
+      "pre_read_length": 8,
+      "padding": [
+        5,
+        3
+      ],
+      "opaque_attributes": false,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "vif",
+      "function": "MI_VIF_CreateDevGroup",
+      "request": "40206900",
+      "length": 32,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "group4,group attrs28",
+      "sdk_library": "libmi_vif.so",
+      "embedded_matches": [
+        {
+          "site": "111852",
+          "matched_pre_call_instructions": 19
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        46
+      ],
+      "pre_read_length": 32,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "vif",
+      "function": "MI_VIF_SetDevAttr",
+      "request": "40186904",
+      "length": 24,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,device attrs20",
+      "sdk_library": "libmi_vif.so",
+      "embedded_matches": [
+        {
+          "site": "111b42",
+          "matched_pre_call_instructions": 19
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        46
+      ],
+      "pre_read_length": 24,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "vif",
+      "function": "MI_VIF_SetOutputPortAttr",
+      "request": "401c6909",
+      "length": 28,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,port4,attrs20",
+      "sdk_library": "libmi_vif.so",
+      "embedded_matches": [
+        {
+          "site": "111d8e",
+          "matched_pre_call_instructions": 20
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        46
+      ],
+      "pre_read_length": 28,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "isp",
+      "function": "MI_ISP_CreateChannel",
+      "request": "40586902",
+      "length": 88,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,attrs80",
+      "sdk_library": "libmi_isp.so",
+      "embedded_matches": [
+        {
+          "site": "101796",
+          "matched_pre_call_instructions": 19
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        55
+      ],
+      "pre_read_length": 88,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "isp",
+      "function": "MI_ISP_SetChnParam",
+      "request": "40186906",
+      "length": 24,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,params16",
+      "sdk_library": "libmi_isp.so",
+      "embedded_matches": [
+        {
+          "site": "101958",
+          "matched_pre_call_instructions": 22
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        55
+      ],
+      "pre_read_length": 24,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "isp",
+      "function": "MI_ISP_SetOutputPortParam",
+      "request": "4018690a",
+      "length": 24,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,port4,params12",
+      "sdk_library": "libmi_isp.so",
+      "embedded_matches": [
+        {
+          "site": "101b00",
+          "matched_pre_call_instructions": 21
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        55
+      ],
+      "pre_read_length": 24,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "scl",
+      "function": "MI_SCL_CreateChannel",
+      "request": "400c6902",
+      "length": 12,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,attrs4",
+      "sdk_library": "libmi_scl.so",
+      "embedded_matches": [
+        {
+          "site": "112322",
+          "matched_pre_call_instructions": 14
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        58
+      ],
+      "pre_read_length": 12,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "scl",
+      "function": "MI_SCL_SetChnParam",
+      "request": "400c6906",
+      "length": 12,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,params4",
+      "sdk_library": "libmi_scl.so",
+      "embedded_matches": [
+        {
+          "site": "1123e6",
+          "matched_pre_call_instructions": 14
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        58
+      ],
+      "pre_read_length": 12,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "scl",
+      "function": "MI_SCL_SetOutputPortParam",
+      "request": "4024690a",
+      "length": 36,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,port4,params24",
+      "sdk_library": "libmi_scl.so",
+      "embedded_matches": [
+        {
+          "site": "11266e",
+          "matched_pre_call_instructions": 26
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        58
+      ],
+      "pre_read_length": 36,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    },
+    {
+      "device": "venc",
+      "function": "MI_VENC_CreateChn",
+      "request": "40546902",
+      "length": 84,
+      "form": "mi16_stack_flat",
+      "pre_snapshot": true,
+      "post_snapshot": false,
+      "status_rule": "post bytes are diagnostics, validity unknown on nonzero raw ioctl result",
+      "layout": "device4,channel4,attrs76",
+      "sdk_library": "libmi_venc.so",
+      "embedded_matches": [
+        {
+          "site": "f7d32",
+          "matched_pre_call_instructions": 40
+        }
+      ],
+      "matching_limit": "addresses/comments and direct call/branch targets normalised; identity of called FD helper not independently inferred from this comparison",
+      "device_rdev": [
+        230,
+        45
+      ],
+      "pre_read_length": 84,
+      "padding": null,
+      "opaque_attributes": true,
+      "never_dereference_contents": true,
+      "uninitialised_pre_ranges": []
+    }
+  ],
+  "envelope_rules": [
+    "non-null4-aligned argument in current real thread stack",
+    "16-byte descriptor; offset0exact whitelist length (zero/unknown/oversize not clamped)",
+    "offset4unused/unwritten and masked out of records",
+    "offset8lowptr and offset12sign extension of lowptr; user limit0xc0000000",
+    "payload fits same real stack extent; read only pre_read_length before forwarding",
+    "post snapshots four SNR queries reuse original descriptor pointer, raw status and unknown validity on nonzero result",
+    "opaque attributes never traversed; pre/post bytes may differ from kernel copy due to concurrent writers"
+  ],
+  "rdev_evidence": "../ram-ioctl-startup-20261009T045045Z/ioctl-decoded.json, successful captured character-device opens; fixed production mapping required"
+}

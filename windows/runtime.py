@@ -60,7 +60,12 @@ def own_children():
 
 def ready(path, process, timeout=30):
     deadline = time.monotonic() + timeout
-    while not path.exists():
+    while True:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return
+        except FileNotFoundError:
+            pass
         if process.poll() is not None:
             raise RuntimeError(f'{process.args[0]} exited with status {process.returncode}')
         if time.monotonic() > deadline:
@@ -88,10 +93,14 @@ def main():
     web_port = int(os.environ.get(prefix + 'WEB_PORT', '8081'))
     # Refuse an occupied endpoint before resetting any saved settings.
     import socket
-    for port in (web_port, int(os.environ.get(prefix + 'CAMERA_PORT', str(int(TARGETS[backend]['vendor_port'])))),
-                 int(os.environ.get(prefix + 'RTSP_PORT', '8554')),
-                 int(os.environ.get(prefix + 'RTSP_PORT', '8554')) + 1):
-        with socket.socket() as probe:
+    from sitl.launcher_config import vendor_ports
+    vendor_tcp, vendor_udp = vendor_ports(TARGETS[backend],
+        int(os.environ.get(prefix + 'CAMERA_PORT', str(int(TARGETS[backend]['vendor_port'])))))
+    for port, kind in ((web_port, socket.SOCK_STREAM), (vendor_tcp, socket.SOCK_STREAM),
+                       (vendor_udp, socket.SOCK_DGRAM),
+                       (int(os.environ.get(prefix + 'RTSP_PORT', '8554')), socket.SOCK_STREAM),
+                       (int(os.environ.get(prefix + 'RTSP_PORT', '8554')) + 1, socket.SOCK_STREAM)):
+        with socket.socket(socket.AF_INET, kind) as probe:
             probe.bind(('127.0.0.1', port))
     sys.argv = ['prepare_runtime', str(root), str(bundle / 'configs' / (backend + '.ini'))]
     if os.environ.get('CAMERA_GIMBAL_SITL_RESET_PARAMETERS') == '1':
@@ -107,6 +116,7 @@ def main():
     web_exe = native / ('web-' + backend + '.exe')
     env['CAMERA_GIMBAL_SITL_CAMERA_EXE'] = posix_path(camera_exe)
     env['CAMERA_GIMBAL_SITL_WEB_EXE'] = posix_path(web_exe)
+    env['CAMERA_GIMBAL_SITL_WEBROOT'] = posix_path(bundle / 'webroot')
     paths = {'CAMERA_APP_CONFIG': 'app/camera.ini', 'CAMERA_APP_READY_PATH': 'run/camera-app.ready',
              'CAMERA_APP_LOG_ROOT': 'mnt/logs', 'CAMERA_APP_RECORD_STATE': 'run/recording.state', 'CAMERA_APP_RECORD_ROOT': 'mnt/DCIM/record',
              'CAMERA_APP_CAPTURE_ROOT': 'mnt/DCIM/capture'}
@@ -149,7 +159,7 @@ def main():
     for name in ('gimbal.ready', 'camera-app.ready', 'web.pid'):
         (run / name).unlink(missing_ok=True)
     try:
-        gimbal = launch(worker_command('gimbal') + ['--backend', backend, '--port', '0',
+        gimbal = launch(worker_command('gimbal') + ['--backend', backend, '--port', os.environ.get(prefix + 'GIMBAL_PORT', '0'),
                         '--orientation', os.environ.get(prefix + 'ORIENTATION', 'upright'),
                         '--ready-file', str(run / 'gimbal.ready')], 'gimbal')
         ready(run / 'gimbal.ready', gimbal)

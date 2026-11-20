@@ -1,5 +1,6 @@
 #ifndef APCAM_MANUAL_CONTROL_H
 #define APCAM_MANUAL_CONTROL_H
+#include "compiler.h"
 #include <stdint.h>
 /* Private loopback IPC shared by the web server and camera app. No persistent
  * state: a new app owns a new socket and issues new random lease tokens. */
@@ -23,5 +24,5 @@ struct apcam_manual_packet {
     float value;
     int32_t result;
 };
-_Static_assert(sizeof(struct apcam_manual_packet) == 32, "manual control IPC layout");
+APC_STATIC_ASSERT(sizeof(struct apcam_manual_packet) == 32, "manual control IPC layout");
 #endif

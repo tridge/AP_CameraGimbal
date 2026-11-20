@@ -20,6 +20,7 @@
 #define APCAM_ZOOM_NATIVE_RATE 0
 #define APCAM_ZOOM_CONTROL_MAX APCAM_ZOOM_MAX
 #define APCAM_WEB_CONTROL_MAVLINK 1
+#define APCAM_HAVE_OVERLAY_RECORDING_SELECT 0
 #define APCAM_HAVE_GIMBAL_RATES 0
 #define APCAM_SUPPRESS_DUPLICATE_ANGLES 0
 #define APCAM_WEB_CENTER_COMMAND 3
@@ -29,6 +30,9 @@
 #define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 0
 #define APCAM_HAVE_SOC_TEMPERATURE 1
+#ifndef SOC_TEMPERATURE_PATH
+#define SOC_TEMPERATURE_PATH "/sys/class/thermal/thermal_zone0/temp"
+#endif
 #define APCAM_VENDOR_PORT 2337
 #define APCAM_VENDOR_TCP_PORT 2332
 #define APCAM_VENDOR_REPLY_PORT 2338
@@ -43,6 +47,10 @@
 #define APCAM_LENS1_HEIGHT 2160
 #define APCAM_ZOOM_MAX 8.0f
 #define APCAM_FRAME_RATE 30
+/* IMX415 mounting correction: sensor callback bits 0/1 mirror/flip.
+ * Inverting the mount adds a 180-degree rotation to the normal correction. */
+#define APCAM_SENSOR_MIRROR_FLIP_UPRIGHT 3
+#define APCAM_SENSOR_MIRROR_FLIP_INVERTED 0
 #define APCAM_THERMAL_FRAME_RATE 0
 #define APCAM_THERMAL_STREAM_WIDTH 0
 #define APCAM_THERMAL_STREAM_HEIGHT 0
@@ -52,12 +60,15 @@
 #define APCAM_STREAM_CODECS 1
 #define APCAM_DEFAULT_MAIN_RESOLUTION 1
 #define APCAM_DEFAULT_SUB_RESOLUTION 1
-#define APCAM_DEFAULT_RECORDING_RESOLUTION 1
+#define APCAM_DEFAULT_RECORDING_RESOLUTION APCAM_RES_1080P
 #define APCAM_DEFAULT_SYSTEM_ID 0
 #define APCAM_DEFAULT_POSITION_TARGETING 0
 #define APCAM_DEFAULT_ORIENTATION 1
 #define APCAM_DEFAULT_PHOTO_SCOPE 1
-#define APCAM_DEFAULT_TIMEZONE "UTC0"
+#define APCAM_DEFAULT_TIMEZONE "GMT"
+/* vendor-compatible RTSP path aliases for /video1 and /video2 */
+#define APCAM_DEFAULT_MAIN_ALIAS ""
+#define APCAM_DEFAULT_SUB_ALIAS ""
 #define APCAM_GIMBAL_PITCH_MIN -90.0f
 #define APCAM_GIMBAL_PITCH_MAX 30.0f
 #define APCAM_GIMBAL_YAW_CONTINUOUS 0
@@ -85,10 +96,10 @@
 
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
-#define FIRMWARE_PREFIX "Z1Mini_FW_"
-#define FIRMWARE_INSTALL_NAME "Z1Mini.gcu"
-#ifndef SOC_TEMPERATURE_PATH
-#define SOC_TEMPERATURE_PATH "/sys/class/thermal/thermal_zone0/temp"
+#define FIRMWARE_PREFIX "Z1Mini_AP_"
+#define FIRMWARE_SUFFIX ".gcu"
+#ifndef GCU_ROOT
+#define GCU_ROOT "/opt/bin/gcu"
 #endif
 #ifndef APP_SELECTION_DIR
 #define APP_SELECTION_DIR "/opt/ap_cameragimbal"

@@ -40,6 +40,11 @@ log()
     printf '%s\n' "app_init: $*" >&2
 }
 
+# The retained A8 Ethernet driver drops UniGCS 224.0.0.1 discovery packets
+# with only the normal multicast group filter installed. ALLMULTI restores
+# reception; the kernel still delivers packets only to matching sockets.
+ifconfig eth0 allmulti || log "warning: could not enable Ethernet multicast reception"
+
 sd_mounted()
 {
     grep -qs "^$SD_DEVICE $SD_MOUNT " /proc/mounts
@@ -154,8 +159,8 @@ if [ "$(cat /customer/mac_addr/mac.txt 2>/dev/null)" = "$EMPTY_UUID_MAC" ]; then
 fi
 
 export CAMERA_APP_CONFIG=$CONFIG_ROOT/camera.ini
-export CAMERA_APP_RECORD_ROOT=$SD_MOUNT/record
-export CAMERA_APP_CAPTURE_ROOT=$SD_MOUNT/capture
+export CAMERA_APP_RECORD_ROOT=$SD_MOUNT/DCIM/record
+export CAMERA_APP_CAPTURE_ROOT=$SD_MOUNT/DCIM/capture
 export CAMERA_APP_READY_PATH=/tmp/camera-app.ready
 
 # the live video relay binds to the loopback interface

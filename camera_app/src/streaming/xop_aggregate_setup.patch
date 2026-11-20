@@ -1,35 +1,42 @@
 --- RtspConnection.cpp
 +++ RtspConnection.cpp
-@@ -6,6 +6,7 @@
- #include "MediaSession.h"
- #include "MediaSource.h"
- #include "net/SocketUtil.h"
-+#include <netinet/tcp.h>
-
- #define USER_AGENT "-_-"
- #define RTSP_DEBUG 0
-@@ -13,6 +14,8 @@
+@@ -13,6 +13,9 @@
 
  using namespace xop;
  using namespace std;
 +
 +extern "C" void ca_rtsp_mark_satip_client(const void *client);
++extern std::string ca_rtsp_sdp(xop::MediaSession *session, const std::string &ip);
 
  RtspConnection::RtspConnection(std::shared_ptr<Rtsp> rtsp, TaskScheduler *task_scheduler, SOCKET sockfd)
      : TcpConnection(task_scheduler, sockfd)
-@@ -22,6 +25,11 @@
+@@ -22,11 +25,14 @@
      , rtsp_request_(new RtspRequest)
      , rtsp_response_(new RtspResponse)
  {
+-    this->SetReadCallback([this](std::shared_ptr<TcpConnection> conn, xop::BufferReader& buffer) {
 +    // Do not hold a frame's final RTP fragment for a delayed TCP ACK.
-+    // The vendor SetNoDelay helper lacks TCP_NODELAY on Linux and is a no-op.
-+    int no_delay = 1;
-+    (void)setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
++    SocketUtil::SetNoDelay(sockfd);
 +
-     this->SetReadCallback([this](std::shared_ptr<TcpConnection> conn, xop::BufferReader& buffer) {
++    this->SetReadCallback([this](std::shared_ptr<TcpConnection> /*conn*/, xop::BufferReader& buffer) {
          return this->OnRead(buffer);
      });
-@@ -290,6 +298,36 @@
+
+-    this->SetCloseCallback([this](std::shared_ptr<TcpConnection> conn) {
++    this->SetCloseCallback([this](std::shared_ptr<TcpConnection> /*conn*/) {
+         this->OnClose();
+     });
+
+@@ -263,7 +269,7 @@
+             }
+         }
+
+-        std::string sdp = media_session->GetSdpMessage(SocketUtil::GetSocketIp(this->GetSocket()), rtsp->GetVersion());
++        std::string sdp = ca_rtsp_sdp(media_session.get(), SocketUtil::GetSocketIp(this->GetSocket()));
+         if(sdp == "") {
+             size = rtsp_request_->BuildServerErrorRes(res.get(), 4096);
+         }
+@@ -290,6 +296,36 @@
      auto rtsp = rtsp_.lock();
      if (rtsp) {
          media_session = rtsp->LookMediaSession(session_id_);
@@ -66,3 +73,12 @@
      }
 
      if(!rtsp || !media_session)  {
+@@ -478,7 +514,7 @@
+         }
+     }
+
+-    std::string sdp = media_session->GetSdpMessage(SocketUtil::GetSocketIp(this->GetSocket()), rtsp->GetVersion());
++    std::string sdp = ca_rtsp_sdp(media_session.get(), SocketUtil::GetSocketIp(this->GetSocket()));
+     if (sdp == "") {
+         HandleClose();
+         return;

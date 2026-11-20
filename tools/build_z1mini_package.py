@@ -37,11 +37,14 @@ def build(output, native_capture=None):
         'web.pass.default': b'ardupilot\n',
         'README.md': (ROOT / 'packaging/z1mini/README.md').read_bytes(),
     }
+    webroot = ROOT / 'web/webroot'
+    assets = sorted(path for path in webroot.rglob('*') if path.is_file())
+    if not assets:
+        raise ValueError(f'{webroot}: missing web assets')
+    for path in assets:
+        payload['webroot/' + path.relative_to(webroot).as_posix()] = path.read_bytes()
     if native_capture is not None:
         payload['ax-capture'] = arm_binary(native_capture)
-        payload['camera.ini.default'] = payload['camera.ini.default'].replace(
-            b'[recording]\nautorecord = false\nresolution = 1920x1080',
-            b'[recording]\nautorecord = false\nresolution = 3840x2160')
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], cwd=ROOT).returncode != 0
     payload['manifest.json'] = (json.dumps({
@@ -58,6 +61,8 @@ def build(output, native_capture=None):
     members = {'gcu/ap/' + name: data for name, data in payload.items()}
     # Write the startup hook last. Checksums reject partially overlaid payloads
     # on boot, but extraction itself is not power-loss atomic.
+    # The vendor updater replaces all of /opt/bin/gcu, so rcS's ipc/run.sh must be supplied.
+    members['gcu/ipc/run.sh'] = (ROOT / 'packaging/z1mini/run.sh').read_bytes()
     members['gcu/ipc/camera_gcu.sh'] = (ROOT / 'packaging/z1mini/camera_gcu.sh').read_bytes()
     if native_capture is not None:
         members['gcu/ipc/camera_gcu.sh'] = members['gcu/ipc/camera_gcu.sh'].replace(b'NATIVE=false', b'NATIVE=true')

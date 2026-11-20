@@ -27,6 +27,7 @@ with tempfile.TemporaryDirectory(prefix='zr10-service-') as directory:
     # Both processes take the same exclusive "hardware" lock. A start overlap
     # is a test failure even if the supervisor later recovers.
     source.write_text(r'''
+#include "apcam/config_status.h"
 #include <sys/file.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -46,13 +47,21 @@ int main(int argc, char **argv) {
     if (!vendor) {
         FILE *ready = fopen(getenv("CAMERA_APP_READY_PATH"), "w");
         if (!ready) return 4;
-        fprintf(ready, "pid=%d\nbackend=zr10\n", getpid());
+        fprintf(ready, "backend=zr10\npid=%d\n", getpid());
         fclose(ready);
+        uint64_t hash;
+        if (apcam_config_file_hash(getenv("CAMERA_APP_CONFIG"), &hash) < 0) return 5;
+        char status_path[4096];
+        snprintf(status_path, sizeof(status_path), "%s.config", getenv("CAMERA_APP_READY_PATH"));
+        FILE *status = fopen(status_path, "w");
+        if (!status) return 6;
+        fprintf(status, "%llx %ld ok\nConfiguration applied.\n", (unsigned long long)hash, (long)getpid());
+        fclose(status);
     }
     while (1) pause();
 }
 ''')
-    subprocess.run(['cc', '-O2', str(source), '-o', str(app / 'camera-app')], check=True)
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-I'+str(repo/'include'), str(source), '-o', str(app / 'camera-app')], check=True)
     (customer / 'sycamera.vendor').write_bytes((app / 'camera-app').read_bytes())
     (customer / 'sycamera.vendor').chmod(0o755)
     # System actions are mocked. All process matching stays within this fixture.
@@ -93,10 +102,10 @@ sys.exit(0 if pids else 1)
         "USER_LOCK_PATH": runtime/'users.lock',
         "SESSION_PATH": runtime/'sessions', "RUNTIME_DIR": runtime,
     }
-    subprocess.run(['cc', '-O2', '-std=c11', '-DAPCAM_TARGET=APCAM_TARGET_ZR10',
-                    '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', '-DWEB_SUPERVISED_TEST',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-std=gnu++17', '-DAPCAM_TARGET=APCAM_TARGET_ZR10',
+                    f'-DWEBROOT_PATH="{Path(__file__).resolve().parents[1] / "webroot"}"', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', '-DWEB_SUPERVISED_TEST',
                     *[f'-D{key}="{value}"' for key, value in paths.items()],
-                    str(repo/'web/mt11-web.c'), '-o', str(app/'zr10-web')], check=True)
+                    str(repo/'web/mt11-web.cpp'), '-o', str(app/'zr10-web')], check=True)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]

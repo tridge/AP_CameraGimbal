@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export target C properties to JSON using a host compiler, without parsing C values."""
+"""Export target properties to JSON using the host C++ compiler."""
 import argparse
 import json
 import os
@@ -18,7 +18,7 @@ def export(cc):
                           (HEADERS / 'target.h').read_text())
     targets = {}
     with tempfile.TemporaryDirectory(prefix='apcam-targets-') as temp:
-        source = Path(temp) / 'export.c'
+        source = Path(temp) / 'export.cpp'
         binary = Path(temp) / ('export.exe' if os.name == 'nt' or 'cygwin' in os.sys.platform else 'export')
         for target_id, header in registry:
             properties = re.findall(r'^#define (APCAM_\w+) (.+)$', (HEADERS / header).read_text(), re.M)
@@ -39,7 +39,7 @@ def export(cc):
                     lines.append(f'printf("%.9g", (double)({name}));')
             lines.append('puts("}"); return 0; }')
             source.write_text('\n'.join(lines))
-            subprocess.run(shlex.split(cc) + ['-I' + str(ROOT / 'include'),
+            subprocess.run(shlex.split(cc) + ['-std=gnu++17', '-I' + str(ROOT / 'include'),
                            '-DAPCAM_TARGET=' + target_id, str(source), '-o', str(binary)], check=True)
             data = json.loads(subprocess.check_output([str(binary)], text=True))
             data['target_id'] = target_id
@@ -49,7 +49,7 @@ def export(cc):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cc', default=os.environ.get('HOST_CC', 'cc'))
+    parser.add_argument('--cc', default=os.environ.get('HOST_CXX', 'c++'))
     parser.add_argument('--output', type=Path, default=ROOT / 'build/targets/targets.json')
     args = parser.parse_args()
     data = json.dumps(export(args.cc), indent=2, sort_keys=True) + '\n'

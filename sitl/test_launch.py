@@ -12,7 +12,7 @@ from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sitl_launch import Launcher, QtWidgets, owned_processes, REPO
+from sitl_launch import SimulatorPanel as Launcher, Launcher as MultiLauncher, QtWidgets, owned_processes, REPO
 
 
 def until(app, predicate, timeout=15):
@@ -39,11 +39,11 @@ def real_stack(app):
             camera_port = reserve_port(socket.SOCK_DGRAM)
             env = {'CAMERA_GIMBAL_SITL_BUILD': str(root / backend),
                    prefix + 'WEB_PORT': str(web_port),
-                   prefix + 'RTSP_PORT': str(reserve_port(socket.SOCK_STREAM)),
+                   prefix + 'RTSP_PORT': str(reserve_port(socket.SOCK_STREAM, span=2)),
                    prefix + 'CAMERA_PORT': str(camera_port),
                    prefix + 'MAVLINK_TCP_PORT': '0', prefix + 'MAVLINK_UDP_PORT': '0'}
             with mock.patch.dict(os.environ, env):
-                window.camera.setCurrentIndex(index)
+                window.camera.setCurrentIndex(window.camera.findData(backend))
                 window.orientation.setCurrentIndex(index)
                 window.video.setCurrentIndex(index)
                 window.start_button.click()
@@ -105,15 +105,23 @@ def main(real=False):
     with tempfile.TemporaryDirectory(prefix='sitl-launch-') as temp:
         repo = Path(temp)
         (repo / 'sitl').mkdir()
-        (repo / 'Makefile').write_text('sitl a8_sitl:\n\t@echo built $@\n')
+        # Match the real phony build goals, including the existing sitl directory.
+        (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n\t@echo built $@\n')
         (repo / 'sitl/terrain_video.py').write_text("print('terrain dependencies available')\n")
         (repo / 'sitl/run.sh').write_text('exec python3 "$(dirname "$0")/fake.py"\n')
         (repo / 'sitl/fake.py').write_text('''
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, signal, subprocess, sys, time
 root = pathlib.Path(os.environ['CAMERA_GIMBAL_SITL_BUILD'])
 root.mkdir(parents=True, exist_ok=True)
+pidfile = root / 'runtime/run/launcher.pid'
+pidfile.parent.mkdir(parents=True, exist_ok=True)
+pidfile.write_text(str(os.getpid()))
+def stop(signum, frame):
+    pidfile.unlink(missing_ok=True)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
 keys = ('CAMERA_GIMBAL_SITL_BACKEND', 'CAMERA_GIMBAL_SITL_VIDEO',
-        'MT11_SITL_ORIENTATION', 'A8_SITL_ORIENTATION')
+        'MT11_SITL_ORIENTATION', 'A8_SITL_ORIENTATION', 'CAMERA_GIMBAL_SITL_LAUNCH_ID')
 (root / 'selection.json').write_text(json.dumps({k: os.environ.get(k) for k in keys}))
 # A detached child models a web-triggered camera restart.
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
@@ -126,14 +134,15 @@ time.sleep(60)
         window = Launcher(repo)
         window.show()
         try:
-            assert window.video.currentData() == 'simple'
+            assert window.video.currentData() == 'terrain'
             assert not window.clear_parameters.isChecked()
             assert window.environment()[0]['CAMERA_GIMBAL_SITL_RESET_PARAMETERS'] == '0'
             window.clear_parameters.setChecked(True)
             assert window.environment()[0]['CAMERA_GIMBAL_SITL_RESET_PARAMETERS'] == '1'
             window.clear_parameters.setChecked(False)
             for index in (0, 1):
-                window.camera.setCurrentIndex(index)
+                backend = ('mt11', 'a8')[index]
+                window.camera.setCurrentIndex(window.camera.findData(backend))
                 window.orientation.setCurrentIndex(index)
                 window.video.setCurrentIndex(index)
                 window.start_button.click()
@@ -156,6 +165,101 @@ time.sleep(60)
                 assert unrelated.poll() is None, 'launcher stopped an unrelated process'
                 assert window.start_button.isEnabled()
             print('PASS camera/orientation/video selections, startup, stop, close and detached-child cleanup')
+
+            group = MultiLauncher(repo)
+            try:
+                assert group.count.value() == 1 and group.tabs.count() == 1
+                group.count.setValue(4)
+                assert group.tabs.count() == 4
+                for backends in (('mt11',) * 4, ('mt11', 'a8', 'zr10', 'z1mini'), ('zt30', 'mt11', 'a8', 'zr10')):
+                    for i, panel in enumerate(group.simulators):
+                        panel.camera.setCurrentIndex(panel.camera.findData(backends[i]))
+                        panel.video.setCurrentIndex(i % 2)
+                        panel.orientation.setCurrentIndex(i % 2)
+                    group.start_button.click()
+                    until(app, lambda: group.phase in ('running', 'idle'))
+                    assert group.phase == 'running', group.status.text()
+                    assert not group.count.isEnabled()
+                    tokens = [p.token for p in group.simulators]
+                    builds = [p.runtime.parent.parent for p in group.simulators]
+                    assert len(set(builds)) == 4
+                    assert all(builds[0] not in p.parents for p in builds[1:])
+                    assert all((p / 'runtime/run/launcher.pid').exists() for p in builds)
+                    assert len({p.web_url for p in group.simulators}) == 4
+                    for i, panel in enumerate(group.simulators):
+                        selection = json.loads((builds[i] / 'selection.json').read_text())
+                        assert selection['CAMERA_GIMBAL_SITL_BACKEND'] == backends[i]
+                        assert selection['CAMERA_GIMBAL_SITL_VIDEO'] == ('simple', 'terrain')[i % 2]
+                        assert len(owned_processes(tokens[i])) >= 2
+                        assert (builds[i] / 'runtime/run/launcher.pid').exists()
+                    if backends[1] == 'a8':
+                        group.close()
+                    else:
+                        group.stop_button.click()
+                    until(app, lambda: group.phase == 'idle')
+                    assert all(not owned_processes(token) for token in tokens)
+                    assert unrelated.poll() is None
+                print('PASS four identical/mixed simulators, separate directories/ports, stop-all and close cleanup')
+
+                # A failure after another simulator started must unwind the group.
+                (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n'
+                    '\t@test "$$CAMERA_GIMBAL_SITL_INSTANCE" != 2\n')
+                group.start()
+                until(app, lambda: group.simulators[0].phase == 'running')
+                token = group.simulators[0].token
+                reached = group.simulators[0].runtime
+                assert (reached / 'launcher.pid').exists()
+                assert len(owned_processes(token)) >= 2
+                until(app, lambda: group.phase == 'idle')
+                assert 'Simulator 2 stopped' in group.status.text(), group.status.text()
+                assert all(p.phase == 'idle' for p in group.simulators)
+                assert not (reached / 'launcher.pid').exists()
+                assert not owned_processes(token)
+                assert all(not owned_processes(p.token) for p in group.simulators[:2] if p.token)
+                print('PASS partial startup failure stops the whole group')
+
+                (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n\t@sleep 60\n')
+                group.start()
+                until(app, lambda: group.simulators[0].phase == 'building')
+                token = group.simulators[0].token
+                group.stop()
+                until(app, lambda: group.phase == 'idle')
+                assert not owned_processes(token)
+                assert all(p.phase == 'idle' for p in group.simulators)
+                print('PASS stop during build cancels pending simulators')
+
+                with mock.patch.dict(os.environ, {'MT11_SITL_WEB_PORT': '8554'}):
+                    group.start()
+                    assert group.phase == 'idle' and 'shared' in group.status.text()
+                assert group.start_button.isEnabled()
+                print('PASS conflicting endpoints rejected before startup')
+                # Exercise actual Z1 defaults, including its distinct TCP port
+                # and the fixed client reply port missing from the old model.
+                group.count.setValue(4)
+                for panel in group.simulators:
+                    panel.camera.setCurrentIndex(panel.camera.findData('z1mini'))
+                from sitl.launcher_config import vendor_ports
+                from sitl.target_properties import TARGETS
+                for i, panel in enumerate(group.simulators):
+                    env, _ = panel.environment()
+                    assert int(env['Z1MINI_SITL_CAMERA_PORT']) == 2337 + 10*i
+                    assert vendor_ports(TARGETS['z1mini'],2337+10*i) == ((2332 if i==0 else 2337+10*i),2337+10*i)
+                group.validate()
+                for override, value in (('Z1MINI_SITL_WEB_PORT','2332'),
+                                        ('Z1MINI_SITL_CAMERA_PORT','2338'),
+                                        ('Z1MINI_SITL_MAVLINK_UDP_PORT','2338')):
+                    with mock.patch.dict(os.environ, {override:value}):
+                        try:
+                            group.validate()
+                        except ValueError:
+                            pass
+                        else:
+                            raise AssertionError(f'Missed vendor endpoint collision: {override}')
+                print('PASS Z1 default TCP/UDP endpoints and reserved reply port validation')
+
+            finally:
+                group.close()
+                until(app, lambda: group.phase == 'idle')
 
             (repo / 'Makefile').write_text('sitl a8_sitl:\n\t@echo deliberate build failure\n\t@false\n')
             window.video.setCurrentIndex(0)

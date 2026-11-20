@@ -8,23 +8,67 @@
 +    e_private,
 +    e_metadata
  } track_media_kind_t;
- 
+
  typedef struct
-@@ -1331,6 +1332,10 @@
+@@ -881,16 +882,6 @@
+     return ntr;
+ }
+
+-static const unsigned char *next_dsi(const unsigned char *p, const unsigned char *end, int *bytes)
+-{
+-    if (p < end + 2)
+-    {
+-        *bytes = p[0]*256 + p[1];
+-        return p + 2;
+-    } else
+-        return NULL;
+-}
+-
+ static int append_mem(minimp4_vector_t *v, const void *mem, int bytes)
+ {
+     int i;
+@@ -966,7 +957,7 @@
+ static int write_pending_data(MP4E_mux_t *mux, track_t *tr)
+ {
+     // if have pending sample && have at least one sample in the index
+-    if (tr->pending_sample.bytes > 0 && tr->smpl.bytes >= sizeof(sample_t))
++    if (tr->pending_sample.bytes > 0 && tr->smpl.bytes >= (int)sizeof(sample_t))
+     {
+         // Complete pending sample
+         sample_t *smpl_desc;
+@@ -1026,7 +1017,7 @@
+     {
+         default_sample_duration_present = 0x000008,
+         default_sample_flags_present = 0x000020,
+-    } e;
++    };
+
+     track_t *tr = ((track_t*)mux->tracks.data) + track_num;
+
+@@ -1156,7 +1147,7 @@
+         if (!mux->sequential_mode_flag)
+         {
+             sample_t *smpl_desc;
+-            if (tr->smpl.bytes < sizeof(sample_t))
++            if (tr->smpl.bytes < (int)sizeof(sample_t))
+                 return MP4E_STATUS_NO_MEMORY; // write continuation, but there are no samples in the index
+             // Accumulate size of the continuation in the sample descriptor
+             smpl_desc = (sample_t*)(tr->smpl.data + tr->smpl.bytes) - 1;
+@@ -1330,6 +1321,10 @@
+             case e_video:
                  handler_type = MP4E_HANDLER_TYPE_VIDE;
                  handler_ascii = "VideoHandler";
-                 break;
++                break;
 +            case e_metadata:
 +                handler_type = FOUR_CHAR_INT('m', 'e', 't', 'a');
 +                handler_ascii = "CameraTelemetry";
-+                break;
+                 break;
              case e_private:
                  handler_type = MP4E_HANDLER_TYPE_GESM;
-                 break;
-@@ -1418,6 +1423,11 @@
+@@ -1418,6 +1413,11 @@
                          END_ATOM;
                      }
- 
+
 +                    if (tr->info.track_media_kind == e_metadata)
 +                    {
 +                        ATOM_FULL(FOUR_CHAR_INT('n', 'm', 'h', 'd'), 0);
@@ -33,10 +77,10 @@
                      ATOM(BOX_dinf);
                          ATOM_FULL(BOX_dref, 0);
                          WRITE_4(1); // entry_count
-@@ -1435,6 +1445,16 @@
+@@ -1435,6 +1435,16 @@
                          ATOM_FULL(BOX_stsd, 0);
                          WRITE_4(1); // entry_count;
- 
+
 +                        if (tr->info.track_media_kind == e_metadata)
 +                        {
 +                            const char *mime = "application/json";
@@ -50,8 +94,8 @@
                          if (tr->info.track_media_kind == e_audio || tr->info.track_media_kind == e_private)
                          {
                              // AudioSampleEntry() assume MP4E_HANDLER_TYPE_SOUN
-@@ -1732,13 +1752,9 @@
- 
+@@ -1732,13 +1742,9 @@
+
      if (mux->enable_fragmentation)
      {
 -        track_t *tr = ((track_t*)mux->tracks.data) + 0;
@@ -66,3 +110,52 @@
          for (ntr = 0; ntr < ntracks; ntr++)
          {
              ATOM_FULL(BOX_trex, 0);
+@@ -2404,7 +2410,7 @@
+             if (h->need_sps)
+                 goto exit_with_free;
+             h->need_idr = 0;
+-            // flow through
++            /* fall through */
+         default:
+             if (h->need_sps)
+                 goto exit_with_free;
+@@ -2445,7 +2451,7 @@
+                 if (h->need_sps)
+                     return MP4E_STATUS_BAD_ARGUMENTS;
+                 h->need_idr = 0;
+-                // flow through
++                /* fall through */
+             default:
+                 if (h->need_sps)
+                     return MP4E_STATUS_BAD_ARGUMENTS;
+@@ -2505,9 +2511,9 @@
+     uint32_t v = 0; int last_byte;
+     switch (nb)
+     {
+-    case 4: v = (v << 8) | minimp4_fgets(mp4);
+-    case 3: v = (v << 8) | minimp4_fgets(mp4);
+-    case 2: v = (v << 8) | minimp4_fgets(mp4);
++    case 4: v = (v << 8) | minimp4_fgets(mp4); /* fall through */
++    case 3: v = (v << 8) | minimp4_fgets(mp4); /* fall through */
++    case 2: v = (v << 8) | minimp4_fgets(mp4); /* fall through */
+     default:
+     case 1: v = (v << 8) | (last_byte = minimp4_fgets(mp4));
+     }
+@@ -2618,7 +2624,7 @@
+     unsigned i;
+     MP4D_track_t *tr = NULL;
+
+-    if (!mp4 || !read_callback)
++    if (!mp4 || !read_callback || file_size < 0)
+     {
+         TRACE(("\nERROR: invlaid arguments!"));
+         return 0;
+@@ -3344,7 +3350,7 @@
+         // if box is not envelope, just skip it
+         if (i == NELEM(g_envelope_box))
+         {
+-            if (payload_bytes > file_size)
++            if (payload_bytes > (uint64_t)file_size)
+             {
+                 eof_flag = 1;
+             } else

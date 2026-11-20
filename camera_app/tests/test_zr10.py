@@ -24,12 +24,12 @@ with tempfile.TemporaryDirectory() as d:
     env['CAMERA_APP_MAVLINK_TCP_PORT']=str(mavport)
     proc=subprocess.Popen([binary,'--backend','zr10','--uart',os.ttyname(slave),'--port',str(port),'--config',str(config)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
     client=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);client.settimeout(2);client.connect(('127.0.0.1',port))
-    def find_query(opcode):
+    def find_query(opcode, command=0x16):
         end=time.monotonic()+3
         while time.monotonic()<end:
             for f in read_a8_frames(master,1,.3):
                 assert f[7:10]==bytes([0x2c,0x2e,0x6b])
-                if f[10]==0x16 and f[18]==opcode:return f
+                if f[10]==command and f[18]==opcode:return f
         raise AssertionError('missing UART query '+hex(opcode))
     def find_native(sub, payload, flags=9):
         end=time.monotonic()+3
@@ -63,7 +63,8 @@ with tempfile.TemporaryDirectory() as d:
         assert len(data[8:-2])>=6 and data[11]==0
         # Configuration request from MCU is answered back to MCU, not looped.
         os.write(master,a8_frame(9,384,0x35,siyi(1,123,0x0a)))
-        frame=find_query(0x0a)
+        frame=find_query(0x0a, 0x35)
+        assert frame[1]==0x0a
         assert frame[13]&2 and len(frame[11:-2])>=16
         client.send(siyi(1,13,0x0f,b'\x02\0'));find_native(0x37,b'\x02\0',8)
         for opcode,sub,payload in [(7,6,b'\x08\xf8'),(7,6,b'\0\0'),(8,7,b'\x01'),(5,4,b'\0')]:

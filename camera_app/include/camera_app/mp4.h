@@ -11,7 +11,10 @@ struct ca_fmp4;
 typedef int (*ca_fmp4_write_fn)(void *opaque, const void *data,
                                 size_t length);
 
-/* Fragmented MP4 with per-frame telemetry SEI. Complete fragments are playable
+/* Shared recorder: APCG uses fragmented MP4 with per-frame telemetry SEI;
+ * MISB uses MPEG-TS with frame-synchronous ST 0601 KLV. The format is captured
+ * when opening; callers name files with ca_video_recording_extension().
+ * Complete fragments/transport packets are playable
  * before close; background data syncs limit buffered loss on a crash.
  * FAT/vfat recordings roll on an IDR after 4 GiB minus 64 MiB, with a hard
  * ceiling of 4 GiB minus one byte. Other filesystems (including exFAT) do not

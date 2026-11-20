@@ -5,6 +5,7 @@ import json
 import math
 import os
 import pathlib
+import random
 import re
 import socket
 import struct
@@ -21,15 +22,48 @@ from pymavlink.quaternion import Quaternion
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from video_telemetry import nals, telemetry
+from target_properties import TARGETS
 
 M = mavutil.mavlink
 LAT = -353632610
 
 
-def port(kind=socket.SOCK_STREAM):
-    with socket.socket(socket.AF_INET, kind) as sock:
+_issued = set()
+
+
+def _ephemeral_start():
+    try:
+        return int(pathlib.Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 32768
+
+
+def _candidate():
+    end = _ephemeral_start()
+    if end - 20000 >= 1000:
+        return random.randrange(20000, end)
+    # no room below the ephemeral range: let the kernel pick
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def port(kind=socket.SOCK_STREAM):
+    """A free localhost port below the kernel's ephemeral range, so outgoing connections cannot
+    take it before the simulator binds it; never the same port twice in one run."""
+    for _ in range(1000):
+        candidate = _candidate()
+        if candidate in _issued:
+            continue
+        try:
+            for k in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+                with socket.socket(socket.AF_INET, k) as sock:
+                    sock.bind(("127.0.0.1", candidate))
+        except OSError:
+            continue
+        _issued.add(candidate)
+        return candidate
+    raise RuntimeError("no free localhost port")
 
 
 def stop(process):
@@ -42,11 +76,20 @@ def stop(process):
             process.wait(timeout=5)
 
 
-def ready(path, process):
+def _log_tail(log):
+    if not log:
+        return ""
+    tail = "".join(pathlib.Path(log).read_text(errors="replace").splitlines(True)[-40:])
+    return f"; {log}:\n{tail}" if tail else ""
+
+
+def ready(path, process, log=None):
     until = time.monotonic() + 10
     while not path.exists():
-        assert process.poll() is None, process.returncode
-        assert time.monotonic() < until, path
+        if process.poll() is not None:
+            raise AssertionError(f"exited with {process.returncode} before {path.name}" + _log_tail(log))
+        if time.monotonic() >= until:
+            raise AssertionError(f"timed out waiting for {path}" + _log_tail(log))
         time.sleep(0.02)
 
 
@@ -156,7 +199,7 @@ def decode(path):
     assert result.returncode == 0 and not result.stderr, result.stderr.decode()
 
 
-def check_mp4(path, thermal=False):
+def check_mp4(path, thermal=False, visible_fov=88):
     probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-count_packets", "-show_streams", "-of", "json", str(path)]))
     assert len(probe["streams"]) == 1
     video = probe["streams"][0]
@@ -172,7 +215,7 @@ def check_mp4(path, thermal=False):
     if thermal:
         assert all(abs(r["hfov_deg"] - 24.2) < .001 for r in records)
     else:
-        assert max(r["hfov_deg"] for r in records) > 87.9
+        assert abs(max(r["hfov_deg"] for r in records) - visible_fov) < .001
         assert min(r["hfov_deg"] for r in records) < 30
     packets = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_packets", "-show_entries", "packet=pts,duration", "-of", "json", str(path)]))["packets"]
@@ -192,6 +235,8 @@ def main():
     parser.add_argument("--check-stale", action="store_true")
     parser.add_argument("--terrain", action="store_true", help="test optional real 3D terrain video (requires network/cache)")
     args = parser.parse_args()
+    target = TARGETS[args.backend]
+    wide_fov = target["lens1_fov_h"]
     if args.terrain and args.codec != "h264":
         parser.error("terrain rendering uses H.264")
     build = (args.build or REPO / "build" / ("sitl" if args.backend == "mt11" else "a8-sitl")).resolve()
@@ -208,7 +253,7 @@ def main():
                     "-t", "1", *params, "-y", str(fixture)], check=True)
     config = directory / "camera.ini"
     codec = "h265" if args.codec == "hevc" else "h264"
-    config.write_text(f"[stream.main]\nresolution = 1920x1080\ncodec = {codec}\n[stream.sub]\nresolution = 1280x720\ncodec = {codec}\n[mavlink]\nsystem_id = 0\n")
+    config.write_text(f"[video]\ntelemetry=apcg\n[stream.main]\nresolution = 1920x1080\ncodec = {codec}\n[stream.sub]\nresolution = 1280x720\ncodec = {codec}\n[recording]\nresolution = 1920x1080\n[mavlink]\nsystem_id = 0\n")
     gimbal_port, mav_port, rtsp_port = port(socket.SOCK_DGRAM), port(), port()
     camera_ready, gimbal_ready = directory / "camera.ready", directory / "gimbal.ready"
     camera_ready.unlink(missing_ok=True)
@@ -234,9 +279,9 @@ def main():
         try:
             gimbal = subprocess.Popen([sys.executable, str(REPO / "sitl/gimbal_sim.py"), "--backend", args.backend,
                                        "--port", str(gimbal_port), "--ready-file", str(gimbal_ready)], stdout=glog, stderr=subprocess.STDOUT)
-            ready(gimbal_ready, gimbal)
+            ready(gimbal_ready, gimbal, directory / "gimbal.log")
             camera = subprocess.Popen([str(build / "camera-app"), "--backend", args.backend], env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(camera_ready, camera)
+            ready(camera_ready, camera, directory / "camera.log")
             client = RTSP(rtsp_port, "video1")
             try:
                 for _, record in client.frames(3, args.codec):
@@ -244,6 +289,21 @@ def main():
             finally:
                 client.close()
             link = mavutil.mavlink_connection(f"tcp:127.0.0.1:{mav_port}", source_system=255, source_component=190)
+            # Auto system-ID discovery needs an FC heartbeat, but no position
+            # or attitude yet: those fields must remain unknown in this reply.
+            bootstrap = mavutil.mavlink_connection(f"tcp:127.0.0.1:{mav_port}", source_system=42, source_component=1)
+            try:
+                bootstrap.mav.heartbeat_send(M.MAV_TYPE_QUADROTOR, M.MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, M.MAV_STATE_ACTIVE)
+                assert link.recv_match(type="HEARTBEAT", blocking=True, timeout=3) is not None
+            finally:
+                bootstrap.close()
+            link.mav.command_long_send(42, M.MAV_COMP_ID_CAMERA, M.MAV_CMD_REQUEST_MESSAGE,
+                                       0, M.MAVLINK_MSG_ID_CAMERA_FOV_STATUS, 0, 0, 0, 0, 0, 0)
+            fov = link.recv_match(type="CAMERA_FOV_STATUS", blocking=True, timeout=3)
+            assert fov is not None and abs(fov.hfov - wide_fov) < .001, fov
+            assert abs(fov.vfov - math.degrees(2 * math.atan(math.tan(math.radians(wide_fov) / 2) * 9 / 16))) < .001
+            assert (fov.lat_camera, fov.lon_camera, fov.alt_camera) == (2147483647,) * 3
+            assert all(math.isnan(v) for v in fov.q), fov
             def send_telemetry():
                 # A separate connection avoids concurrent writes on the GCS socket.
                 fc = mavutil.mavlink_connection(f"tcp:127.0.0.1:{mav_port}", source_system=42, source_component=1)
@@ -304,7 +364,7 @@ def main():
                 assert all(r['velocity'] is not None for r in records)
                 if stream == "video1":
                     assert {r["position"]["lat_e7"] for r in records} == {LAT, LAT + 100}
-                expected_fov = 24.2 if args.backend == "mt11" and stream == "video2" else 88
+                expected_fov = 24.2 if args.backend == "mt11" and stream == "video2" else wide_fov
                 assert all(abs(r["hfov_deg"] - expected_fov) < .001 for r in records)
                 expected_size = (1920, 1080) if stream == 'video1' else (1280, 720)
                 assert video_size(raw_path) == expected_size
@@ -348,22 +408,34 @@ def main():
                     assert message.framerate == (20 if args.terrain else 25 if args.backend == 'a8' else 30), message
                     assert message.hfov == int(expected_fov + .5), (message.to_dict(), expected_fov)
                     assert bool(message.flags & M.VIDEO_STREAM_STATUS_FLAGS_THERMAL) == thermal
+                if stream_id == 1:
+                    link.mav.command_long_send(42, M.MAV_COMP_ID_CAMERA, M.MAV_CMD_REQUEST_MESSAGE,
+                                               0, M.MAVLINK_MSG_ID_CAMERA_FOV_STATUS, 0, 0, 0, 0, 0, 0)
+                    message = link.recv_match(type="CAMERA_FOV_STATUS", blocking=True, timeout=3)
+                    assert message is not None
+                    aspect = 640 / 512 if thermal else expected_size[0] / expected_size[1]
+                    expected_vfov = math.degrees(2 * math.atan(math.tan(math.radians(expected_fov) / 2) / aspect))
+                    assert abs(message.hfov - expected_fov) < .001, message
+                    assert abs(message.vfov - expected_vfov) < .001, message
+                    assert message.lat_camera == latitude[0] and message.lon_camera == 1491652300, message
+                    assert message.alt_camera == 620250, message
+                    assert (message.lat_image, message.lon_image, message.alt_image) == (2147483647,) * 3
+                    assert abs(sum(v*v for v in message.q) - 1) < 1e-5, message
 
             for zoom in (2.0, 4.0, 5.0, 1.0):
                 command(link, M.MAV_CMD_SET_CAMERA_ZOOM, 2, (zoom - 1) / (.09 if args.backend == "mt11" else .05))
-                # MT11 quantizes E5739 optical zoom in tenths after the 3.44x
-                # wide/tele crossover. A8 uses a continuous digital crop.
-                magnification = (3.44 * (int(zoom * 10 / 3.44 + .0001) / 10)
-                                 if args.backend == "mt11" and zoom > 3.44 else zoom)
-                visible_fov = math.degrees(2 * math.atan(math.tan(math.radians(88) / 2) / magnification))
+                # MAVLink zoom operates on the selected RGB lens. The initial
+                # wide lens keeps its digital crop across the tele crossover.
+                magnification = zoom
+                visible_fov = math.degrees(2 * math.atan(math.tan(math.radians(wide_fov) / 2) / magnification))
                 for stream_id in (1, 2):
                     expected_fov = 24.2 if args.backend == "mt11" and stream_id == 2 else visible_fov
                     check_stream_fov(stream_id, expected_fov, args.backend == "mt11" and stream_id == 2)
                 print(f"PASS {args.backend} {args.codec} zoom {zoom:g}x: video/MAVLink FOV, visible={visible_fov:.4f} degrees", flush=True)
             if args.backend == "mt11":
                 # Selecting thermal as main also selects the visible tele lens.
-                # Its 1x optical setting still includes the 3.44x crossover.
-                tele_fov = math.degrees(2 * math.atan(math.tan(math.radians(88) / 2) / 3.44))
+                # It has an independent FOV calibration, not a scaled wide-lens FOV.
+                tele_fov = target["lens2_fov_h"]
                 command(link, M.MAV_CMD_SET_CAMERA_SOURCE, 0, 2)
                 check_stream_fov(1, 24.2, True)
                 check_stream_fov(2, tele_fov, False)
@@ -376,7 +448,8 @@ def main():
                 recordings = list(record_root.glob("*.mp4"))
                 assert len(recordings) == (2 if args.backend == "mt11" else 1)
                 for path in recordings:
-                    check_mp4(path, thermal=args.backend == "mt11" and path.name.startswith("SITL_1_"))
+                    check_mp4(path, thermal=args.backend == "mt11" and path.name.startswith("SITL_1_"),
+                              visible_fov=wide_fov)
             for message_id in (M.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, M.MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE):
                 requests = [(t, m) for t, m in interval_requests if int(m.param1) == message_id]
                 assert len(requests) >= 2, (message_id, interval_requests)

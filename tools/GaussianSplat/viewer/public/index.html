@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gaussian splat viewer</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <a
+      class="project"
+      href="https://github.com/ArduPilot/AP_CameraGimbal"
+      title="AP_CameraGimbal on GitHub"
+      ><img class="project-icon" alt="" width="32" height="32" /><span>AP_CameraGimbal</span></a
+    >
+    <div id="open-panel" class="open-panel" hidden>
+      <h1>Gaussian splat viewer</h1>
+      <p>
+        Open a 3D Gaussian splat (.ply, .spz, .splat, .ksplat or .sog) to view it in your browser.
+        The file is read on this device and never uploaded; rendering uses your own GPU.
+      </p>
+      <label class="button"
+        >Choose splat file <input id="file" type="file" multiple accept=".ply,.spz,.splat,.ksplat,.sog,.json"
+      /></label>
+      <p class="note">
+        Or drop a file onto this page. Thermal splats from ArduPilot's GaussianSplat tools show
+        temperatures; other splats show in colour. Their .ply and .spz files carry their own
+        metadata; for an older .spz, choose or drop its .json metadata with it. A file on a web
+        server that allows cross-origin requests can be linked as
+        <code>?url=https://…/splat.spz</code>; an older one's metadata is found beside it.
+      </p>
+      <h2>Samples</h2>
+      <ul class="samples">
+        <li>
+          <a href="?url=samples/log80-run13.spz&amp;meta=samples/log80-run13.json"
+            >Thermal: night orbit of a fire under forest canopy</a
+          >
+          <span class="note">11 MB</span>
+        </li>
+        <li>
+          <a
+            href="?url=https%3A%2F%2Ffirevps.tridgell.net%2Ffiredata%2Fsplats%2F2025-10-16%2Fflight2%2Frun1%2Fsplat.spz"
+            >Fixed wing thermal daytime orbit</a
+          >
+          <span class="note">11 MB</span>
+        </li>
+        <li>
+          <a href="?url=samples/randy-run2.spz&amp;meta=samples/randy-run2.json"
+            >RGB: a house seen from a multicopter</a
+          >
+          <span class="note">35 MB</span>
+        </li>
+      </ul>
+      <p class="note">
+        Splats are made with the
+        <a href="https://github.com/ArduPilot/AP_CameraGimbal/tree/master/tools/GaussianSplat"
+          >GaussianSplat tools</a
+        >
+        in AP_CameraGimbal; more at
+        <a href="https://uav.tridgell.net/Splats/">uav.tridgell.net/Splats</a>.
+      </p>
+    </div>
+    <div id="panel" hidden>
+      <h1 id="title"></h1>
+      <p id="description"></p>
+      <label hidden
+        >Up axis
+        <select id="up">
+          <option value="-y">−Y (most 3DGS tools)</option>
+          <option value="y">+Y</option>
+          <option value="z">+Z</option>
+        </select></label
+      >
+      <div id="thermal-controls" hidden>
+        <label
+          >Colormap
+          <select id="cmap"></select
+        ></label>
+        <label><input id="auto" type="checkbox" checked /> Auto range</label>
+        <label>Low <input id="lo" type="number" step="0.5" /> °C</label>
+        <label>High <input id="hi" type="number" step="0.5" /> °C</label>
+        <p id="rangeinfo" class="note"></p>
+        <p id="stats"></p>
+        <p id="hover"></p>
+        <p class="note">
+          Apparent temperature from blended values, not calibrated surface temperature.
+        </p>
+      </div>
+      <button id="reset" type="button">Reset view</button>
+      <label class="button small"
+        >Open another <input id="file2" type="file" multiple accept=".ply,.spz,.splat,.ksplat,.sog,.json"
+      /></label>
+      <p class="note">
+        Drag to orbit, right-drag to pan, scroll or + / − to zoom; on a touch screen one finger
+        orbits and two pinch or pan. Rendered on your device.
+      </p>
+    </div>
+    <p class="credits"><a href="LICENSES.txt">Spark and three.js licences</a></p>
+    <p id="status" hidden></p>
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>

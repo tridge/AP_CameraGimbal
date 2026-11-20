@@ -278,11 +278,12 @@ def main():
                 notice = save(mavlink_tcp_port='14551')
                 assert 'Restart to apply' in notice, notice
                 good = config.read_text()
-                config.write_text(good.replace('brightness = "75"', 'brightness = "999"'))
+                assert 'brightness = 75' in good, good
+                config.write_text(good.replace('brightness = 75', 'brightness = 999'))
                 wait_for(lambda: 'Could not' in page() or 'invalid' in page())
                 assert read(link, 'IMG_BRIGHTNESS') == 75, 'invalid config changed active settings'
                 replacement = config.with_suffix('.new')
-                replacement.write_text(good.replace('brightness = "75"', 'brightness = "82"'))
+                replacement.write_text(good.replace('brightness = 75', 'brightness = 82'))
                 replacement.replace(config)
                 wait_for(lambda: read(link, 'IMG_BRIGHTNESS') == 82)
                 assert camera.poll() is None and camera.pid == pid

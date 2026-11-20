@@ -1,0 +1,186 @@
+#ifndef APCAM_TARGET_ZT30_H
+#define APCAM_TARGET_ZT30_H
+
+/* Target properties shared by firmware, web UI and generated SITL data.
+ * Native builds narrow unqualified capabilities below. */
+#define APCAM_NAME "zt30"
+#define APCAM_PRODUCT_NAME "ZT30"
+#define APCAM_MODEL_NAME "ZT30"
+#define APCAM_MANUFACTURER "SIYI"
+#define APCAM_NUM_LENSES 3
+#define APCAM_NUM_STREAMS 2
+#define APCAM_STREAM1_LENS_MASK 3
+#define APCAM_STREAM2_LENS_MASK 4
+#define APCAM_HAVE_PHOTO 1
+#define APCAM_HAVE_ZOOM 1
+#define APCAM_NUM_RECORDING_CHANNELS 2
+#define APCAM_VENDOR_PROTOCOL APCAM_PROTOCOL_SIYI
+#define APCAM_HAVE_THERMAL 1
+#define APCAM_HAVE_LIDAR 1
+#define APCAM_ZOOM_NATIVE_RATE 0
+#define APCAM_ZOOM_CONTROL_MAX APCAM_ZOOM_MAX
+#define APCAM_WEB_CONTROL_MAVLINK 0
+#define APCAM_HAVE_OVERLAY_RECORDING_SELECT 1
+#define APCAM_HAVE_GIMBAL_RATES 1
+#define APCAM_SUPPRESS_DUPLICATE_ANGLES 1
+#define APCAM_WEB_CENTER_COMMAND 3
+#define APCAM_HAVE_OPTICAL_ZOOM 1
+#define APCAM_HAVE_FOCUS 1
+#define APCAM_HAVE_IMAGE_CONTROLS 1
+/* No qualified Linux external UART; MCU forwarding awaits bench testing. */
+#define APCAM_HAVE_EXTERNAL_UART 0
+#define APCAM_HAVE_SSH_KEYS 0
+#define APCAM_HAVE_SOC_TEMPERATURE 1
+#ifndef SOC_TEMPERATURE_PATH
+#define SOC_TEMPERATURE_PATH "/sys/devices/virtual/mstar/msys/TEMP_R"
+#endif
+#define SOC_TEMPERATURE_LABELLED_CELSIUS 1
+#define APCAM_VENDOR_PORT 37260
+#define APCAM_WEB_PORT 80
+#define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
+#define APCAM_LENS1_NAME "Wide RGB"
+/* ZT30 user manual v1.3, pp17-19. RGB FOVs are nominal specifications.
+ * Endpoint interpolation between nominal zoom factors is provisional. */
+#define APCAM_LENS1_FOV_H 84.5f
+#define APCAM_LENS1_FOV_H_TELE 0.0f
+#define APCAM_LENS1_FOV_MODEL APCAM_FOV_FOCAL_LENGTH
+#define APCAM_LENS1_OPTICAL_ZOOM_MAX 1
+#define APCAM_LENS1_WIDTH 2560
+#define APCAM_LENS1_HEIGHT 1440
+#define APCAM_ZOOM_MAX 180.0f
+#define APCAM_FRAME_RATE 30
+#define APCAM_THERMAL_FRAME_RATE 15
+#define APCAM_THERMAL_STREAM_WIDTH 640
+#define APCAM_THERMAL_STREAM_HEIGHT 512
+#define APCAM_MAIN_RESOLUTIONS 15
+#define APCAM_SUB_RESOLUTIONS 15
+#define APCAM_RECORDING_RESOLUTIONS 15
+#define APCAM_STREAM_CODECS 3
+#define APCAM_DEFAULT_MAIN_RESOLUTION 0
+#define APCAM_DEFAULT_SUB_RESOLUTION 0
+#define APCAM_DEFAULT_RECORDING_RESOLUTION APCAM_RES_2160P
+#define APCAM_DEFAULT_SYSTEM_ID 0
+#define APCAM_DEFAULT_POSITION_TARGETING 1
+#define APCAM_DEFAULT_ORIENTATION 0
+#define APCAM_DEFAULT_PHOTO_SCOPE 1
+#define APCAM_DEFAULT_TIMEZONE "GMT"
+/* vendor-compatible RTSP path aliases for /video1 and /video2 */
+#define APCAM_DEFAULT_MAIN_ALIAS ""
+#define APCAM_DEFAULT_SUB_ALIAS ""
+#define APCAM_GIMBAL_PITCH_MIN -90.0f
+#define APCAM_GIMBAL_PITCH_MAX 25.0f
+#define APCAM_GIMBAL_YAW_CONTINUOUS 1
+#define APCAM_GIMBAL_YAW_MIN -180.0f
+#define APCAM_GIMBAL_YAW_MAX 180.0f
+#define APCAM_GIMBAL_RATE_MAX 60.0f
+/* Nominal full scale outside the bench calibration; curve interpolation is
+ * used for manual motion. Upright native MCU, 12 October 2026: pose slopes
+ * after acceleration, signed raw4..45. Values beyond45 are unqualified;
+ * native DEV caps raw commands at45 (about60deg/s). Raw4 is the dead zone. */
+#define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
+#define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f
+#define APCAM_VENDOR_YAW_RATE_CURVE {-45, -59.6, -30, -38.2, -25, -30.8, -20, -23.3, -15, -15.9, -10, -8.2, -6, -2.6, -5, -1.3, -4, 0, 4, 0, 5, 1.6, 6, 3.0, 10, 8.3, 15, 16.4, 20, 23.5, 25, 31.1, 30, 38.6, 45, 59.5}
+#define APCAM_VENDOR_PITCH_RATE_CURVE {-45, -59.4, -30, -37.7, -25, -30.4, -20, -23.3, -15, -16.0, -10, -8.6, -6, -2.8, -5, -1.3, -4, 0, 4, 0, 5, 1.3, 6, 2.8, 10, 8.6, 15, 15.9, 20, 22.9, 25, 30.5, 30, 38.1, 45, 59.6}
+#define APCAM_SIM_YAW_RATE_CURVE {-45, -59.6, -30, -38.2, -25, -30.8, -20, -23.3, -15, -15.9, -10, -8.2, -6, -2.6, -5, -1.3, -4, 0, 4, 0, 5, 1.6, 6, 3.0, 10, 8.3, 15, 16.4, 20, 23.5, 25, 31.1, 30, 38.6, 45, 59.5}
+#define APCAM_SIM_PITCH_RATE_CURVE {-45, -59.4, -30, -37.7, -25, -30.4, -20, -23.3, -15, -16.0, -10, -8.6, -6, -2.8, -5, -1.3, -4, 0, 4, 0, 5, 1.3, 6, 2.8, 10, 8.6, 15, 15.9, 20, 22.9, 25, 30.5, 30, 38.1, 45, 59.6}
+#define APCAM_ZOOM_SELECTS_LENS 0
+#define APCAM_DEFAULT_RGB_LENS 1
+#define APCAM_LENS1_DIGITAL_ZOOM_MAX 1.0f
+
+#define APCAM_LENS2_TYPE APCAM_LENS_TYPE_RGB
+#define APCAM_LENS2_NAME "Zoom RGB"
+#define APCAM_LENS2_FOV_H 58.1f
+#define APCAM_LENS2_FOV_H_TELE 2.14f
+#define APCAM_LENS2_FOV_MODEL APCAM_FOV_ENDPOINTS
+#define APCAM_LENS2_DIGITAL_ZOOM_MAX 6.0f
+#define APCAM_LENS2_BASE_MAGNIFICATION 1.0f
+#define APCAM_LENS2_OPTICAL_ZOOM_MAX 30.0f
+#define APCAM_LENS2_WIDTH 3840
+#define APCAM_LENS2_HEIGHT 2160
+#define APCAM_LENS3_TYPE APCAM_LENS_TYPE_THERMAL
+#define APCAM_LENS3_NAME "Thermal"
+/* Assumed equal to MT11 at the user's request; not measured on ZT30. */
+#define APCAM_LENS3_FOV_H 24.2f
+#define APCAM_LENS3_DIGITAL_ZOOM_MAX 2.0f
+#define APCAM_LENS3_OPTICAL_ZOOM_MAX 1
+#define APCAM_LENS3_WIDTH 640
+#define APCAM_LENS3_HEIGHT 512
+/* Upright bench: native positive yaw rates give negative SDK yaw feedback.
+ * Keep the shared right-positive coordinates; inverted mounting is unqualified. */
+#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_FEEDBACK_INVERTED_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_RATE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_RATE_COMMAND_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
+
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+/* Native builds hide unsupported controls. DEV adds the qualified fixed
+ * thermal stream; the bounded RGB-only RAM probe retains one stream. */
+#ifdef CAMERA_APP_ZT30_RAM
+#undef APCAM_NUM_STREAMS
+#define APCAM_NUM_STREAMS 1
+#endif
+#undef APCAM_HAVE_THERMAL
+#define APCAM_HAVE_THERMAL 0
+#ifdef CAMERA_APP_ZT30_DEV
+#define APCAM_HAVE_THERMAL_VIDEO 1
+#define APCAM_HAVE_THERMAL_PALETTE 1
+#endif
+#ifdef CAMERA_APP_ZT30_RAM
+#undef APCAM_STREAM1_LENS_MASK
+#define APCAM_STREAM1_LENS_MASK 2
+#endif
+#ifdef CAMERA_APP_ZT30_RAM
+#undef APCAM_HAVE_PHOTO
+#define APCAM_HAVE_PHOTO 0
+#else
+#define APCAM_HAVE_RAW_THERMAL 1
+#endif
+#undef APCAM_HAVE_ZOOM
+#define APCAM_HAVE_ZOOM 0
+#undef APCAM_HAVE_FOCUS
+#define APCAM_HAVE_FOCUS 0
+#undef APCAM_HAVE_OPTICAL_ZOOM
+#define APCAM_HAVE_OPTICAL_ZOOM 0
+#ifdef CAMERA_APP_ZT30_RAM
+#undef APCAM_HAVE_IMAGE_CONTROLS
+#define APCAM_HAVE_IMAGE_CONTROLS 0
+#endif
+#undef APCAM_HAVE_LIDAR
+#define APCAM_HAVE_LIDAR 0
+#define APCAM_GIMBAL_OPTIONAL 1
+#ifdef CAMERA_APP_ZT30_RAM
+#define APCAM_HAVE_NETWORK_CONFIG 0
+#endif
+#endif
+
+/* Platform paths are consumed only by the web service. */
+#ifdef APCAM_WEB_BUILD
+#ifdef ZT30_WEB_NATIVE
+#define FIRMWARE_PREFIX "ZT30_AP_"
+#define FIRMWARE_SUFFIX ".apbundle"
+#define WEB_HAVE_FIRMWARE_UPLOAD 1
+#else
+#define FIRMWARE_PREFIX "ZT30_FW_"
+#define WEB_HAVE_FIRMWARE_UPLOAD 0
+#endif
+#define APP_SELECTION_DIR APP_DIR
+#ifdef ZT30_WEB_DEV
+#define APP_STORAGE_PATH APP_DIR
+#else
+#define APP_STORAGE_PATH "/customer"
+#endif
+#endif
+
+#endif

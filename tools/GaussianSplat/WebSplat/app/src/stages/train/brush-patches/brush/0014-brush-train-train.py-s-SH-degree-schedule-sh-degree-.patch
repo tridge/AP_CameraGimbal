@@ -1,0 +1,70 @@
+From 6b642b8b5b522999009cdf8492ca51f52952433f Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Mon, 9 Nov 2026 05:12:22 +1100
+Subject: [PATCH] brush-train: train.py's SH degree schedule
+ (--sh-degree-interval)
+
+---
+ crates/brush-train/src/config.rs |  6 ++++++
+ crates/brush-train/src/train.rs  | 26 ++++++++++++++++++++++----
+ 2 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index 5bf9ac3..00af1fc 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -26,6 +26,12 @@ pub struct TrainConfig {
+     #[serde(default)]
+     pub lr_mean_absolute: bool,
+ 
++    /// Raise the trained SH degree by one every N steps, from 0 to the splats' degree (train.py's
++    /// `min(step // N, sh_degree)`); 0 trains every degree from the start.
++    #[arg(long, help_heading = "Training options", default_value = "0")]
++    #[serde(default)]
++    pub sh_degree_interval: u32,
++
+     /// How much noise to add to the mean parameters of low opacity gaussians.
+     #[arg(long, help_heading = "Training options", default_value = "50.0")]
+     pub mean_noise_weight: f32,
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index 1c5d97a..13b3bed 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -226,12 +226,30 @@ impl SplatTrainer {
+     pub async fn step(&mut self, batch: SceneBatch, splats: Splats) -> (Splats, TrainStepStats) {
+         let mut splats = splats;
+ 
+-        // Track max SH degree from the first splats we see.
+-        if self.step_count == 0 {
+-            self.max_sh_degree = splats.sh_degree();
+-        }
++        // max SH degree of the splats (a resumed run starts with a nonzero step count)
++        self.max_sh_degree = self.max_sh_degree.max(splats.sh_degree());
+         self.step_count += 1;
+ 
++        // SH schedule: bands above the current degree are held at zero, with their Adam moments,
++        // so they are unused until enabled (as train.py, where they get no gradient)
++        let interval = self.config.sh_degree_interval;
++        if interval > 0 {
++            let degree = ((self.step_count - 1) / interval).min(self.max_sh_degree);
++            if degree < self.max_sh_degree {
++                let total = sh_coeffs_for_degree(self.max_sh_degree) as usize;
++                let used = sh_coeffs_for_degree(degree) as usize;
++                let mask: Vec<f32> = (0..total).map(|k| if k < used { 1.0 } else { 0.0 }).collect();
++                let mask = Tensor::<1>::from_floats(mask.as_slice(), &splats.device().inner())
++                    .reshape([1, total as i32, 1]);
++                splats.sh_coeffs = splats
++                    .sh_coeffs
++                    .map(|t| Tensor::from_inner(t.inner() * mask.clone()).require_grad());
++                if let Some(optim) = self.optim.as_mut() {
++                    optim.sh_coeffs.map_momentum(|m| m * mask.clone());
++                }
++            }
++        }
++
+         let [img_h, img_w] = batch.img_size();
+         let camera = batch.camera;
+ 
+-- 
+2.53.0
+

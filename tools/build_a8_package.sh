@@ -14,6 +14,7 @@ usage()
 
 [ "$#" -eq 9 ] || usage
 
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 platform=$1
 output=$2
 camera_app=$3
@@ -61,6 +62,7 @@ trap 'rm -rf "$work"' EXIT
 
 tree=$work/customer
 mkdir -p "$tree/bin" "$tree/camera-app" "$tree/config"
+cp -R "$root/web/webroot" "$tree/camera-app/webroot"
 # The retained boot script loads these modules from the customer partition.
 cp -a "$platform/modules" "$tree/modules"
 install -m 0644 "$platform/8836_imx678_v6.bin" "$tree/8836_imx678_v6.bin"
@@ -99,17 +101,24 @@ mkfs.jffs2 -U -r "$tree" -o "$work/customer.jffs2" -e "$erase_size" -l \
     exit 1
 }
 
-# 16 KiB U-Boot script, padded with 0xff like the vendor image
-{
-    cat "$upgrade_script"
-    tr '\0' '\377' </dev/zero | head -c "$script_size"
-} | head -c "$script_size" >"$work/script.bin"
 grep -q '^% <- this is end of script symbol' "$upgrade_script" || {
     echo "upgrade script lacks the end-of-script marker" >&2
     exit 1
 }
 [ "$(wc -c <"$upgrade_script")" -lt "$script_size" ] || {
     echo "upgrade script is too long" >&2
+    exit 1
+}
+
+# Generate only the required padding. An unbounded producer feeding head
+# caused harmless but misleading "Broken pipe" errors during valid builds.
+script_bytes=$(wc -c <"$upgrade_script")
+{
+    cat "$upgrade_script"
+    head -c "$((script_size - script_bytes))" /dev/zero | tr '\0' '\377'
+} >"$work/script.bin"
+[ "$(wc -c <"$work/script.bin")" -eq "$script_size" ] || {
+    echo "failed to pad the upgrade script" >&2
     exit 1
 }
 

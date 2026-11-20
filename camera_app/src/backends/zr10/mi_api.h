@@ -1,4 +1,5 @@
 #pragma once
+#include "apcam/compiler.h"
 #include "mi/star/i6_sys.h"
 #include "mi/star/i6_snr.h"
 #include "mi/star/i6_vif.h"
@@ -11,18 +12,18 @@
 typedef struct { i6_vif_dev base; unsigned multiDevMap; } zr10_vif_dev;
 #if defined(__arm__)
 /* Sizes/offsets checked against the packaged ARM library wrappers. */
-_Static_assert(sizeof(i6_snr_pad)==52,"sensor pad ABI");
-_Static_assert(sizeof(i6_snr_plane)==72,"sensor plane ABI");
-_Static_assert(sizeof(i6_snr_res)==52,"sensor resolution ABI");
-_Static_assert(sizeof(zr10_vif_dev)==52 && offsetof(zr10_vif_dev,multiDevMap)==48,"ZR10 VIF device ABI");
-_Static_assert(sizeof(i6_vif_port)==32,"VIF port ABI");
-_Static_assert(sizeof(i6_vpe_chn)==108 && offsetof(i6_vpe_chn,chnPort)==104,"VPE channel ABI");
-_Static_assert(sizeof(i6_vpe_para)==28,"VPE parameters ABI");
-_Static_assert(sizeof(i6_vpe_port)==16,"VPE port ABI");
-_Static_assert(sizeof(i6_venc_chn)==76,"VENC channel ABI");
-_Static_assert(sizeof(i6_venc_stat)==40,"VENC status ABI");
-_Static_assert(sizeof(i6_venc_strm)==72,"VENC stream ABI");
-_Static_assert(sizeof(i6_venc_pack)==168 && offsetof(i6_venc_pack,offset)==32,"VENC pack ABI");
+APC_STATIC_ASSERT(sizeof(i6_snr_pad)==52,"sensor pad ABI");
+APC_STATIC_ASSERT(sizeof(i6_snr_plane)==72,"sensor plane ABI");
+APC_STATIC_ASSERT(sizeof(i6_snr_res)==52,"sensor resolution ABI");
+APC_STATIC_ASSERT(sizeof(zr10_vif_dev)==52 && offsetof(zr10_vif_dev,multiDevMap)==48,"ZR10 VIF device ABI");
+APC_STATIC_ASSERT(sizeof(i6_vif_port)==32,"VIF port ABI");
+APC_STATIC_ASSERT(sizeof(i6_vpe_chn)==108 && offsetof(i6_vpe_chn,chnPort)==104,"VPE channel ABI");
+APC_STATIC_ASSERT(sizeof(i6_vpe_para)==28,"VPE parameters ABI");
+APC_STATIC_ASSERT(sizeof(i6_vpe_port)==16,"VPE port ABI");
+APC_STATIC_ASSERT(sizeof(i6_venc_chn)==76,"VENC channel ABI");
+APC_STATIC_ASSERT(sizeof(i6_venc_stat)==40,"VENC status ABI");
+APC_STATIC_ASSERT(sizeof(i6_venc_strm)==72,"VENC stream ABI");
+APC_STATIC_ASSERT(sizeof(i6_venc_pack)==168 && offsetof(i6_venc_pack,offset)==32,"VENC pack ABI");
 #endif
 
 /* Deliberately load only the entry points actually exercised. */

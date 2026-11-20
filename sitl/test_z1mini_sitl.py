@@ -47,12 +47,14 @@ def main():
     build = args.build.resolve(); runtime = build/'runtime'
     config = configparser.ConfigParser()
     config.read(runtime/'app/camera.ini')
+    if not config.has_section('video'): config.add_section('video')
+    config['video']['telemetry'] = 'apcg'  # This test checks MP4 recording compatibility.
     config['recording']['resolution'] = '3840x2160'
     config['recording']['autorecord'] = 'false'
     config['mount']['orientation'] = args.orientation
     with (runtime/'app/camera.ini').open('w') as f: config.write(f)
     camera_port, mav_port, web_port = [reserve_port(socket.SOCK_STREAM) for _ in range(3)]
-    rtsp_port = reserve_port(socket.SOCK_STREAM)
+    rtsp_port = reserve_port(socket.SOCK_STREAM, span=2)
     ready = runtime/'run/z1-gimbal.ready'
     ready.unlink(missing_ok=True)
     camera_ready = runtime/'run/camera-app.ready'
@@ -86,7 +88,12 @@ def main():
             assert camera.poll() is None, (runtime/'run/camera-test.log').read_text()
             time.sleep(.1)
         assert camera_ready.exists()
-        link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mav_port}', source_system=255)
+        link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mav_port}', source_system=42, source_component=1)
+        # A fresh camera waits for a flight controller before selecting its
+        # automatic system ID. Do not depend on a previously saved fixed ID.
+        link.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_FIXED_WING,
+                                mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, 4)
+        link.mav.srcSystem, link.mav.srcComponent = 255, 190
         link.mav.command_long_send(0, 100, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
                                    mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_INFORMATION, 0,0,0,0,0,0)
         info = link.recv_match(type='CAMERA_INFORMATION', blocking=True, timeout=5)
@@ -131,10 +138,17 @@ def main():
         newest = max(paths, key=lambda p:p.stat().st_mtime)
         info = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(newest)]))['streams'][0]
         assert (info['width'],info['height']) == (3840,2160), info
-        start([str(build/'z1mini-web'), '-p', str(web_port)], 'web-test.log', env)
-        time.sleep(.3)
-        with web_request(web_port,'/live/attitude.json') as response:
-            attitude = json.load(response)
+        web = start([str(build/'z1mini-web'), '-p', str(web_port)], 'web-test.log', env)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with web_request(web_port,'/live/attitude.json') as response:
+                    attitude = json.load(response)
+                break
+            except OSError:
+                if web.poll() is not None or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.05)
         assert abs(attitude['yaw_deg'] - 15) < .5 and abs(attitude['pitch_deg'] + 35) < .5, attitude
         with web_request(web_port,'/parameters') as response:
             page = response.read()

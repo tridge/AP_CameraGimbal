@@ -1,0 +1,44 @@
+"""Thermal colormaps as 256x3 float lookup tables in 0..1."""
+import numpy as np
+
+_STOPS = {
+    'ironbow': [(0.0, (0, 0, 0)), (0.15, (32, 0, 140)), (0.35, (145, 0, 155)), (0.55, (225, 60, 30)),
+                (0.75, (250, 160, 0)), (0.9, (255, 225, 60)), (1.0, (255, 255, 255))],
+    'whitehot': [(0.0, (0, 0, 0)), (1.0, (255, 255, 255))],
+    'blackhot': [(0.0, (255, 255, 255)), (1.0, (0, 0, 0))],
+    'inferno': [(0.0, (0, 0, 4)), (0.25, (87, 16, 110)), (0.5, (188, 55, 84)), (0.75, (249, 142, 9)),
+                (1.0, (252, 255, 164))],
+    'rainbow': [(0.0, (0, 0, 128)), (0.2, (0, 0, 255)), (0.4, (0, 255, 255)), (0.6, (255, 255, 0)),
+                (0.8, (255, 0, 0)), (1.0, (255, 255, 255))],
+    # the colour ramp of the video viewer's GloryHot; viewers draw values below the threshold in grey
+    'gloryhot': [(0.0, (20, 0, 200)), (0.2, (0, 150, 255)), (0.4, (0, 220, 120)), (0.6, (255, 235, 0)),
+                 (0.8, (255, 110, 0)), (1.0, (255, 0, 0))],
+}
+
+# colormaps that show values below the colour range in grey
+GREY_BELOW = {'gloryhot'}
+
+NAMES = list(_STOPS)
+
+
+def colormap_lut(name):
+    if name not in _STOPS:
+        raise ValueError('unknown colormap %s (choose from %s)' % (name, ', '.join(NAMES)))
+    stops = _STOPS[name]
+    x = np.linspace(0, 1, 256)
+    pos = [s[0] for s in stops]
+    return np.stack([np.interp(x, pos, [s[1][c] / 255 for s in stops]) for c in range(3)], axis=1)
+
+
+def lut_json():
+    """All colormaps as JSON for the browser viewer (viewer/public/colormaps.json)."""
+    import json
+    return json.dumps({n: np.round(colormap_lut(n), 4).tolist() for n in NAMES})
+
+
+if __name__ == '__main__':
+    import sys
+    if sys.argv[1:2] != ['--json'] or len(sys.argv) != 3:
+        sys.exit('usage: colormaps.py --json OUT.json')
+    with open(sys.argv[2], 'w') as f:
+        f.write(lut_json())

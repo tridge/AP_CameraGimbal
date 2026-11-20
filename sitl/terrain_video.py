@@ -30,6 +30,15 @@ def camera_vectors(roll, pitch, yaw):
             (sr * cy - cr * sp * sy, -sr * sy - cr * sp * cy, cr * cp))
 
 
+def set_camera_fov(camera, hfov, output_aspect, thermal_aspect=None):
+    # The MT11 stretches its 5:4 thermal sensor to a 16:9 encoded image.
+    # Preserve the sensor's rays and let the viewport stretch the pixels.
+    aspect = thermal_aspect if thermal_aspect is not None else output_aspect
+    camera.SetUseExplicitAspectRatio(thermal_aspect is not None)
+    camera.SetExplicitAspectRatio(aspect)
+    camera.SetViewAngle(math.degrees(2 * math.atan(math.tan(math.radians(hfov) / 2) / aspect)))
+
+
 def env_int(name, default, minimum, maximum):
     value = int(os.environ.get(name, default))
     if not minimum <= value <= maximum:
@@ -39,14 +48,14 @@ def env_int(name, default, minimum, maximum):
 
 def dependencies(terrain_mode=True):
     # Optional imports stay out of the ordinary SITL build and launcher.
-    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose, ImageControls
+    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose, ImageControls, apply_overlay
     import av
     import numpy as np
     import cv2
     if __package__:
-        from .image_controls import ImageControls
+        from .image_controls import ImageControls, apply_overlay
     else:
-        from image_controls import ImageControls
+        from image_controls import ImageControls, apply_overlay
     cv2.setNumThreads(1)  # encoders already run in parallel; avoid CPU oversubscription
     if not terrain_mode:
         return
@@ -220,7 +229,10 @@ class PosePredictor:
             self.history[key] = (stamp, angles.copy(), rates)
         rates = rates.copy()
         # AUTOPILOT_STATE supplies earth-frame yaw rate. ATTITUDE fallback is
-        # converted from body rates by the MAVLink receiver.
+        # converted from body rates by the MAVLink receiver. Gimbal metadata
+        # carries the backend's vehicle-relative yaw rate; prefer it to noisy
+        # differences of quantised feedback angles. Legacy records still use
+        # the finite-difference estimate above.
         yaw_rate = sample.get('yaw_rate_rad_s')
         if isinstance(yaw_rate, (int, float)) and math.isfinite(yaw_rate):
             rates[2] = yaw_rate
@@ -273,6 +285,7 @@ class PosePredictor:
         else:
             self.filters.pop('position', None)
         vehicle = self.angles('vehicle', record['vehicle_attitude'], now, horizon)
+        self.vehicle_angles = vehicle.copy()
         gimbal = self.angles('gimbal', record['gimbal_attitude'], now, horizon)
         return (lat, lon, alt, math.degrees(gimbal[0]), math.degrees(gimbal[1]),
                 math.degrees(gimbal[2] + vehicle[2]) % 360)
@@ -290,7 +303,7 @@ class Scene:
         self.window.SetOffScreenRendering(1)
         self.window.SetMultiSamples(0)
         self.window.AddRenderer(self.ren)
-        self.window_size = (max(w for w, _ in sizes), max(h for _, h in sizes))
+        self.window_size = (max(640, max(w for w, _ in sizes)), max(512, max(h for _, h in sizes)))
         self.window.SetSize(*self.window_size)
         self.capture = vtk.vtkWindowToImageFilter()
         self.capture.SetInput(self.window)
@@ -305,6 +318,7 @@ class Scene:
         self.tiles = mp_tile.MPTile(service=service, tile_delay=0.02,
                                     download_threads=downloads, cache_size=2048)
         self.manager = None
+        self.below_ground = False
         self.previous = None
         self.rendered = {}
         self.last_update = 0
@@ -316,7 +330,10 @@ class Scene:
 
     def update(self, record):
         self.rendered = {}
+        self.raw_frames = {}
+        self.below_ground = False
         pose = self.predictor.pose(record)
+        self.pose = pose
         if pose is None:
             return False
         lat, lon, alt, roll, pitch, yaw = pose
@@ -350,11 +367,14 @@ class Scene:
         cam.SetPosition(*pos)
         cam.SetFocalPoint(*self.tc.focal)
         cam.SetViewUp(*up)
+        # Terrain prefetch uses the normal viewport; a previous thermal render
+        # must not leave the camera's narrower explicit aspect active here.
+        cam.SetUseExplicitAspectRatio(False)
         cam.SetClippingRange(0.5, 150000)
         # Terrain's texture LOD uses a vertical FOV. Use the narrowest stream
         # so zooming either view requests enough imagery for both encoders.
         vfov = min(math.degrees(2 * math.atan(math.tan(math.radians(f) / 2) * h / w))
-                   for f, (w, h) in zip(record['fov'], self.sizes))
+                   for f, (w, h) in zip(record['fov'], self.sizes) if 0 < f < 180)
         cam.SetViewAngle(vfov)
         if now - self.last_update >= 0.5:
             manager.update(self.tc)
@@ -375,7 +395,24 @@ class Scene:
             manager.redrape_pending = False
             manager.update(self.tc)
             self.last_redrape = now
+        # Compare the predicted camera position with the mesh actually drawn,
+        # not altitude relative to home (which is not height above terrain).
+        ground = manager.height_at(lat, lon)
+        self.below_ground = ground is not None and pos[2] < ground
         return True
+
+    @staticmethod
+    def below_ground_image(width, height):
+        import cv2
+        image = np.full((height, width, 3), (139, 90, 43), dtype=np.uint8)
+        text = 'Below Ground'
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = min(width / 500, height / 180)
+        thickness = max(1, round(scale * 2))
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        cv2.putText(image, text, ((width - tw) // 2, (height + th) // 2),
+                    font, scale, (245, 235, 220), thickness, cv2.LINE_AA)
+        return image
 
     def render(self, stream, record, valid):
         width, height = self.sizes[stream]
@@ -386,7 +423,16 @@ class Scene:
                         (12, height // 2), cv2.FONT_HERSHEY_SIMPLEX,
                         width / 1100, (230, 230, 230), 1, cv2.LINE_AA)
             return image
+        if self.below_ground:
+            # Keep the warning legible in every display/recording/still view,
+            # regardless of exposure settings or the thermal palette.
+            return self.below_ground_image(width, height)
         hfov, thermal = record['fov'][stream], record['thermal'][stream]
+        if thermal:
+            import cv2
+            samples = self.raw_thermal(record, valid, hfov)
+            display = self.controls.thermal_display(samples, record.get('image', {}))
+            return cv2.resize(display, (width, height), interpolation=cv2.INTER_LINEAR)
         cached = self.rendered.get((hfov, thermal))
         if cached is not None:
             old_width, old_height, image = cached
@@ -395,21 +441,62 @@ class Scene:
                 # a second VTK pass and framebuffer resize on every frame.
                 import cv2
                 return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-        # Keep the OpenGL framebuffer allocation stable across differently
-        # sized RGB/thermal streams. Render/read only the requested viewport.
+        image = self.render_sensor(width, height, hfov)
+        image = self.controls.apply(image, record.get('image', {}), False)
+        self.rendered[hfov, thermal] = (width, height, image)
+        return image
+
+    def render_sensor(self, width, height, hfov, thermal_aspect=None):
+        if not math.isfinite(hfov) or not 0 < hfov < 180:
+            return np.zeros((height, width, 3), dtype=np.uint8)
+        if self.below_ground:
+            return self.below_ground_image(width, height)
+        # Keep the framebuffer allocation stable; native thermal is always
+        # 640x512, then stretched for the display encodings like the MT11.
         viewport = (0, 0, width / self.window_size[0], height / self.window_size[1])
         self.ren.SetViewport(*viewport)
         self.capture.SetViewport(*viewport)
-        self.tc.cam.SetViewAngle(math.degrees(2 * math.atan(
-            math.tan(math.radians(hfov) / 2) * height / width)))
+        set_camera_fov(self.tc.cam, hfov, width / height, thermal_aspect)
         self.window.Render()
         self.capture.Modified()
         self.capture.Update()
         image = numpy_support.vtk_to_numpy(self.capture.GetOutput().GetPointData().GetScalars())
-        image = np.ascontiguousarray(image.reshape(height, width, 3)[::-1])
-        image = self.controls.apply(image, record.get('image', {}), thermal)
-        self.rendered[hfov, thermal] = (width, height, image)
-        return image
+        return np.ascontiguousarray(image.reshape(height, width, 3)[::-1])
+
+    def raw_thermal(self, record, valid, hfov=None):
+        hfov = record['fov'][1] if hfov is None else hfov
+        if hfov not in self.raw_frames:
+            image = (self.render_sensor(640, 512, hfov, 640/512) if valid else
+                     np.zeros((512, 640, 3), dtype=np.uint8))
+            self.raw_frames[hfov] = self.controls.synthetic_thermal(image)
+        return self.raw_frames[hfov]
+
+    def thermal_metadata(self, record):
+        # Preserve the render request's clock and source ages, with the actual
+        # virtual camera pose (including prediction) used to generate pixels.
+        import copy
+        keys = ('schema', 'pts90k', 'utc_us', 'position', 'velocity',
+                'vehicle_attitude', 'gimbal_attitude', 'heading_rad', 'zoom', 'hfov_deg')
+        result = {key: copy.deepcopy(record.get(key)) for key in keys}
+        result['schema'] = 'apcg.telemetry.v1'
+        result['utc_us'] += record.get('prediction_ms', 0) * 1000
+        result['hfov_deg'] = record['fov'][1]
+        result['render_source_age_ms'] = {key: (record.get(key) or {}).get('age_ms')
+                                         for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude')}
+        if self.pose is None:
+            for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude'):
+                result[key] = None
+        else:
+            lat, lon, alt, roll, pitch, yaw = self.pose
+            position = result['position']
+            position['alt_relative_m'] += alt-position['alt_amsl_m']
+            position.update(lat_e7=round(lat*1e7), lon_e7=round(lon*1e7), alt_amsl_m=alt, age_ms=0)
+            vehicle = result['vehicle_attitude']
+            vehicle.update(zip(('roll_rad', 'pitch_rad', 'yaw_rad'), self.predictor.vehicle_angles))
+            vehicle['age_ms'] = 0
+            result['gimbal_attitude'].update(roll_rad=math.radians(roll), pitch_rad=math.radians(pitch),
+                yaw_rad=(math.radians(yaw)-vehicle['yaw_rad']+math.pi) % (2*math.pi)-math.pi, age_ms=0)
+        return result
 
     def close(self):
         if self.manager:
@@ -423,6 +510,7 @@ class Fixture:
         self.path = path
         self.container = None
         self.index = -1
+        self.loop_frames = None
         self.open()
 
     def open(self):
@@ -431,20 +519,38 @@ class Fixture:
         self.container = av.open(self.path)
         stream = self.container.streams.video[0]
         stream.thread_count = 2
-        self.rate = float(stream.average_rate or stream.guessed_rate or 10)
+        # Raw H264/HEVC has no container timestamps; average_rate can be the
+        # demuxer's 25 fps placeholder even when the bitstream specifies 20.
+        raw = self.container.format.name in ('h264', 'hevc')
+        self.rate = float((stream.guessed_rate if raw else stream.average_rate)
+                          or stream.guessed_rate or stream.average_rate or 10)
+        self.loop_index = 0
         self.frames = iter(self.container.decode(video=0))
 
     def at(self, seconds):
         target = int(seconds * self.rate)
+        latest = None
         while self.index < target:
+            # Once the loop length is known, whole missed loops have identical
+            # pixels. Skip them instead of making a slow renderer decode an
+            # ever-growing backlog after a scheduling pause.
+            if self.loop_frames:
+                self.index += ((target - self.index) // self.loop_frames) * self.loop_frames
+                if self.index == target:
+                    break
             frame = next(self.frames, None)
             if frame is None:
-                self.open()
-                frame = next(self.frames, None)
-                if frame is None:
+                if not self.loop_index:
                     raise ValueError(f'Empty video fixture: {self.path}')
-            self.image = frame.to_ndarray(format='rgb24')
+                self.loop_frames = self.loop_index
+                self.open()
+                continue
+            latest = frame
+            self.loop_index += 1
             self.index += 1
+        # Dropped frames still advance the decoder, but need no RGB conversion.
+        if latest is not None:
+            self.image = latest.to_ndarray(format='rgb24')
         return self.image
 
     def close(self):
@@ -463,7 +569,7 @@ class FixtureScene:
         if not first:
             raise ValueError('Simple video requires CAMERA_APP_SITL_VIDEO1')
         self.sources = {path: Fixture(path) for path in set((first, second, third))}
-        self.paths = [first, second, third, first]
+        self.paths = [first, second, third, first, second]
         self.started = None
 
     def update(self, record):
@@ -511,9 +617,11 @@ class Encoder:
         self.codec.time_base = Fraction(1, 90000)
         self.codec.framerate = Fraction(fps)
         self.codec.thread_count = 2
+        # UniGCS's Android RTP decoder mishandles separate AUD NALs (gray
+        # inter-frames and repeated codec resets). Native encoders omit them.
         self.codec.options = {'preset': 'ultrafast', 'tune': 'zerolatency', 'crf': '23',
                               'x265-params' if hevc else 'x264-params':
-                                  f'aud=1:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0' +
+                                  f'aud=0:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0' +
                                   (':pools=none:frame-threads=1:log-level=error' if hevc else '')}
         self.codec.open()
 
@@ -537,7 +645,7 @@ def main():
     parser.add_argument('--fd', type=int)
     parser.add_argument('--connect', type=int, help='private loopback connection from Windows camera service')
     parser.add_argument('--token', default='')
-    for stream in (1, 2, 3, 4):
+    for stream in (1, 2, 3, 4, 5):
         parser.add_argument(f'--width{stream}', type=int, default=640)
         parser.add_argument(f'--height{stream}', type=int, default=360)
         parser.add_argument(f'--codec{stream}', choices=('h264', 'h265'), default='h264')
@@ -557,7 +665,7 @@ def main():
     if args.connect is not None and (not 1 <= args.connect <= 65535 or len(args.token) != 32):
         parser.error('invalid private connection')
     sizes = [(args.width1, args.height1), (args.width2, args.height2),
-             (args.width3, args.height3), (args.width4, args.height4)]
+             (args.width3, args.height3), (args.width4, args.height4), (args.width5, args.height5)]
     scene = Scene(sizes, downloads, radius) if terrain_mode else FixtureScene(sizes)
     encoders = [Encoder(size, args.fps, getattr(args, f'codec{i+1}')) for i, size in enumerate(sizes)]
     try:
@@ -582,23 +690,61 @@ def main():
                 # The extra RGB encoding is needed when MT11 routes visible
                 # video to the substream. Keep the RGB recording at main size.
                 visible_sub = record['thermal'][1] and record.get('swap', False)
-                record['fov'].extend([record['fov'][0]] * 2)
-                record['thermal'].extend([False, False])
+                record['fov'].extend([record['fov'][0], record['fov'][0], record['fov'][1]])
+                record['thermal'].extend([False, False, record['thermal'][1]])
                 valid = scene.update(record)
                 force_key = record.get('swap') != previous_swap
                 previous_swap = record.get('swap')
-                active = [True, True, visible_sub, bool(record.get('recording'))]
+                active = [True, True, visible_sub, bool(record.get('recording')),
+                          bool(record.get('recording')) and record['thermal'][1]]
                 scene.controls.exposure = None
                 futures = []
-                for i in range(4):
+                tracking_pixels = None
+                for i in range(5):
                     pixels = scene.render(i, record, valid) if active[i] else None
+                    if i == 0 and record.get('combined'):
+                        import cv2
+                        visible, thermal = pixels, scene.render(1, record, valid)
+                        h, w = pixels.shape[:2]
+                        pixels = np.zeros_like(pixels)
+                        for slot, source in enumerate((visible, thermal)):
+                            sw, sh = w // 2, min(h, round((w // 2) * source.shape[0] / source.shape[1]))
+                            y = (h - sh) // 2
+                            pixels[y:y+sh, slot*sw:(slot+1)*sw] = cv2.resize(source, (sw, sh), interpolation=cv2.INTER_AREA)
+                    if pixels is not None and i == (1 if visible_sub else 0):
+                        import cv2
+                        if record.get('tracking_frame'):
+                            aspect = record['thermal_aspect'] if visible_sub else pixels.shape[1]/pixels.shape[0]
+                            height = min(256, round(320/aspect))
+                            tracking_pixels = cv2.resize(cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY),
+                                                         (320, height), interpolation=cv2.INTER_AREA)
+                        box = record.get('tracking_box', [0])
+                        if box[0] in (2, 3):
+                            h, w = pixels.shape[:2]
+                            pixels = pixels.copy()
+                            cv2.rectangle(pixels, (round(box[1]*w), round(box[2]*h)),
+                                          (round(box[3]*w), round(box[4]*h)),
+                                          (32, 128, 255) if box[0] == 2 else (255, 192, 32), 2)
+                    if pixels is not None:
+                        pixels = apply_overlay(pixels, record.get('overlays', [{}] * 5)[i])
                     if i == 0:  # RGB sensor, before other streams/still captures
                         exposure = scene.controls.exposure_packet()
                     futures.append(pool.submit(encoders[i].encode, pixels, record['pts90k'],
-                                               force_key or (i == 3 and not previous_recording)) if active[i] else None)
+                                               force_key or (i >= 3 and not previous_recording)) if active[i] else None)
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
                 sock.sendall(exposure)
+                if record.get('tracking_frame'):
+                    if tracking_pixels is None:
+                        raise RuntimeError('tracking source unavailable')
+                    sock.sendall(struct.pack('!II', tracking_pixels.shape[1], tracking_pixels.shape[0]) +
+                                 tracking_pixels.tobytes())
+                if record.get('raw_thermal'):
+                    if not terrain_mode or not record['thermal'][1]:
+                        raise ValueError('raw terrain requested without a thermal terrain renderer')
+                    raw = scene.raw_thermal(record, valid).astype('<u2', copy=False).tobytes()
+                    metadata = json.dumps(scene.thermal_metadata(record), allow_nan=False, separators=(',', ':')).encode('utf-8')
+                    sock.sendall(struct.pack('!II', len(raw), len(metadata)) + raw + metadata)
                 # Still images use the same current scene and image controls.
                 # Render each requested lens without changing the live selection.
                 for lens in range(3):

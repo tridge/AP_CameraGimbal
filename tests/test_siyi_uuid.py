@@ -45,8 +45,8 @@ int MI_SYS_ReadUuid(UUID_ARGS) {
         # A harmless stand-in for the preloaded OS wrapper.
         (sdk / 'libcam_os_wrapper.so').symlink_to('libmi_sys.so')
         helper = sdk / 'uuid'
-        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-std=c11',
-                        str(ROOT / f'packaging/{target}/{target}-uuid.c'),
+        subprocess.run(['c++', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
+                        str(ROOT / f'packaging/{target}/{target}-uuid.cpp'),
                         '-o', str(helper), '-ldl'], check=True)
         env = dict(os.environ, LD_LIBRARY_PATH=str(sdk))
         if target == 'zr10':

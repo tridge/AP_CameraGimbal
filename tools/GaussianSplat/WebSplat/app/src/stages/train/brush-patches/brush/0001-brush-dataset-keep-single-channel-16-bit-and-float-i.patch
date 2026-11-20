@@ -1,0 +1,163 @@
+From 4b7a18179ff39ed061087a19f797203d669f1fca Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:09:51 +1100
+Subject: [PATCH 01/12] brush-dataset: keep single-channel 16-bit and float
+ images as numeric targets
+
+16-bit grayscale (value / 65535) and float images are packed as the f32 bits
+of the value instead of being converted to RGBA8, so scalar targets such as
+scaled temperature keep their precision and see no gamma. SceneBatch records
+the format in float_gt.
+---
+ crates/brush-bench-test/src/benches.rs       |  1 +
+ crates/brush-bench-test/tests/fusion.rs      |  1 +
+ crates/brush-bench-test/tests/integration.rs |  2 +
+ crates/brush-dataset/src/scene.rs            | 43 ++++++++++++++++++++
+ crates/brush-dataset/src/scene_loader.rs     |  4 +-
+ 5 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/crates/brush-bench-test/src/benches.rs b/crates/brush-bench-test/src/benches.rs
+index eba695c..da87ed2 100644
+--- a/crates/brush-bench-test/src/benches.rs
++++ b/crates/brush-bench-test/src/benches.rs
+@@ -136,6 +136,7 @@ fn generate_training_batch(resolution: (u32, u32), camera_pos: Vec3) -> SceneBat
+         img_packed,
+         has_alpha: false,
+         alpha_mode: AlphaMode::Transparent,
++        float_gt: false,
+         camera,
+     }
+ }
+diff --git a/crates/brush-bench-test/tests/fusion.rs b/crates/brush-bench-test/tests/fusion.rs
+index f6eb027..3962ce4 100644
+--- a/crates/brush-bench-test/tests/fusion.rs
++++ b/crates/brush-bench-test/tests/fusion.rs
+@@ -68,6 +68,7 @@ fn test_batch(width: u32, height: u32) -> SceneBatch {
+         img_packed: TensorData::new(img, [height as usize, width as usize]),
+         has_alpha: false,
+         alpha_mode: AlphaMode::Transparent,
++        float_gt: false,
+         camera: Camera::new(
+             Vec3::new(0.0, 0.0, 3.0),
+             Quat::IDENTITY,
+diff --git a/crates/brush-bench-test/tests/integration.rs b/crates/brush-bench-test/tests/integration.rs
+index 6ccee9c..7684d1c 100644
+--- a/crates/brush-bench-test/tests/integration.rs
++++ b/crates/brush-bench-test/tests/integration.rs
+@@ -126,6 +126,7 @@ fn generate_test_batch(resolution: (u32, u32)) -> SceneBatch {
+         img_packed,
+         has_alpha: false,
+         alpha_mode: AlphaMode::Transparent,
++        float_gt: false,
+         camera,
+     }
+ }
+@@ -252,6 +253,7 @@ async fn train_with_zero_visible_does_not_crash() {
+         img_packed: TensorData::new(vec![pixel; 64 * 64], [64usize, 64]),
+         has_alpha: false,
+         alpha_mode: AlphaMode::Transparent,
++        float_gt: false,
+         camera,
+     };
+ 
+diff --git a/crates/brush-dataset/src/scene.rs b/crates/brush-dataset/src/scene.rs
+index 37b31ac..11d6f41 100644
+--- a/crates/brush-dataset/src/scene.rs
++++ b/crates/brush-dataset/src/scene.rs
+@@ -84,6 +84,27 @@ impl Scene {
+     }
+ }
+ 
++/// Single-channel 16-bit and float images are numeric targets (e.g. scaled
++/// temperature), not colour: they are kept at full precision with no gamma.
++pub fn is_float_target(image: &DynamicImage) -> bool {
++    matches!(
++        image,
++        DynamicImage::ImageLuma16(_) | DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_)
++    )
++}
++
++/// Float targets pack as the f32 bit pattern of the value (16-bit luma / 65535, or
++/// channel 0 of a float image); the loss kernels use it for every colour channel.
++fn pack_float_target(image: &DynamicImage) -> Vec<i32> {
++    let bits = |v: f32| v.to_bits() as i32;
++    match image {
++        DynamicImage::ImageLuma16(img) => img.pixels().map(|p| bits(p[0] as f32 / 65535.0)).collect(),
++        DynamicImage::ImageRgb32F(img) => img.pixels().map(|p| bits(p[0])).collect(),
++        DynamicImage::ImageRgba32F(img) => img.pixels().map(|p| bits(p[0])).collect(),
++        _ => unreachable!("not a float target"),
++    }
++}
++
+ /// Convert a loaded view into the GPU-side packed representation: `[H, W]`
+ /// u32, each entry packing `[r8 g8 b8 a8]`. Images without alpha get
+ /// `a = 255` (fully opaque) so the kernel always sees a valid alpha byte.
+@@ -97,6 +118,9 @@ impl Scene {
+ pub fn view_to_packed_data(image: DynamicImage, alpha_mode: AlphaMode) -> (TensorData, bool) {
+     let _span = tracing::trace_span!("view_to_packed").entered();
+     let (w, h) = (image.width(), image.height());
++    if is_float_target(&image) {
++        return (TensorData::new(pack_float_target(&image), [h as usize, w as usize]), false);
++    }
+     let has_alpha = image.color().has_alpha();
+     // Premultiplication is what `Transparent` means; a mask multiplies the
+     // loss instead and must keep its colours intact.
+@@ -144,6 +168,8 @@ pub struct SceneBatch {
+     pub has_alpha: bool,
+     pub alpha_mode: AlphaMode,
+     pub camera: Camera,
++    /// `img_packed` holds f32 bits of a numeric target, not RGBA8.
++    pub float_gt: bool,
+ }
+ 
+ impl SceneBatch {
+@@ -198,4 +224,21 @@ mod tests {
+             &[0xff0b_0a09_u32 as i32, 0xff0e_0d0c_u32 as i32]
+         );
+     }
++
++    #[test]
++    fn packs_luma16_as_float_bits() {
++        let image = image::ImageBuffer::<image::Luma<u16>, _>::from_raw(3, 1, vec![0u16, 32768, 65535])
++            .expect("valid luma16 image");
++        let image = DynamicImage::ImageLuma16(image);
++        assert!(super::is_float_target(&image));
++        let (packed, has_alpha) = view_to_packed_data(image, AlphaMode::Transparent);
++        assert!(!has_alpha);
++        let vals: Vec<f32> = packed
++            .as_slice::<i32>()
++            .expect("i32 tensor")
++            .iter()
++            .map(|&b| f32::from_bits(b as u32))
++            .collect();
++        assert_eq!(vals, vec![0.0, 32768.0 / 65535.0, 1.0]);
++    }
+ }
+diff --git a/crates/brush-dataset/src/scene_loader.rs b/crates/brush-dataset/src/scene_loader.rs
+index 7d23af0..3c51293 100644
+--- a/crates/brush-dataset/src/scene_loader.rs
++++ b/crates/brush-dataset/src/scene_loader.rs
+@@ -7,7 +7,7 @@ use tokio::sync::{Mutex, mpsc};
+ 
+ use crate::{
+     config::LoadDatasetConfig,
+-    scene::{Scene, SceneBatch, view_to_packed_data},
++    scene::{Scene, SceneBatch, is_float_target, view_to_packed_data},
+ };
+ 
+ /// Shared cache of GPU-ready scene batches. Each slot holds at most one
+@@ -147,12 +147,14 @@ async fn run_loader(
+                 .load()
+                 .await
+                 .expect("Scene loader failed to load an image");
++            let float_gt = is_float_target(&raw);
+             let (img_packed, has_alpha) = view_to_packed_data(raw, view.image.alpha_mode());
+             let mut batch = SceneBatch {
+                 img_packed,
+                 has_alpha,
+                 alpha_mode: view.image.alpha_mode(),
+                 camera: view.camera,
++                float_gt,
+             };
+ 
+             let mut cache = cache.lock().await;

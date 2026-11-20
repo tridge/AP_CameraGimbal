@@ -14,6 +14,8 @@
 /web/a8-web
 /web/build/
 /web/tests/a8-web-host
+/web/tests/rpi-web-host
+/web/tests/rpi-runtime/
 __pycache__/
 *.pyc
 *~
@@ -26,3 +28,23 @@ __pycache__/
 /camera_app/tests/camera-app-zr10-host
 
 /web/z1mini-web
+/web/rpi_libcam_caddx-web
+
+/camera_app/tests/test_system_stats
+/camera_app/tests/test_binlog_sys
+
+/web/tests/test_string_buffer
+
+/web/tests/test_webroot
+
+/camera_app/tests/test_timezone
+
+/camera_app/tests/test_survey
+/camera_app/tests/test_metadata_history
+
+/camera_app/tests/test_terrain
+/web/zt30-dev-web
+
+/web/zt30-web
+
+/web/tests/test_zt30_process

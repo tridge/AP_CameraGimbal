@@ -1,5 +1,102 @@
 # MT11 rate response and calibration
 
+## Travel and settling measurements, 2026-10-02
+
+Bench-tested the upright MT11 at `192.168.144.25` using raw SIYI commands through
+the running camera application. There was no flight-controller heartbeat during
+the initial connection check. Geographic tracking was temporarily disabled;
+the original parameters and starting pose (approximately yaw +2.4, pitch -30
+degrees) were restored afterwards. Existing recording remained active. These
+measurements used the installed firmware, without deploying a new build.
+
+The **commandable pitch range is -90 to +25 degrees** on this unit. An angle
+request for -95 stopped at -90; a request for +30 stopped at +25. Rate commands
+also stopped near those boundaries. This establishes the MCU command limits,
+not the mechanical travel of a disassembled gimbal. The target profile currently
+specifies an upper limit of +30, which differs from this measured unit.
+
+In particular, looking behind the aircraft requires yaw rotation: the gimbal
+cannot continue pitching through nadir. A pitch-only transition from a forward
+view at -60 to a rearward view at -120 is unavailable through either tested
+command interface.
+
+| Raw command magnitude | Pitch speed, deg/s | Yaw speed, deg/s |
+| --- | --- | --- |
+| 1, 3, 4, 5 | No sustained motion | No sustained motion |
+| 6 | +6.01 / -6.02 | +6.32 / -6.24 |
+| 10 | +10.13 / -10.12 | +10.25 / -10.27 |
+| 20 | +20.11 / -20.12 | +20.90 / -20.24 |
+| 40 | +40.08 / -40.12 | +40.35 / -40.45 |
+| 60 | +59.79 / -60.56 | +59.05 / -60.35 |
+| 80 | +79.83 / -80.89 | +80.37 / -80.25 |
+| 100 | +98.12 / -103.76 | +102.27 / -97.49 |
+
+The sweeps reconfirm approximately 6 deg/s minimum sustained speed and 100 deg/s
+full speed. High-speed fits contain only 5–12 samples because each trial limits
+travel to approximately 25 degrees; the directional differences should not be
+treated as precise calibration changes. Speeds come from unwrapped Euler angle
+feedback, not body gyro components.
+
+Sending zero at full speed produced approximately **4.4 degrees of additional
+pitch travel and 4.8 degrees of yaw travel**. At command 60, the corresponding
+travel was 2.6 degrees pitch and 2.8–3.1 degrees yaw. Full-speed stops entered a
+±0.5-degree final-angle band in 0.07–0.10 seconds for pitch and 0.07–0.17 seconds
+for yaw. These are feedback-based measurements, including transport delay.
+
+Two repetitions of absolute-angle sequences gave the following command-to-settle
+times. Here, settling means entering a **±0.5-degree band around the final angle**,
+remaining there through the end of the four-second observation, and having a
+fitted slope of at most 1 deg/s during the next 0.4 seconds. Times refer to entry
+into that interval; an online detector would need the additional confirmation
+window. This is positional settling, not proof of smear-free thermal exposures.
+
+| Axis | Actual step | Settling time |
+| --- | --- | --- |
+| Pitch | 5 degrees | 0.18–0.19 s |
+| Pitch | 10 degrees | 0.24–0.25 s |
+| Pitch | 15 degrees | 0.31 s |
+| Pitch | 30 degrees | 0.44–0.47 s |
+| Yaw | 5 degrees | 0.25 s |
+| Yaw | 10 degrees | 0.31–0.49 s |
+| Yaw | 30 degrees | 0.72–0.88 s |
+| Yaw | 60 degrees | 1.07–1.40 s |
+| Yaw | 90 degrees | 1.03–1.15 s |
+| Yaw | 120 degrees | 1.40–1.51 s |
+| Yaw | 150 degrees | 1.63–1.84 s |
+| Yaw | 180 degrees | 2.08–2.18 s |
+
+Yaw feedback has several tenths of a degree of residual variation. Tightening
+the band to ±0.3 degrees made the measured times much less consistent: even
+some small steps required over three seconds, and one 45-degree step failed
+the strict criterion within the observation window. Do not interpret those
+times as the duration of the main slew, or assume the reported variation is
+entirely physical motion without an independent optical measurement.
+
+The raw absolute-angle command uses the MCU's own controller. Survey geographic
+tracking uses the application's rate controller, which was capped at **60 deg/s**
+when these measurements were taken. The cap has since been raised to **100 deg/s**
+in the shared MT11 firmware/SITL profile to match the measured capability.
+The approximately 2.1-second raw 180-degree move is still not a measured survey
+transition timing: application acquisition and settling affect that timing.
+The 6 deg/s minimum sustained speed
+also remains relevant to tracking a ground point at survey height; these static
+tests do not validate moving-aircraft tracking or exposure sharpness.
+
+Feedback was quantised to 0.1 degree, sampled approximately every 30 ms, with
+median request/response time 12 ms and 95th percentile 17 ms. Capture artifacts
+are in `/data/review/mt11-motion-20261002/`: raw CSVs and trial metadata,
+`rate_metrics.csv`, `step_metrics.csv`, the reproducible `analyze.py`, PNG plots,
+and `mt11-motion-report.pdf`. The analyzer uses NumPy, pandas and Matplotlib.
+
+To repeat the stationary upright tests, disconnect other gimbal controllers and
+run each mode sequentially:
+
+```sh
+python3 tools/mt11_motion_bench.py --host 192.168.144.25 --mode travel --output travel.csv
+python3 tools/mt11_motion_bench.py --host 192.168.144.25 --mode rates --output rates.csv
+python3 tools/mt11_motion_bench.py --host 192.168.144.25 --mode steps --output steps.csv
+```
+
 ## Isolated upright bench sweeps, 2026-09-15
 
 The raw SIYI rate command is a signed integer from -100 to +100. Tests on the
@@ -116,3 +213,18 @@ Remaining calibration: physically inverted mounting, repeatability across
 headings/temperature, continuous ascending/descending commands without recentering
 to measure hysteresis, and separation of transport delay from actuator dynamics.
 The recentered ascending/descending sweeps do not establish absence of hysteresis.
+
+## Tracking-only low-speed conversion
+
+Geographic ROI tracking now uses pulse-density conversion below the measured
+6 deg/s minimum speed: zero and minimum-speed commands deliver the requested
+average motion. Pulse credit clears on zero demand, direction reversal and
+tracking stop. Existing rate limits, joint limits and stale-data stop paths
+remain in force. Explicit MAVLink and SDK rate commands retain their original
+conversion. PIDP/PIDY Output records the filtered continuous rate request;
+GCMD records the actual zero/minimum-speed wire commands.
+
+The calibrated MCU-model regression (`make sitl-rate-default-test`) starts with
+a 3-degree pointing error and tests 0.5 deg/s motion, direction reversal and
+stale feedback. This is simulation qualification against the measured steady
+rate curve and response lag, not a new physical short-pulse or flight test.

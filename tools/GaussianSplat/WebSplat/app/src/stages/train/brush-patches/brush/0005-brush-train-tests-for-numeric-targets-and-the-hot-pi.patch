@@ -1,0 +1,158 @@
+From b9d6d2e350f0c0db19cd628c58241625a67fd673 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:16:38 +1100
+Subject: [PATCH 05/12] brush-train: tests for numeric targets and the
+ hot-pixel weighted loss
+
+Checks exact read-back of float and 16-bit targets and the hot L1 term, and
+can dump inputs, loss and gradient (THERMAL_LOSS_DUMP) and a dataset's targets
+as read by the kernel (G1_DATASET) for an external reference comparison.
+---
+ crates/brush-train/tests/thermal_loss.rs | 138 +++++++++++++++++++++++
+ 1 file changed, 138 insertions(+)
+ create mode 100644 crates/brush-train/tests/thermal_loss.rs
+
+diff --git a/crates/brush-train/tests/thermal_loss.rs b/crates/brush-train/tests/thermal_loss.rs
+new file mode 100644
+index 0000000..eb5cdb5
+--- /dev/null
++++ b/crates/brush-train/tests/thermal_loss.rs
+@@ -0,0 +1,138 @@
++//! Numeric (thermal) targets through the loss kernels: exact float read-back and
++//! the hot-pixel weighted L1. With `THERMAL_LOSS_DUMP=dir` the inputs, loss and
++//! gradient are written there (raw little-endian f32) for an external reference
++//! check; with `G1_DATASET=dir` too, each image listed in its `eval_views.txt`
++//! is decoded and packed as in training and the target the kernel reads is dumped.
++
++use brush_dataset::scene::{is_float_target, view_to_packed_data};
++use brush_loss::{ImageLossConfig, image_loss, image_loss_eval};
++use brush_render::AlphaMode;
++use burn::tensor::{Device, Int, Tensor, TensorData};
++
++const H: usize = 48;
++const W: usize = 64;
++
++fn pattern(seed: u32) -> Vec<f32> {
++    (0..H * W)
++        .map(|i| {
++            let (y, x) = ((i / W) as f32, (i % W) as f32);
++            let base = 0.25 + 0.1 * ((x * 0.31 + seed as f32).sin() * (y * 0.17).cos());
++            // a small hot blob
++            let d2 = (x - 20.0 - seed as f32).powi(2) + (y - 30.0).powi(2);
++            base + 0.6 * (-d2 / 12.0).exp()
++        })
++        .collect()
++}
++
++fn float_gt(vals: &[f32], h: usize, w: usize, device: &Device) -> Tensor<2, Int> {
++    let bits: Vec<i32> = vals.iter().map(|v| v.to_bits() as i32).collect();
++    Tensor::from_data(TensorData::new(bits, [h, w]), device)
++}
++
++fn rgb(vals: &[f32], h: usize, w: usize, device: &Device) -> Tensor<3> {
++    let v: Vec<f32> = vals.iter().flat_map(|&x| [x, x, x]).collect();
++    Tensor::<1>::from_floats(v.as_slice(), device).reshape([h, w, 3])
++}
++
++async fn to_vec<const D: usize>(t: Tensor<D>) -> Vec<f32> {
++    t.into_data_async().await.expect("readback").try_to_vec().expect("vec")
++}
++
++fn dump(dir: &std::path::Path, name: &str, v: &[f32]) {
++    let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
++    std::fs::write(dir.join(name), bytes).expect("write dump");
++}
++
++fn cfg(l1: f32, ssim: f32, hot_threshold: f32, hot_weight: f32) -> ImageLossConfig {
++    ImageLossConfig {
++        l1_weight: l1,
++        ssim_weight: ssim,
++        float_gt: true,
++        hot_threshold,
++        hot_weight,
++        ..Default::default()
++    }
++}
++
++#[tokio::test]
++async fn float_targets_read_exactly() {
++    let device = Device::from(brush_cube::test_helpers::test_device().await);
++    let gt = pattern(0);
++    let zeros = vec![0.0f32; H * W];
++    let map = image_loss_eval(rgb(&zeros, H, W, &device), float_gt(&gt, H, W, &device), cfg(1.0, 0.0, 1.0, 0.0));
++    let map = to_vec(map).await;
++    for c in 0..3 {
++        let worst = (0..H * W).map(|i| (map[i * 3 + c] - gt[i]).abs()).fold(0.0f32, f32::max);
++        assert!(worst == 0.0, "channel {c}: target read back with error {worst}");
++    }
++    let same = image_loss_eval(rgb(&gt, H, W, &device), float_gt(&gt, H, W, &device), cfg(1.0, 0.0, 1.0, 0.0));
++    let worst = to_vec(same).await.into_iter().fold(0.0f32, f32::max);
++    assert!(worst < 1e-6, "pred = gt gives L1 {worst}");
++
++    // 16-bit grayscale decodes to value / 65535 with no gamma
++    let raw: Vec<u16> = gt.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16).collect();
++    let img = image::DynamicImage::ImageLuma16(
++        image::ImageBuffer::from_raw(W as u32, H as u32, raw.clone()).expect("luma16"),
++    );
++    assert!(is_float_target(&img));
++    let (packed, _) = view_to_packed_data(img, AlphaMode::Transparent);
++    let map = image_loss_eval(rgb(&zeros, H, W, &device), Tensor::from_data(packed, &device), cfg(1.0, 0.0, 1.0, 0.0));
++    let map = to_vec(map).await;
++    let worst = (0..H * W).map(|i| (map[i * 3] - raw[i] as f32 / 65535.0).abs()).fold(0.0f32, f32::max);
++    assert!(worst < 1e-7, "16-bit target read back with error {worst}");
++}
++
++#[tokio::test]
++async fn hot_weighted_loss_and_dump() {
++    let device = Device::from(brush_cube::test_helpers::test_device().await).autodiff();
++    let gt = pattern(0);
++    let pred_v = pattern(3);
++    let (thr, hw, ssim_w) = (0.479_178, 20.0, 0.2);
++    let run = |hot_weight: f32| {
++        let pred = rgb(&pred_v, H, W, &device).require_grad();
++        let loss = image_loss(pred.clone(), float_gt(&gt, H, W, &device), cfg(1.0 - ssim_w, -ssim_w, thr, hot_weight));
++        let grads = loss.backward();
++        (loss, pred.grad(&grads).expect("pred gradient"))
++    };
++    let (loss, grad) = run(hw);
++    let (loss0, _) = run(0.0);
++    let (loss, loss0) = (to_vec(loss).await[0], to_vec(loss0).await[0]);
++    let grad = to_vec(grad).await;
++    // analytic L1 difference: (1 - w) * hot_weight * mean over hot pixels of |pred - gt|
++    let extra: f32 = (0..H * W).filter(|&i| gt[i] > thr).map(|i| (pred_v[i] - gt[i]).abs()).sum::<f32>()
++        * (1.0 - ssim_w) * hw / (H * W) as f32;
++    assert!(((loss - loss0) - extra).abs() < 1e-5 * extra.max(1e-3), "hot term {} vs {extra}", loss - loss0);
++    assert!(grad.iter().all(|g| g.is_finite()));
++    if let Ok(dir) = std::env::var("THERMAL_LOSS_DUMP") {
++        let dir = std::path::Path::new(&dir);
++        std::fs::create_dir_all(dir).expect("dump dir");
++        dump(dir, "gt.f32", &gt);
++        dump(dir, "pred.f32", &pred_v);
++        dump(dir, "grad.f32", &grad);
++        dump(dir, "loss.f32", &[loss, loss0, thr, hw, ssim_w, H as f32, W as f32]);
++    }
++}
++
++#[tokio::test]
++async fn dataset_targets_as_read_by_kernel() {
++    let (Ok(dataset), Ok(dir)) = (std::env::var("G1_DATASET"), std::env::var("THERMAL_LOSS_DUMP")) else {
++        return;
++    };
++    let device = Device::from(brush_cube::test_helpers::test_device().await);
++    let dataset = std::path::Path::new(&dataset);
++    let dir = std::path::Path::new(&dir);
++    std::fs::create_dir_all(dir).expect("dump dir");
++    let list = std::fs::read_to_string(dataset.join("eval_views.txt")).expect("eval_views.txt");
++    for name in list.lines().filter(|l| !l.is_empty()) {
++        let img = image::open(dataset.join("images").join(name)).expect("image");
++        let (w, h) = (img.width() as usize, img.height() as usize);
++        assert!(is_float_target(&img), "{name} is not a numeric target");
++        let (packed, has_alpha) = view_to_packed_data(img, AlphaMode::Transparent);
++        assert!(!has_alpha);
++        let zeros = vec![0.0f32; h * w];
++        let map = image_loss_eval(rgb(&zeros, h, w, &device), Tensor::from_data(packed, &device), cfg(1.0, 0.0, 1.0, 0.0));
++        let map = to_vec(map).await;
++        let ch0: Vec<f32> = map.chunks_exact(3).map(|p| p[0]).collect();
++        dump(dir, &format!("gtread_{name}.f32"), &ch0);
++    }
++}

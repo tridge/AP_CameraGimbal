@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 root = Path(SPECPATH).parent
 payload = root / 'build/windows/payload'
 a = Analysis([str(root / 'windows/entry.py')], pathex=[str(root)],
-             datas=[(str(payload / name), name) for name in ('native', 'fixtures', 'configs', 'licenses')] +
+             datas=[(str(payload / name), name) for name in ('native', 'fixtures', 'configs', 'licenses', 'webroot')] +
                    [(str(payload / 'targets.json'), '.'), (str(root / 'assets/camera-gimbal.ico'), 'assets')] +
                    collect_data_files('MAVProxy.modules.mavproxy_map'),
              hiddenimports=collect_submodules('MAVProxy.modules.mavproxy_map3d') +

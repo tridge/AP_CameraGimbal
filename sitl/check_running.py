@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Return success when an MT11 SITL web service is already running."""
+"""Return success when a camera SITL web service is already running."""
 
 import argparse
 import base64
@@ -20,15 +20,15 @@ def main():
         ).decode("ascii")
         connection = http.client.HTTPConnection("127.0.0.1", args.port,
                                                 timeout=0.5)
-        connection.request("GET", "/sensors.json",
+        connection.request("GET", "/live/attitude.json",
                            headers={"Authorization": f"Basic {credentials}"})
         response = connection.getresponse()
         body = response.read()
         connection.close()
-        sensors = json.loads(body) if response.status == 200 else {}
+        attitude = json.loads(body) if response.status == 200 else {}
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         raise SystemExit(1)
-    if "lidar_m" not in sensors or "cpu_c" not in sensors:
+    if not isinstance(attitude, dict) or "yaw_deg" not in attitude or "pitch_deg" not in attitude:
         raise SystemExit(1)
 
 

@@ -1,0 +1,76 @@
+From 3328579e4818898dc44c5972ed45bbe7b7649ceb Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:09:51 +1100
+Subject: [PATCH 02/12] brush-dataset: frozen eval views from eval_views.txt
+
+A COLMAP dataset containing eval_views.txt (one image file name per line)
+uses exactly those views for evaluation, so holdouts can be fixed by name
+rather than by position.
+---
+ crates/brush-dataset/src/formats/colmap.rs |  5 ++--
+ crates/brush-dataset/src/formats/mod.rs    | 29 ++++++++++++++++++++++
+ 2 files changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/crates/brush-dataset/src/formats/colmap.rs b/crates/brush-dataset/src/formats/colmap.rs
+index 04627ec..2a847b6 100644
+--- a/crates/brush-dataset/src/formats/colmap.rs
++++ b/crates/brush-dataset/src/formats/colmap.rs
+@@ -8,7 +8,7 @@ use super::{DatasetLoadResult, FormatError};
+ use crate::{
+     Dataset,
+     config::LoadDatasetConfig,
+-    formats::{find_image_by_name, find_mask_path, split_eval_every},
++    formats::{find_image_by_name, find_mask_path, split_eval},
+     scene::{LoadImage, SceneView},
+ };
+ use brush_render::kernels::camera_model::CameraModel;
+@@ -221,7 +221,8 @@ async fn load_dataset_inner(
+             views.push(SceneView { camera, image });
+         }
+ 
+-        let (train_views, eval_views) = split_eval_every(views, load_args.eval_split_every);
++        let (train_views, eval_views) =
++            split_eval(&vfs, views, load_args.eval_split_every).await?;
+ 
+         Result::<_, FormatError>::Ok((Dataset::from_views(train_views, eval_views), warnings))
+     });
+diff --git a/crates/brush-dataset/src/formats/mod.rs b/crates/brush-dataset/src/formats/mod.rs
+index d85299e..ef25b30 100644
+--- a/crates/brush-dataset/src/formats/mod.rs
++++ b/crates/brush-dataset/src/formats/mod.rs
+@@ -185,6 +185,35 @@ fn opengl_c2w_to_pose(mut c2w: glam::Mat4) -> (glam::Vec3, glam::Quat) {
+     (translation, rotation)
+ }
+ 
++/// Split views into (train, eval). A dataset file `eval_views.txt` (one image file
++/// name per line) fixes the eval views by name; otherwise every
++/// `eval_split_every`-th view is an eval view.
++async fn split_eval(
++    vfs: &BrushVfs,
++    views: Vec<SceneView>,
++    eval_split_every: Option<usize>,
++) -> Result<(Vec<SceneView>, Vec<SceneView>), FormatError> {
++    use tokio::io::AsyncReadExt;
++    let Some(list) = vfs.files_ending_in("eval_views.txt").min() else {
++        return Ok(split_eval_every(views, eval_split_every));
++    };
++    let mut text = String::new();
++    vfs.reader_at_path(list).await?.read_to_string(&mut text).await?;
++    let names: std::collections::HashSet<&str> =
++        text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
++    let (train, eval): (Vec<_>, Vec<_>) = views
++        .into_iter()
++        .partition(|v| !names.contains(v.image.img_name().as_str()));
++    if eval.len() != names.len() {
++        return Err(FormatError::InvalidFormat(format!(
++            "eval_views.txt lists {} views but {} of them are in the dataset",
++            names.len(),
++            eval.len()
++        )));
++    }
++    Ok((train, eval))
++}
++
+ /// Split views into (train, eval) by selecting every `eval_split_every`-th view
+ /// for eval. With `None`, every view is a train view.
+ fn split_eval_every(

@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from image_controls import ImageControls, PALETTES
+from target_properties import TARGETS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -96,8 +97,134 @@ class Viewer:
         self.client.close()
 
 
+def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, root):
+    from test_camera_definition import write, read, M, receive
+    assert read(link, 'OSD_CROSS') == 0
+    assert ('OSD_THERMAL_FOV' in definition.parameters) == (backend == 'mt11')
+    h, w = baseline.shape[:2]
+    scale = max(1, h // 720)
+    cx, cy = w // 2, h // 2
+    write(link, definition, 'OSD_CROSS', 2, M.PARAM_ACK_VALUE_UNSUPPORTED)
+    write(link, definition, 'OSD_CROSS', 1)
+    changed = viewer.frame()
+    # Four visible white arms and a clear gap over the optical centre.
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            assert changed[cy + sy * 12 * scale, cx + sx * 12 * scale].min() > 180
+    assert np.abs(changed[cy, cx].astype(float) - baseline[cy, cx]).max() < 10
+    assert read(link, 'OSD_CROSS') == 1 and 'cross=true' in config.read_text().replace(' ', '')
+    write(link, definition, 'OSD_CROSS', 0)
+    assert np.abs(viewer.frame().astype(float) - baseline).mean() < 3
+    # Standard MAVLink parameters and web-style INI reload share the same path.
+    link.mav.param_set_send(42, 100, b'OSD_CROSS', 1, M.MAV_PARAM_TYPE_INT32)
+    reply = receive(link, 'PARAM_VALUE', lambda msg: msg.param_id == 'OSD_CROSS')
+    assert reply.param_value == 1
+    assert viewer.frame()[cy+12*scale, cx+12*scale].min() > 180
+    config.write_text(config.read_text().replace('cross = true', 'cross = false').replace('cross=true', 'cross=false'))
+    deadline = time.monotonic()+5
+    while time.monotonic() < deadline:
+        if read(link, 'OSD_CROSS') == 0:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError('Overlay INI update was not applied live')
+    assert np.abs(viewer.frame().astype(float)-baseline).mean() < 3
+    print(f'PASS {backend} cross: camera.xml, MAVLink, INI reload, validation and live pixels', flush=True)
+    assert ('OSD_RECORD' in definition.parameters) == (backend != 'z1mini')
+    if backend != 'z1mini':
+        assert read(link, 'OSD_RECORD') == 0
+        write(link, definition, 'OSD_RECORD', 2, M.PARAM_ACK_VALUE_UNSUPPORTED)
+        write(link, definition, 'OSD_CROSS', 1)
+        write(link, definition, 'REC_AUTOSTART', 1)
+        # Change the recording destination live, without stopping recording.
+        for enabled in (0, 1, 0):
+            write(link, definition, 'OSD_RECORD', enabled)
+            for _ in range(6):
+                live = viewer.frame()
+                assert live[cy+12*scale, cx+12*scale].min() > 180
+        write(link, definition, 'REC_AUTOSTART', 0)
+        recordings = list((root / 'record').glob('*.mp4'))
+        assert len(recordings) == (2 if backend == 'mt11' else 1)
+        for path in recordings:
+            with av.open(str(path)) as video:
+                visible = []
+                for decoded in video.decode(video=0):
+                    frame = decoded.to_ndarray(format='rgb24')
+                    rh, rw = frame.shape[:2]
+                    rs = max(1, rh // 720)
+                    visible.append(frame[rh//2+12*rs, rw//2+12*rs].min() > 180)
+            assert visible and not visible[0] and any(visible) and not visible[-1], (path, visible)
+            path.unlink()
+        write(link, definition, 'OSD_CROSS', 0)
+        print(f'PASS {backend} clean recording default and live recording overlay toggle', flush=True)
+    if backend != 'mt11':
+        return
+    thermal = Viewer(rtsp, 'video2')
+    try:
+        thermal_baseline = thermal.frame()
+        write(link, definition, 'OSD_THERMAL_FOV', 1)
+        box = viewer.frame()
+        # Independent pinhole projection using native thermal 5:4 aspect.
+        wide_fov = TARGETS[backend]['lens1_fov_h']
+        half_w = w * .5 * math.tan(math.radians(24.2)/2) / math.tan(math.radians(wide_fov)/2)
+        half_h = half_w * 512 / 640
+        x0, x1 = round(cx-half_w), round(cx+half_w)
+        y0, y1 = round(cy-half_h), round(cy+half_h)
+        assert box[y0, x0+5].min() > 180
+        assert box[y1, x0+5].min() > 180
+        assert box[y0+5, x0].min() > 180
+        assert box[y0+5, x1].min() > 180
+        assert np.abs(thermal.frame().astype(float)-thermal_baseline).mean() < 3
+        # Swap places; only the RGB image keeps the box.
+        write(link, definition, 'CAM_SOURCE', 1)
+        swapped_rgb = thermal.frame()
+        # Thermal-main mode selects the zoom RGB lens (31.36 degrees).
+        sw = swapped_rgb.shape[1]
+        sx = round(sw/2 - sw*.5*math.tan(math.radians(24.2)/2) / math.tan(math.radians(31.3613561)/2))
+        assert swapped_rgb[100:200, sx].max() > 180
+        write(link, definition, 'CAM_SOURCE', 0)
+        write(link, definition, 'CAM_LENS', 0)
+        # Wide digital zoom doubles the tangent-space box size.
+        write(link, definition, 'CAM_ZOOM', 2)
+        zoomed = viewer.frame()
+        zx, zy = round(cx-2*half_w), round(cy-2*half_h)
+        assert zoomed[zy, zx+5].min() > 180
+        # At maximum zoom all thermal boundaries are outside the RGB view.
+        write(link, definition, 'CAM_ZOOM', 10)
+        outside = viewer.frame()
+        write(link, definition, 'OSD_THERMAL_FOV', 0)
+        assert np.abs(viewer.frame().astype(float)-outside).mean() < 3
+        write(link, definition, 'CAM_ZOOM', 1)
+        # Explicitly opt in to recording the enabled cross and thermal box.
+        write(link, definition, 'OSD_RECORD', 1)
+        write(link, definition, 'OSD_CROSS', 1)
+        write(link, definition, 'OSD_THERMAL_FOV', 1)
+        write(link, definition, 'REC_AUTOSTART', 1)
+        for _ in range(4):
+            viewer.frame()
+        write(link, definition, 'REC_AUTOSTART', 0)
+        recorded = next((root / 'record').glob('SITL_0_*.mp4'))
+        with av.open(str(recorded)) as video:
+            frame = next(video.decode(video=0)).to_ndarray(format='rgb24')
+        rh, rw = frame.shape[:2]
+        rs = max(1, rh // 720)
+        assert frame[rh//2 + 12*rs, rw//2 + 12*rs].min() > 180
+        rx = round(rw/2-rw*.5*math.tan(math.radians(24.2)/2)/math.tan(math.radians(wide_fov)/2))
+        ry = round(rh/2-(rw/2-rx)*512/640)
+        assert frame[ry, rx+5*rs].min() > 180
+        # Leave recording fixtures for the existing later checks unambiguous.
+        for path in (root / 'record').glob('*.mp4'):
+            path.unlink()
+        write(link, definition, 'OSD_CROSS', 0)
+        write(link, definition, 'OSD_THERMAL_FOV', 0)
+        write(link, definition, 'OSD_RECORD', 0)
+        print('PASS thermal box geometry, source swap, zoom/clipping, and MP4 overlays', flush=True)
+    finally:
+        thermal.close()
+
+
 def integration(backend):
-    from test_camera_definition import CameraDefinition, download, write, connect, port, stop, wait_ready, M, receive
+    from test_camera_definition import CameraDefinition, download, write, read, connect, port, stop, wait_ready, M, receive
     build = ROOT / 'build' / ('sitl' if backend == 'mt11' else backend + '-sitl')
     with tempfile.TemporaryDirectory(prefix='sitl-image-controls-') as tmp:
         root = Path(tmp)
@@ -106,7 +233,7 @@ def integration(backend):
                         '-t', '0.2', '-r', '20', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
                         str(root / 'source.mp4')], check=True)
         config = root / 'camera.ini'
-        config.write_text('[logging]\ndisarmed=true\n[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
+        config.write_text('[video]\ntelemetry=apcg\n[logging]\ndisarmed=true\n[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
                           ('1920x1080\n' if backend == 'z1mini' else '1280x720\n'))
         gp, tcp, rtsp = port(), port(), port()
         env = dict(os.environ, CAMERA_APP_CONFIG=str(config), CAMERA_APP_BACKEND=backend,
@@ -129,6 +256,7 @@ def integration(backend):
                 definition = CameraDefinition(download(link))
                 viewer = Viewer(rtsp, 'video1')
                 baseline = viewer.frame()
+                overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, root)
                 # Single-lens targets without image sliders otherwise finish
                 # before a useful 5 Hz diagnostic sample window is collected.
                 sample_until = time.monotonic() + 2
@@ -153,9 +281,24 @@ def integration(backend):
                         assert np.abs(restored.astype(float) - baseline).mean() < 3, name
                         print(f'PASS {backend} PARAM_EXT {name} changes live pixels and restores them', flush=True)
                 if 'CAM_ZOOM' in definition.parameters:
-                    write(link, definition, 'CAM_ZOOM', 50.0)
+                    write(link, definition, 'CAM_ZOOM', 3.0)
                     assert np.abs(viewer.frame().astype(float) - baseline).mean() > 10
-                    write(link, definition, 'CAM_ZOOM', 0.0)
+                    write(link, definition, 'CAM_ZOOM', 1.0)
+                if 'CAM_OPT_ZOOM' in definition.parameters:
+                    write(link, definition, 'CAM_LENS', 1)
+                    optical_baseline = viewer.frame()
+                    write(link, definition, 'CAM_OPT_ZOOM', 2.0)
+                    assert read(link, 'CAM_LENS') == 1
+                    # The tele lens already crops the chart by 3.44x at its
+                    # minimum. Doubling this leaves the uniform centre; the
+                    # ideal chart difference is only 6.4 levels (before H264).
+                    difference = np.abs(viewer.frame().astype(float) - optical_baseline).mean()
+                    assert difference > 4, difference
+                    assert read(link, 'CAM_ZOOM') == 1
+                    write(link, definition, 'CAM_OPT_ZOOM', 1.0)
+                    write(link, definition, 'CAM_LENS', 0)
+                    assert np.abs(viewer.frame().astype(float) - baseline).mean() < 3
+                    print('PASS optical zoom changes pixels without switching lens or changing wide zoom', flush=True)
                 if 'CAM_PALETTE' in definition.parameters:
                     thermal = Viewer(rtsp, 'video2')
                     white = thermal.frame()
@@ -240,16 +383,21 @@ def integration(backend):
                     thermal.close()
                     thermal = None
                     write(link, definition, 'VIDEO_MAIN_CODEC', 1)
-                    write(link, definition, 'VIDEO_SUB_CODEC', 1)
+                    # Explicit mixed codecs: thermal now honours its configured
+                    # codec, so requesting H.265 for both cannot test this swap.
+                    write(link, definition, 'VIDEO_SUB_CODEC', 0)
                     for source in (0, 1, 0):
                         write(link, definition, 'CAM_SOURCE', source)
                         time.sleep(.4)
-                        for index, codec in enumerate(('h264', 'hevc') if source else ('hevc', 'h264')):
+                        # Thermal and secondary RGB both use the sub-stream
+                        # codec; only the primary RGB encoder uses main_codec.
+                        for index, codec in enumerate(('h264', 'h264') if source else ('hevc', 'h264')):
                             with av.open(f'rtsp://127.0.0.1:{rtsp}/video{index+1}',
                                          options={'rtsp_transport': 'tcp'}, timeout=10) as stream:
-                                assert stream.streams.video[0].codec_context.name == codec
+                                actual_codec = stream.streams.video[0].codec_context.name
+                                assert actual_codec == codec, (source, index, actual_codec, codec)
                                 assert next(stream.decode(video=0)).width == 1280
-                    print('PASS H.265 RGB/H.264 thermal swaps advertise and deliver matching codecs', flush=True)
+                    print('PASS mixed-codec RGB/thermal swaps advertise and deliver matching codecs', flush=True)
                 print(f'PASS {backend} simulated video controls', flush=True)
                 assert camera.poll() is None
             except Exception:

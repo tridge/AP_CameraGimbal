@@ -38,8 +38,16 @@ FOV is scaled using focal length, not by dividing the angle. ZR10 interpolates
 between its supplied 71.5-degree wide and 6.7-degree tele endpoints through the
 10x optical range; higher zoom remains uncalibrated. MT11's zoom-lens baseline
 uses the existing 3.44x crossover and 3.2x optical limit. Its lens-2 FOV is an
-initial value derived from that model, not a new bench measurement. MT11/A8 wide
-FOV remains 88 degrees and MT11 thermal remains 24.2 degrees. Z1-Mini's 54.7-degree
+initial value derived from that model, not a new bench measurement. MT11 wide
+video uses 71.532165 degrees horizontal and 44.113793 degrees vertical at 1x.
+These are derived from the [MT11 specification's 84-degree diagonal FOV](https://reebot.com/en/index.php?id=specs2&asd=481)
+on the full 4:3 sensor, retaining its width and cropping vertically to 16:9:
+`H = 2 atan(tan(84/2) * 4/5)`, `V = 2 atan(tan(H/2) * 9/16)`.
+This supersedes the provisional 58.1-degree bench fit; see the flight comparison
+in the porting repository's `analysis/MT11/flight-fov-20260828`. Firmware and SITL
+consume the same target constant; digital zoom scales focal length. Its tele
+calibration still needs measurement. A8 wide remains 88 degrees and MT11 thermal
+remains 24.2 degrees. Z1-Mini's 54.7-degree
 horizontal FOV and sensor dimensions come from the surveyed vendor gcu_config.
 A8 uses its hardware backend's 6x digital zoom limit in SITL and the UI as well.
 Thermal calibration remains a separate TODO.
@@ -106,3 +114,14 @@ exercises the A8 supervisor with isolated paths and mocked hardware, including
 crash recovery and preservation of saved settings. `sitl/test_z1mini_sitl.py`
 also checks public XFRobot TCP/UDP framing and CRC rejection, and 1080p live
 video alongside 4K recording. Use an isolated build/runtime for these tests: they change its configuration.
+
+MAVLink `VIDEO_STREAM_INFORMATION` and `VIDEO_STREAM_STATUS` report the current
+HFOV rounded to whole degrees (72 at MT11 wide 1x). Requestable
+`CAMERA_FOV_STATUS` (message 271, via `MAV_CMD_REQUEST_MESSAGE`) reports both HFOV
+and VFOV as floats for the current main source, including optical/digital zoom.
+Thermal VFOV uses the native sensor aspect before encoder stretching/padding;
+composite side-by-side views report unknown FOV. Unknown camera or image
+positions use the protocol sentinel rather than a fabricated location. Encoded
+video/recording telemetry retains the per-frame floating-point `hfov_deg` field.
+The supported SIYI/UniGCS control messages have no identified FOV report field;
+their video and tracking use the same media calibration.

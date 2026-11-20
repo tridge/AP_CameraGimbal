@@ -17,4 +17,12 @@ bool ca_targeting_global_angles(int32_t vehicle_lat_e7,
                                 float *pitch_rad,
                                 float *yaw_earth_rad);
 
+/* Instantaneous earth-frame LOS rates to a stationary ROI, using vehicle NED
+ * velocity. Returns false at undefined bearings (within 10 cm or at a pole). */
+bool ca_targeting_global_rates(int32_t vehicle_lat_e7, int32_t vehicle_lon_e7,
+                               float vehicle_alt_amsl_m, int32_t target_lat_e7,
+                               int32_t target_lon_e7, float target_alt_amsl_m,
+                               float vn, float ve, float vd,
+                               float *pitch_rate, float *yaw_rate);
+
 #endif

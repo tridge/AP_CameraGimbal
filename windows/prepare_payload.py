@@ -16,11 +16,15 @@ def main():
     for path in (ROOT / 'build/windows/native').iterdir():
         if path.suffix.lower() in ('.exe', '.dll'):
             shutil.copy2(path, PAYLOAD / 'native' / path.name)
+    # Replace the tree to avoid shipping stale templates from an older build.
+    shutil.rmtree(PAYLOAD / 'webroot', ignore_errors=True)
+    shutil.copytree(ROOT / 'web/webroot', PAYLOAD / 'webroot')
     shutil.copy2(ROOT / 'build/targets/targets.json', PAYLOAD / 'targets.json')
     ffmpeg = PAYLOAD / 'native/ffmpeg.exe'
     shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)
     for backend, source in (('mt11', 'camera_app/camera.ini'), ('a8', 'packaging/a8/camera.ini'),
-                            ('zr10', 'sitl/zr10.ini'), ('z1mini', 'packaging/z1mini/camera.ini')):
+                            ('zr10', 'sitl/zr10.ini'), ('zt30', 'packaging/zt30/camera.ini'),
+                            ('z1mini', 'packaging/z1mini/camera.ini')):
         shutil.copy2(ROOT / source, PAYLOAD / 'configs' / (backend + '.ini'))
     for name, filter_ in [('rgb.h264', 'testsrc2=size=1920x1080:rate=20'),
                            ('thermal.h264', 'testsrc2=size=1280x720:rate=20')]:

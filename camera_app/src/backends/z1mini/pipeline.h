@@ -1,6 +1,6 @@
 #ifndef CA_Z1_PIPELINE_H
 #define CA_Z1_PIPELINE_H
-#include <stdatomic.h>
+#include "apcam/atomic.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>

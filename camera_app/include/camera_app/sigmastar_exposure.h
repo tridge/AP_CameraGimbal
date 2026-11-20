@@ -1,5 +1,6 @@
 #ifndef CAMERA_APP_SIGMASTAR_EXPOSURE_H
 #define CAMERA_APP_SIGMASTAR_EXPOSURE_H
+#include "apcam/compiler.h"
 #include "camera_app/exposure.h"
 #include <stddef.h>
 
@@ -14,7 +15,7 @@ struct ca_sstar_exposure_info {
     struct ca_sstar_exposure_value long_value, short_value;
     uint32_t weighted_y, average_y, histogram[128], lv, bv, target;
 };
-_Static_assert(offsetof(struct ca_sstar_exposure_info,target)==568,"SigmaStar AE ABI");
+APC_STATIC_ASSERT(offsetof(struct ca_sstar_exposure_info,target)==568,"SigmaStar AE ABI");
 static inline void ca_sstar_exposure_decode(struct ca_exposure *s,
                                            const struct ca_sstar_exposure_info *q)
 {

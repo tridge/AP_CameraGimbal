@@ -13,6 +13,12 @@ extern "C" {
 
 extern const uint8_t ca_video_metadata_uuid[16];
 
+/* Process-wide selection is fixed before media workers start. A parameter
+ * change takes effect on app restart, preserving active stream/file formats. */
+void ca_video_metadata_set_format(enum ca_video_telemetry_format format);
+enum ca_video_telemetry_format ca_video_metadata_format(void);
+const char *ca_video_recording_extension(void);
+
 /* Bounded UTF-8 JSON, excluding the terminating NUL. pts90k identifies the
  * video sample (or RTP timestamp); UTC is the telemetry snapshot time. */
 size_t ca_video_metadata_json(const struct ca_metadata *metadata,

@@ -1,0 +1,112 @@
+From 6fd014c7d0470762bf77af0db15a68f4846e0df9 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:13:13 +1100
+Subject: [PATCH 04/12] brush-serde, brush-process: extra ply header comments
+
+splat_to_ply_with_comments() adds caller-supplied header comment lines;
+--export-comment (repeatable) passes them to exported checkpoints, e.g. the
+metadata a viewer needs to decode thermal values.
+---
+ crates/brush-process/src/config.rs       |  4 ++++
+ crates/brush-process/src/train_stream.rs |  8 ++++++--
+ crates/brush-serde/src/export.rs         | 11 +++++++++++
+ crates/brush-serde/src/lib.rs            |  2 +-
+ 4 files changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/crates/brush-process/src/config.rs b/crates/brush-process/src/config.rs
+index 17ac86b..e2888f5 100644
+--- a/crates/brush-process/src/config.rs
++++ b/crates/brush-process/src/config.rs
+@@ -45,6 +45,10 @@ pub struct ProcessConfig {
+         default_value = "export_{iter}.ply"
+     )]
+     pub export_name: String,
++    /// Extra header comment line for exported ply files (repeatable).
++    #[arg(long = "export-comment", help_heading = "Process options")]
++    #[serde(default)]
++    pub export_comments: Vec<String>,
+ }
+ 
+ #[derive(Parser, Clone, Serialize, Deserialize)]
+diff --git a/crates/brush-process/src/train_stream.rs b/crates/brush-process/src/train_stream.rs
+index abf9c0a..323958f 100644
+--- a/crates/brush-process/src/train_stream.rs
++++ b/crates/brush-process/src/train_stream.rs
+@@ -243,6 +243,7 @@ pub(crate) async fn train_stream(
+                     exp_total,
+                     up_axis,
+                     train_stream_config.load_config.units_per_meter,
++                    &process_config.export_comments,
+                 )
+                 .await
+                 .with_context(|| "Export at LOD boundary failed");
+@@ -409,6 +410,7 @@ pub(crate) async fn train_stream(
+                     exp_total,
+                     up_axis,
+                     train_stream_config.load_config.units_per_meter,
++                    &process_config.export_comments,
+                 )
+                 .await
+                 .with_context(|| format!("Export at iteration {iter} failed"));
+@@ -634,6 +636,7 @@ async fn export_checkpoint(
+     total_steps: u32,
+     up_axis: Option<glam::Vec3>,
+     units_per_meter: f32,
++    comments: &[String],
+ ) -> Result<(), anyhow::Error> {
+     tokio::fs::create_dir_all(&export_path)
+         .await
+@@ -641,8 +644,9 @@ async fn export_checkpoint(
+     let digits = ((total_steps as f64).log10().floor() as usize) + 1;
+     let export_name = export_name.replace("{iter}", &format!("{iter:0digits$}"));
+     // Training runs in metres; write the file back in the dataset's units.
+-    let splat_data = brush_serde::splat_to_ply(splats.scaled(units_per_meter), up_axis)
+-        .await
++    let splat_data =
++        brush_serde::splat_to_ply_with_comments(splats.scaled(units_per_meter), up_axis, comments)
++            .await
+         .context("Serializing splat data")?;
+     tokio::fs::write(export_path.join(&export_name), splat_data)
+         .await
+diff --git a/crates/brush-serde/src/export.rs b/crates/brush-serde/src/export.rs
+index d119ac1..dc69fae 100644
+--- a/crates/brush-serde/src/export.rs
++++ b/crates/brush-serde/src/export.rs
+@@ -181,6 +181,16 @@ async fn read_splat_data(splats: Splats) -> Result<DynamicPly, ExportError> {
+ }
+ 
+ pub async fn splat_to_ply(splats: Splats, up_axis: Option<Vec3>) -> Result<Vec<u8>, ExportError> {
++    splat_to_ply_with_comments(splats, up_axis, &[]).await
++}
++
++/// As [`splat_to_ply`], adding `extra_comments` as header comment lines (e.g. the
++/// metadata a viewer needs to decode thermal values).
++pub async fn splat_to_ply_with_comments(
++    splats: Splats,
++    up_axis: Option<Vec3>,
++    extra_comments: &[String],
++) -> Result<Vec<u8>, ExportError> {
+     // Fold any 3D-filter floor into the stored scales/opacity so the ply holds
+     // ordinary derived values — the floor is never written as a separate field.
+     let splats = splats.bake_min_scale();
+@@ -197,6 +207,7 @@ pub async fn splat_to_ply(splats: Splats, up_axis: Option<Vec3>) -> Result<Vec<u
+     }
+     comments.push(format!("SH degree: {sh_degree}"));
+     comments.push(format!("SplatRenderMode: {render_mode_str}"));
++    comments.extend(extra_comments.iter().map(|c| c.replace(['\n', '\r'], " ")));
+ 
+     Ok(serde_ply::to_bytes(
+         &ply,
+diff --git a/crates/brush-serde/src/lib.rs b/crates/brush-serde/src/lib.rs
+index 107cdbb..f508a29 100644
+--- a/crates/brush-serde/src/lib.rs
++++ b/crates/brush-serde/src/lib.rs
+@@ -6,7 +6,7 @@ pub mod ply_gaussian;
+ pub mod quant;
+ 
+ // Re-export main functionality
+-pub use export::{ExportError, splat_to_ply};
++pub use export::{ExportError, splat_to_ply, splat_to_ply_with_comments};
+ pub use import::{
+     ParseMetadata, SplatData, SplatMessage, load_splat_from_ply, stream_splat_from_ply,
+ };

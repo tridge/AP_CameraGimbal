@@ -24,6 +24,12 @@ if [ "$src" != "$dest" ]; then
         cp "$src/$file" "$dest/$file.new"
         mv "$dest/$file.new" "$dest/$file"
     done
+    # The service is stopped, so install the matching complete asset set and
+    # remove assets which disappeared since the previous version.
+    rm -rf "$dest/webroot.new"
+    cp -R "$src/webroot" "$dest/webroot.new"
+    rm -rf "$dest/webroot"
+    mv "$dest/webroot.new" "$dest/webroot"
     cp "$src/SHA256SUMS" "$dest/SHA256SUMS"
 fi
 chmod 755 "$dest/camera-app" "$dest/zr10-web" "$dest/zr10-uuid" "$dest/"*.sh

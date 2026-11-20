@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
     while (1) pause();
 }
 ''')
-    subprocess.run(['cc', '-O2', '-pthread', str(source), '-o', str(app / 'camera-app')], check=True)
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-pthread', str(source), '-o', str(app / 'camera-app')], check=True)
     (customer / 'gb_control').write_bytes((app / 'camera-app').read_bytes())
     (customer / 'gb_control').chmod(0o755)
     (customer/'ipc').mkdir()
@@ -131,11 +131,11 @@ sys.exit(0 if pids else 1)
         "USER_LOCK_PATH": runtime/'users.lock',
         "SESSION_PATH": runtime/'sessions', "RUNTIME_DIR": runtime,
     }
-    subprocess.run(['cc', '-O2', '-std=c11', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-std=gnu++17', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
                     '-DMT11_WEB_TEST', '-Wno-address-of-packed-member',
                     '-I'+str(repo/'camera_app/build/mavlink/all/include'),
                     *[f'-D{key}="{value}"' for key, value in paths.items()],
-                    str(repo/'web/mt11-web.c'), '-o', str(app/'z1mini-web'), '-lm'], check=True)
+                    str(repo/'web/mt11-web.cpp'), '-o', str(app/'z1mini-web'), '-lm'], check=True)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]

@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__APPLE__)
 #include <poll.h>
 #define CA_POLL_IN POLLIN
 #define CA_POLL_OUT POLLOUT
@@ -24,7 +24,7 @@ struct ca_pollset {
     union ca_poll_data data[CA_POLL_CAPACITY];
     unsigned count;
 };
-static inline struct ca_pollset *ca_poll_open(void) { return calloc(1, sizeof(struct ca_pollset)); }
+static inline struct ca_pollset *ca_poll_open(void) { return (struct ca_pollset *)calloc(1, sizeof(struct ca_pollset)); }
 static inline int ca_poll_fd(const struct ca_pollset *set) { (void)set; return -1; }
 static inline void ca_poll_close(struct ca_pollset *set) { free(set); }
 static inline int ca_poll_change(struct ca_pollset *set, int op, int fd, const ca_poll_event *event)
@@ -71,7 +71,7 @@ typedef struct epoll_event ca_poll_event;
 struct ca_pollset { int fd; };
 static inline struct ca_pollset *ca_poll_open(void)
 {
-    struct ca_pollset *set = malloc(sizeof(*set));
+    struct ca_pollset *set = (struct ca_pollset*)(malloc(sizeof(*set)));
     if (!set) return NULL;
     set->fd = epoll_create1(EPOLL_CLOEXEC);
     if (set->fd < 0) { free(set); return NULL; }

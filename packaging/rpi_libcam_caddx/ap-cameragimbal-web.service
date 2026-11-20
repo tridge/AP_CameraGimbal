@@ -1,0 +1,15 @@
+[Unit]
+Description=AP_CameraGimbal web interface (Raspberry Pi + libcamera + CADDX)
+After=network-online.target ap-cameragimbal.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# First start: user admin, password ardupilot (change it on the Users page).
+ExecStartPre=/bin/sh -c 'umask 077; [ -s /etc/ap_cameragimbal/web.pass ] || echo ardupilot > /etc/ap_cameragimbal/web.pass'
+ExecStart=/usr/local/bin/ap-camera-web
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

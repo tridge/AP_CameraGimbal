@@ -1,0 +1,10 @@
+--- a/TaskScheduler.cpp
++++ b/TaskScheduler.cpp
+@@ -39,8 +39,6 @@
+     signal(SIGPIPE, SIG_IGN);
+     signal(SIGQUIT, SIG_IGN);
+     signal(SIGUSR1, SIG_IGN);
+-    signal(SIGTERM, SIG_IGN);
+-    signal(SIGKILL, SIG_IGN);
+ #endif
+     is_shutdown_ = false;

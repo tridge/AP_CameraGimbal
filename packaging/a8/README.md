@@ -4,7 +4,7 @@
 replaces the vendor application partition with `camera-app`.
 
 For a package ready for end users, use `make release RELEASE_TARGETS=A8`.
-It creates `release/<tag>/A8/SIYI_4K_MINI_UpgradeSD.bin`, installation and
+It creates `release/<tag>/SIYI_A8/SIYI_4K_MINI_UpgradeSD.bin`, installation and
 update instructions in `README.md`, build information and SHA-256 checksums.
 This exact filename works both on the SD card and in the AP web updater.
 
@@ -48,6 +48,29 @@ If startup fails or the camera app exits, the web service remains available for
 logs, parameter changes and restart. It never starts cardv as a fallback.
 The SD watcher remains active independently of camera restarts.
 
+Startup enables `ALLMULTI` on `eth0` for the retained vendor Ethernet driver.
+On the tested A8, joining `224.0.0.1` installed the expected multicast group
+and MAC entry but discovery packets were still dropped; enabling `ALLMULTI`
+restored UniGCS discovery. This does not enable promiscuous reception.
+
+## Digital zoom pipeline
+
+The sensor feeds ISP input port 0 in realtime. ISP output port 1 supplies
+buffered YUV420 frames to SCL device 1, whose three output ports feed the main
+stream, substream and recording encoders. Overlays attach to that same scaler
+device. This allows all three outputs to upscale the digital zoom crop while
+retaining their configured resolutions, including 4K recording.
+
+Do not switch this connection back to ISP output 0 and realtime SCL device 0:
+upscaling the live sensor feed can overflow its FIFO and corrupt frames. On
+the A8 this produced severe flicker at 2x zoom and above with 1080p streaming
+and 4K recording. The buffered path was tested on hardware from 1x through
+6x, with all three scaler outputs maintaining 25 fps.
+
+`make -C camera_app a8-zoom-test` checks the production ISP/scaler/encoder
+routing, zoom crops, orientation and overlay destination. Hardware testing
+is still needed to detect pixel corruption and verify scaler throughput.
+
 ## Building
 
 Run `python3 tools/install_build_environment.py --targets a8` on x86_64
@@ -73,9 +96,10 @@ the bootloader's filename directly.
    inserted. U-Boot rewrites the customer partition and boots; the launcher
    removes the file from the card afterwards.
 3. The camera keeps 192.168.144.25 and the vendor telnet login.
-   `camera-app` listens on SIYI 37260, MAVLink 14550, RTSP 8554
+   `camera-app` listens on SIYI 37260, MAVLink 16001, RTSP 8554
    (`/video1`, `/video2`) and writes captures and recordings to the card
-   under `/mnt/mmc/capture` and `/mnt/mmc/record`. The web interface is at
+   under `/mnt/mmc/DCIM/capture` and `/mnt/mmc/DCIM/record`, the DCIM folder
+   the vendor firmware also uses. The web interface is at
    `http://192.168.144.25/`; its login page takes user `admin` with the
    package's web password (`ardupilot` by default) and offers the interface
    in English, Simplified Chinese or Japanese. Later updates can be uploaded

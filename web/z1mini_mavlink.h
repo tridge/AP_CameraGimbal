@@ -8,7 +8,7 @@ static int z1_web_socket(unsigned port)
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct timeval timeout = {.tv_sec = 0, .tv_usec = 350000};
     struct sockaddr_in peer = {.sin_family = AF_INET, .sin_port = htons(port),
-                              .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+                              .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
     if (fd >= 0 && (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) ||
                    connect(fd, (struct sockaddr *)&peer, sizeof(peer)))) {
         close(fd); fd = -1;
@@ -36,8 +36,8 @@ static bool z1_web_attitude(unsigned port, float *roll, float *pitch, float *yaw
     mavlink_msg_command_long_pack(255, 191, &message, 0, 154,
         MAV_CMD_REQUEST_MESSAGE, 0, MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS, 0, 0, 0, 0, 0, 0);
     bool ok = false;
+    mavlink_status_t status = {};
     if (!z1_web_send(fd, &message)) goto done;
-    mavlink_status_t status = {0};
     for (unsigned attempt = 0; attempt < 8; attempt++) {
         uint8_t buffer[MAVLINK_MAX_PACKET_LEN * 2];
         ssize_t n = recv(fd, buffer, sizeof(buffer), 0);

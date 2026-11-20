@@ -4,34 +4,57 @@ Firmware: **{filename}**. Source revision: `{revision}`.
 `BUILD_INFO.json` records whether the build includes uncommitted changes.
 
 This is the native AX620A application overlay: **1080p live video** and a
-separate **4K recording** path. It retains the installed XFRobot kernel,
+separate **selectable 1080p or 4K recording** path. It retains the installed XFRobot kernel,
 root filesystem, AX libraries and calibration. It is not an SD bootloader image.
 
 ## First installation and updates
 
 1. Keep the original XFRobot firmware package available for recovery. Verify
    this package's SHA-256 against `SHA256SUMS`.
-2. Use the XFRobot firmware update tool's `.gcu` upload procedure to transfer
-   **{filename}**, then reboot. Keep power connected throughout the update.
-   The vendor Windows updater procedure still needs hardware verification;
-   bench installations so far used direct Ethernet deployment.
+2. For a first installation use the XFRobot firmware update tool's `.gcu`
+   upload procedure to transfer **{filename}**, then reboot. Keep power
+   connected throughout the update. The updater replaces the whole
+   `/opt/bin/gcu` directory, removing the vendor camera programs; the package
+   includes the boot hook the camera runs. On a camera already running the AP
+   application, upload **{filename}** with **Upgrade Firmware…** on the web
+   **Status** page instead; the camera verifies and installs it, then reboots.
 3. After reboot, open the camera's existing Ethernet IP address in a browser
    on port **80**. Log in as **admin / ardupilot** on a new installation.
 4. Check the version/hash on **Status**, then check **Live**. Insert a microSD
-   card for recordings. New installations default to 4K recording; existing
-   installations preserve their saved recording resolution.
+   card for recordings. New installations default to 1080p recording, with 4K
+   available in Parameters. Existing installations preserve their saved
+   recording resolution.
 
-For an update of a running AP installation, stop the AP service before the
-vendor updater replaces its executables. Do not extract an overlay over running
-AP executables. Existing parameters and web credentials in `/opt/ap_cameragimbal`
-survive updates.
+Older AP builds from before the external webroot reject the new asset files
+in the web update archive. Use the XFRobot `.gcu` updater once when moving
+from one of those builds; later updates work through the AP web UI.
 
-**ArduPilot web firmware upload is not yet implemented for Z1-Mini.** Copying
-this `.gcu` to a microSD card does not install it. Use the vendor upload procedure
-for this target; the SD and ArduPilot-web update instructions for SIYI cameras
-do not apply.
+If a web server with recovery support is installed without its webroot files,
+open the camera's main URL. Its built-in firmware recovery page lets you log in
+with the existing password and upload the complete `.gcu` package. Missing or
+partial webroot contents do not disable this recovery uploader.
 
-MAVLink uses TCP/UDP **14550**; XFRobot control uses TCP **2332**, UDP **2337**
+When using the vendor updater on a running AP installation, stop the AP
+service first so it does not replace running executables. Existing parameters
+and web credentials in `/opt/ap_cameragimbal` survive both update methods.
+
+Copying this `.gcu` to a microSD card does not install it; the SD update
+instructions for SIYI cameras do not apply to this target.
+
+Fresh configurations use MAVLink TCP/UDP **16001**; XFRobot control uses TCP **2332**, UDP **2337**
 with replies on **2338**. RTSP streams use port **8554**, paths `/video1` and
 `/video2`. AP startup failure leaves its web UI available for logs and recovery.
 Reinstall the original vendor `.gcu` to restore the vendor application.
+
+## Default changes and upgrades
+
+Fresh configurations use MAVLink TCP/UDP **16001** and **Rate** position
+tracking. Upgrades preserve saved `camera.ini` settings, including explicit
+ports and `tracking_method`. Cameras configured on earlier releases can
+therefore still use **14550**; check Parameters before changing the flight
+controller connection.
+
+If a saved configuration omits `mavlink.tracking_method`, it now inherits
+**Rate**. Older A8, ZR10 and ZT30 templates omitted it; older MT11 templates
+explicitly selected **Angle** and keep that setting. Choose **TRACK_METHOD**
+on Parameters to set either method explicitly.

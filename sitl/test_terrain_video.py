@@ -11,10 +11,11 @@ import time
 from unittest import mock
 
 import terrain_video as video
+from target_properties import TARGETS
 
 
 def record():
-    return {'pts90k': 0, 'position': {'lat_e7': -353632610, 'lon_e7': 1491652300,
+    return {'pts90k': 0, 'utc_us': 1700000000000000, 'position': {'lat_e7': -353632610, 'lon_e7': 1491652300,
                                     'alt_amsl_m': 650, 'alt_relative_m': 70},
             'vehicle_attitude': {'roll_rad': 0, 'pitch_rad': 0, 'yaw_rad': 0},
             'gimbal_attitude': {'roll_rad': 0, 'pitch_rad': -math.pi / 4, 'yaw_rad': 0},
@@ -23,6 +24,10 @@ def record():
 
 def geometry():
     np = video.np
+    # The renderer must use the 16:9 crop of the MT11's 84-degree 4:3 sensor.
+    camera = mock.Mock()
+    video.set_camera_fov(camera, TARGETS['mt11']['lens1_fov_h'], 16 / 9)
+    assert abs(camera.SetViewAngle.call_args.args[0] - 44.113793) < 1e-5
     forward, up = video.camera_vectors(0, 0, 0)
     np.testing.assert_allclose(forward, (0, 1, 0))  # north
     np.testing.assert_allclose(up, (0, 0, 1))
@@ -123,6 +128,32 @@ def prediction():
     print('PASS 4 Hz -> 20 Hz prediction, bounded loss, yaw wrap, jitter correction and presentation lead')
 
 
+def quantised_gimbal_prediction():
+    np = video.np
+    errors = []
+    # MT11 rounds angles to 0.1 degree. Sparse rendering with a variable lead
+    # amplifies the noise if yaw rate is differentiated from those angles.
+    for measured_rate in (False, True):
+        predictor = video.PosePredictor()
+        yaw_errors = []
+        for i in range(300):
+            now = i * .147
+            sampled = math.floor(now / .058) * .058
+            lead = .15 if i % 3 else .08
+            sample = {'roll_rad': 0, 'pitch_rad': 0,
+                      'yaw_rad': math.radians(round(11 * sampled, 1)),
+                      'age_ms': round((now - sampled + lead) * 1000)}
+            if measured_rate:
+                sample['yaw_rate_rad_s'] = math.radians(11)
+            yaw = predictor.angles('gimbal', sample, now + lead, .25 + lead)[2]
+            yaw_errors.append((math.degrees(yaw) - 11 * (now + lead) + 180) % 360 - 180)
+        errors.append(np.array(yaw_errors[20:]))
+    assert np.std(errors[1]) < .03
+    assert max(abs(errors[1])) < .05
+    assert np.std(np.diff(errors[1])) < .3 * np.std(np.diff(errors[0]))
+    print('PASS measured gimbal yaw rate reduces quantisation-induced prediction jitter')
+
+
 def stable_lod():
     from types import SimpleNamespace
     tile = SimpleNamespace(bbox=(149, -35.01, 149.01, -35),
@@ -196,9 +227,17 @@ def synthetic():
             rgb = scene.render(0, state, True)
             ir = scene.render(1, state, True)
             assert rgb.shape == (180, 320, 3) and ir.shape == (90, 160, 3)
-            assert scene.window.GetSize() == (320, 180)
+            assert scene.window.GetSize() == (640, 512)
             assert rgb.std() > 10
             np.testing.assert_array_equal(ir[:, :, 0], ir[:, :, 1])
+            raw = scene.raw_thermal(state, True).copy()
+            assert raw.shape == (512, 640) and raw.dtype == np.uint16
+            assert raw.std() > 1 and raw.min() >= round(288.15*64) and raw.max() <= round(318.15*64)
+            import cv2
+            np.testing.assert_array_equal(ir, cv2.resize(scene.controls.thermal_display(raw, {}), (160, 90)))
+            metadata = scene.thermal_metadata(state)
+            np.testing.assert_allclose(metadata['gimbal_attitude']['pitch_rad'], math.radians(scene.pose[4]))
+            assert metadata['utc_us'] == state['utc_us']
             # Controls are applied to terrain pixels as well as fixture video.
             state['image'] = {'brightness': 80, 'thermal_palette': 3}
             scene.update(state)
@@ -206,6 +245,11 @@ def synthetic():
             assert brighter.mean() > rgb.mean() + 30
             iron = scene.render(1, state, True)
             assert np.abs(iron[:, :, 0].astype(float) - iron[:, :, 2]).mean() > 10
+            np.testing.assert_array_equal(scene.raw_thermal(state, True), raw)
+            state['image'] = {'thermal_gain': 0, 'thermal_palette': 1}
+            scene.update(state)
+            scene.render(1, state, True)
+            np.testing.assert_array_equal(scene.raw_thermal(state, True), raw)
             state['image'] = {'saturation': 0}
             scene.update(state)
             gray = scene.render(0, state, True)
@@ -216,10 +260,50 @@ def synthetic():
             scene.update(state)
             after = scene.render(0, state, True)
             assert np.mean(np.abs(before.astype(float) - after)) > 1
+            assert np.mean(np.abs(scene.raw_thermal(state, True).astype(float) - raw)) > 1
+            assert metadata['gimbal_attitude']['yaw_rad'] == 0  # snapshot stays frozen
+            state['prediction_ms'] = 150
+            state['velocity'] = {'vn_m_s': 10, 've_m_s': 0, 'vd_m_s': -2, 'age_ms': 0}
+            state['vehicle_attitude']['yaw_rate_rad_s'] = 0.1
+            scene.update(state)
+            predicted = scene.thermal_metadata(state)
+            assert predicted['utc_us'] == state['utc_us'] + 150000
+            assert predicted['position']['lat_e7'] == round(scene.pose[0]*1e7)
+            assert predicted['position']['alt_amsl_m'] == scene.pose[2]
+            np.testing.assert_allclose(predicted['gimbal_attitude']['yaw_rad'] +
+                                       predicted['vehicle_attitude']['yaw_rad'], math.radians(scene.pose[5]))
+            state = record()
+            ground = manager.height_at(state['position']['lat_e7'] / 1e7,
+                                       state['position']['lon_e7'] / 1e7)
+            assert ground is not None
+            state['position']['alt_amsl_m'] = ground - 10
+            # Relative-to-home altitude may remain positive below the mesh.
+            state['image'] = {'brightness': 0, 'thermal_palette': 3}
+            assert scene.update(state) and scene.below_ground
+            with mock.patch.object(scene.window, 'Render', side_effect=AssertionError('rendered underground')):
+                for stream, (width, height) in enumerate(scene.sizes):
+                    underground = scene.render(stream, state, True)
+                    assert underground.shape == (height, width, 3)
+                    brown = np.all(underground == (139, 90, 43), axis=2)
+                    assert brown.mean() > 0.9
+                    assert np.any(np.all(underground > 200, axis=2))  # legible light text
+                # The raw thermal view must not show the underside either.
+                raw_below = scene.raw_thermal(state, True)
+                assert raw_below.shape == (512, 640) and raw_below.dtype == np.uint16
+                assert raw_below.std() > 1  # warning text survives conversion
+            state['position']['alt_amsl_m'] = ground + 60
+            state['position']['alt_relative_m'] = -10
+            assert scene.update(state) and not scene.below_ground
+            with mock.patch.object(manager, 'height_at', return_value=None):
+                assert scene.update(state) and not scene.below_ground
+            print('PASS below-ground warning, raw thermal, ascent recovery and terrain-height detection')
             state['position'] = None
             assert not scene.update(state)
+            assert not scene.below_ground
             missing = scene.render(0, state, False)
             assert np.mean(missing) < 15  # stale terrain is replaced by waiting screen
+            assert scene.thermal_metadata(state)['position'] is None
+            assert scene.raw_thermal(state, False).std() == 0
             encoder = video.Encoder((320, 180), 10)
             decoder = video.av.CodecContext.create('h264', 'r')
             frames = []
@@ -298,6 +382,7 @@ if __name__ == '__main__':
     video.socket.setdefaulttimeout(10)
     geometry()
     prediction()
+    quantised_gimbal_prediction()
     stable_lod()
     synthetic()
     if args.network:

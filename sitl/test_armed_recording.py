@@ -39,10 +39,29 @@ def recording(link, expected):
     return status
 
 
+def wait_for_frames(paths):
+    # Recording starts at a keyframe; rendering/encoding may take longer than
+    # a fixed sleep on a busy host. Require actual packets before disarming.
+    deadline = time.monotonic()+8
+    pending = set(paths)
+    while pending and time.monotonic()<deadline:
+        for path in list(pending):
+            result = subprocess.run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_packets',
+                '-show_entries', 'stream=nb_read_packets', '-of', 'json', str(path)],
+                capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                streams=json.loads(result.stdout).get('streams', [])
+                if streams and int(streams[0].get('nb_read_packets', 0))>0:
+                    pending.remove(path)
+        if pending: time.sleep(.05)
+    assert not pending, f'Recordings have no frames: {pending}'
+
+
 def run_case(args, directory, fixture, mode, system_id):
     directory.mkdir()
     config = directory / 'camera.ini'
-    config.write_text(f'[recording]\nautorecord = {mode}\n'
+    config.write_text(f'[video]\ntelemetry=apcg\n[recording]\nautorecord = {mode}\n'
                       f'[mavlink]\nsystem_id = {system_id}\n')
     camera_ready, gimbal_ready = directory / 'camera.ready', directory / 'gimbal.ready'
     gimbal_port, tcp_port = port(socket.SOCK_DGRAM), port()
@@ -63,10 +82,10 @@ def run_case(args, directory, fixture, mode, system_id):
             gimbal = subprocess.Popen([sys.executable, str(REPO / 'sitl/gimbal_sim.py'),
                 '--backend', args.backend, '--port', str(gimbal_port),
                 '--ready-file', str(gimbal_ready)], stdout=glog, stderr=subprocess.STDOUT)
-            ready(gimbal_ready, gimbal)
+            ready(gimbal_ready, gimbal, directory / 'gimbal.log')
             camera = subprocess.Popen([str(args.build / 'camera-app'), '--backend', args.backend],
                                        env=env, stdout=clog, stderr=subprocess.STDOUT)
-            ready(camera_ready, camera)
+            ready(camera_ready, camera, directory / 'camera.log')
             link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}',
                                               source_system=255, source_component=190)
             if mode == 'while_armed':
@@ -99,6 +118,7 @@ def run_case(args, directory, fixture, mode, system_id):
                 recording(link, True)
                 assert set(recordings.glob('*.mp4')) == files  # repeated arm is idempotent
                 time.sleep(.4)  # no heartbeat is not a disarm; allow frames to arrive
+                wait_for_frames(files)
                 assert recording(link, True).recording_time_ms >= 300
                 heartbeat(link)
                 recording(link, False)
@@ -109,6 +129,7 @@ def run_case(args, directory, fixture, mode, system_id):
                 heartbeat(link, armed=True)
                 recording(link, True)
                 time.sleep(.4)
+                wait_for_frames(set(recordings.glob('*.mp4'))-files)
                 heartbeat(link)
                 recording(link, False)
                 assert len(list(recordings.glob('*.mp4'))) == 2 * len(files)
@@ -124,15 +145,21 @@ def run_case(args, directory, fixture, mode, system_id):
                     heartbeat(link)
                     recording(link, True)
                 time.sleep(.4)
+                wait_for_frames(recordings.glob('*.mp4'))
                 command(link, M.MAV_CMD_VIDEO_STOP_CAPTURE)
                 recording(link, False)
-            for path in recordings.glob('*.mp4'):
+            paths=list(recordings.glob('*.mp4'))
+            if args.backend == 'mt11':
+                raw=list(recordings.glob('*.raw.mkv'))
+                assert len(raw)*2==len(paths), (raw,paths)
+                paths+=raw
+            for path in paths:
                 info = json.loads(subprocess.check_output([
                     'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_packets',
                     '-show_entries', 'stream=nb_read_packets', '-of', 'json', str(path)]))
                 assert int(info['streams'][0]['nb_read_packets']) > 0, path
             print(f'PASS {args.backend} autorecord={mode} system_id={system_id}: '
-                  'capture status and finalized MP4 recordings', flush=True)
+                  'capture status and finalized video/raw recordings', flush=True)
         finally:
             if link is not None:
                 link.close()

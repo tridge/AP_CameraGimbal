@@ -16,7 +16,7 @@ parser.add_argument('release', type=Path)
 args = parser.parse_args()
 for target, filename, size in [('a8', 'SIYI_4K_MINI_UpgradeSD.bin', 0x600000),
                                ('zr10', 'ZR10_UpgradeSD.bin', 0x6b0000)]:
-    image = (args.release / target.upper() / filename).read_bytes()
+    image = (args.release / ('SIYI_' + target.upper()) / filename).read_bytes()
     script = (ROOT / f'packaging/{target}/upgrade_script.txt').read_bytes()
     assert image[:0x4000] == script.ljust(0x4000, b'\xff')
     assert len(image) == 0x4000 + size + (36 if target == 'zr10' else 0)
@@ -37,6 +37,9 @@ for target, filename, size in [('a8', 'SIYI_4K_MINI_UpgradeSD.bin', 0x600000),
         app = customer / 'camera-app'
         for name in ('camera-app', target + '-web', target + '-uuid'):
             assert (app / name).read_bytes().startswith(b'\x7fELF'), name
+        for asset in (ROOT / 'web/webroot').rglob('*'):
+            if asset.is_file():
+                assert (app / 'webroot' / asset.relative_to(ROOT / 'web/webroot')).read_bytes() == asset.read_bytes()
         assert (customer / '.sys_upgrade_finish_flag').is_file()
         if target == 'a8':
             assert (customer / 'bin/cardv').read_bytes() == (ROOT / 'packaging/a8/app_init.sh').read_bytes()

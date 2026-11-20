@@ -6,6 +6,9 @@
 #include <stdint.h>
 
 #include "camera_app/config.h"
+#include "camera_app/image_tracker.h"
+bool ca_zr10_tracking_available();
+bool ca_zr10_tracking_frame(ca_tracking_frame &frame);
 #include "apcam/target.h"
 
 /* SIYI ZR10: SigmaStar Infinity6B0 with a GC4663.

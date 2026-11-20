@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""PyQt launcher for the MT11, A8 and ZR10 camera/gimbal SITL implementations."""
+"""PyQt launcher for up to four independent camera/gimbal simulators."""
 import codecs
 import os
 from pathlib import Path
-from sitl.target_properties import TARGETS
+from sitl.target_properties import SITL_TARGETS, TARGETS
+from sitl.launcher_config import vendor_ports, vendor_stride, MAX_SIMULATORS, mavlink_settings
 import signal
 import subprocess
 import sys
@@ -14,11 +15,14 @@ import threading
 
 try:
     from PyQt6 import QtCore, QtGui, QtWidgets
-except ImportError:
+except ImportError as qt6_error:
     try:
         from PyQt5 import QtCore, QtGui, QtWidgets
-    except ImportError:
-        sys.exit('Install PyQt6 (for example: sudo apt install python3-pyqt6) to use this launcher.')
+    except ImportError as qt5_error:
+        sys.exit('Cannot load Qt for the SITL launcher.\n'
+                 f'PyQt6: {qt6_error}\nPyQt5: {qt5_error}\n'
+                 'Install PyQt6 and its native runtime libraries '
+                 '(for example: sudo apt install python3-pyqt6).')
 
 REPO = Path(__file__).resolve().parent
 OWNER_VARIABLE = 'CAMERA_GIMBAL_SITL_LAUNCH_ID'
@@ -26,7 +30,7 @@ OWNER_VARIABLE = 'CAMERA_GIMBAL_SITL_LAUNCH_ID'
 
 def owned_processes(token):
     """Include detached web-restart children, without touching other SITL runs."""
-    if os.name == 'nt':
+    if os.name == 'nt' or sys.platform == 'darwin':
         import psutil
         result = []
         for process in psutil.process_iter(['pid']):
@@ -51,10 +55,11 @@ def owned_processes(token):
     return found
 
 
-class Launcher(QtWidgets.QWidget):
-    def __init__(self, repo=REPO):
+class SimulatorPanel(QtWidgets.QWidget):
+    def __init__(self, repo=REPO, instance=1):
         super().__init__()
         self.repo = Path(repo)
+        self.instance = instance
         self.process = None
         self.token = None
         self.phase = 'idle'
@@ -71,7 +76,7 @@ class Launcher(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         form = QtWidgets.QFormLayout()
         self.camera = QtWidgets.QComboBox()
-        for backend, properties in TARGETS.items():
+        for backend, properties in SITL_TARGETS.items():
             self.camera.addItem(properties['product_name'], backend)
         self.camera.setCurrentIndex(self.camera.findData('mt11'))
         self.orientation = QtWidgets.QComboBox()
@@ -80,6 +85,7 @@ class Launcher(QtWidgets.QWidget):
         self.video = QtWidgets.QComboBox()
         self.video.addItem('Simple test patterns', 'simple')
         self.video.addItem('3D terrain and imagery', 'terrain')
+        self.video.setCurrentIndex(self.video.findData('terrain'))
         form.addRow('Camera', self.camera)
         form.addRow('Orientation', self.orientation)
         form.addRow('Video source', self.video)
@@ -122,8 +128,19 @@ class Launcher(QtWidgets.QWidget):
                 'Start builds the selected camera, then launches its gimbal, camera app and web UI.')
         if self.video.currentData() == 'terrain':
             hint += ' The 3D view needs vehicle MAVLink telemetry and initially downloads terrain and imagery.'
-        if self.camera.currentData() == 'a8' and os.name != 'nt':
-            hint += ' A8 MAVLink is disabled unless A8_SITL_MAVLINK_TCP_PORT or A8_SITL_MAVLINK_UDP_PORT is set.'
+        try:
+            env, build = self.environment()
+            prefix = self.camera.currentData().upper() + '_SITL_'
+            settings = mavlink_settings(build, self.instance, self.clear_parameters.isChecked())
+            tcp = env.get(prefix + 'MAVLINK_TCP_PORT', settings['tcp_port'])
+            udp = env.get(prefix + 'MAVLINK_UDP_PORT', settings['udp_port'])
+            vendor_tcp, vendor_udp = vendor_ports(TARGETS[self.camera.currentData()],
+                                                  int(env[prefix + 'CAMERA_PORT']))
+            hint += (f"\nWeb: {env[prefix + 'WEB_PORT']} · MAVLink TCP/UDP: {tcp}/{udp}"
+                     f" · Vendor TCP/UDP: {vendor_tcp}/{vendor_udp} · RTSP: {env[prefix + 'RTSP_PORT']}"
+                     f"\nCamera component: {settings['camera_component_id']} · Data: {build / 'runtime'}")
+        except (ValueError, OSError) as error:
+            hint += f'\nInvalid configuration: {error}'
         self.hint.setText(hint)
 
     def environment(self):
@@ -133,11 +150,26 @@ class Launcher(QtWidgets.QWidget):
         if os.name == 'nt':
             default_build = Path(env.get('LOCALAPPDATA', str(Path.home()))) / 'ArduPilot/CameraGimbalSITL' / backend
         build = Path(env.get('CAMERA_GIMBAL_SITL_BUILD', str(default_build))).resolve()
+        if self.instance > 1:
+            build = build.with_name(f'{build.name}-instance-{self.instance}') / backend
         env.update(CAMERA_GIMBAL_SITL_BACKEND=backend,
                    CAMERA_GIMBAL_SITL_BUILD=str(build),
+                   CAMERA_GIMBAL_SITL_INSTANCE=str(self.instance),
                    CAMERA_GIMBAL_SITL_VIDEO=self.video.currentData(),
                    CAMERA_GIMBAL_SITL_RESET_PARAMETERS='1' if self.clear_parameters.isChecked() else '0',
                    PYTHONUNBUFFERED='1')
+        prefix = backend.upper() + '_SITL_'
+        for name, default, stride in (('WEB_PORT', 8081, 1), ('RTSP_PORT', 8554, 10),
+                                      ('CAMERA_PORT', int(TARGETS[backend]['vendor_port']), vendor_stride(TARGETS[backend]))):
+            env[prefix + name] = str(int(env.get(prefix + name, default)) + (self.instance - 1) * stride)
+        # Explicit environment overrides remain supported, with slot offsets.
+        for name in ('MAVLINK_TCP_PORT', 'MAVLINK_UDP_PORT'):
+            if prefix + name in env:
+                port = int(env[prefix + name])
+                env[prefix + name] = str(port + (self.instance - 1) * 10 if port else 0)
+        if prefix + 'GIMBAL_PORT' in env:
+            port = int(env[prefix + 'GIMBAL_PORT'])
+            env[prefix + 'GIMBAL_PORT'] = str(port + self.instance - 1 if port else 0)
         env[f'{backend.upper()}_SITL_ORIENTATION'] = self.orientation.currentData()
         python = self.repo / 'build/terrain-venv/bin/python'
         if not env.get('CAMERA_GIMBAL_SITL_PYTHON'):
@@ -156,7 +188,11 @@ class Launcher(QtWidgets.QWidget):
     def start(self):
         if self.phase != 'idle':
             return
-        self.env, build = self.environment()
+        try:
+            self.env, build = self.environment()
+        except (ValueError, OSError) as error:
+            self.finish(f'Invalid configuration: {error}')
+            return
         self.runtime = build / 'runtime/run'
         self.token = uuid.uuid4().hex
         self.env[OWNER_VARIABLE] = self.token
@@ -355,6 +391,175 @@ class Launcher(QtWidgets.QWidget):
 
     def open_web(self):
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(self.web_url))
+
+    def closeEvent(self, event):
+        if self.phase == 'idle':
+            event.accept()
+        else:
+            self.closing = True
+            self.stop()
+            event.ignore()
+
+
+class Launcher(QtWidgets.QWidget):
+    """Coordinate a group; serialize builds which share compiler output files."""
+    def __init__(self, repo=REPO):
+        super().__init__()
+        self.phase = 'idle'
+        self.closing = False
+        self.active = []
+        self.pending = []
+        self.failure = None
+        self.setWindowTitle('Camera / Gimbal SITL')
+        self.setWindowIcon(QtGui.QIcon(str(REPO / 'assets/camera-gimbal.ico')))
+        self.resize(920, 720)
+        layout = QtWidgets.QVBoxLayout(self)
+        form = QtWidgets.QFormLayout()
+        self.count = QtWidgets.QSpinBox()
+        self.count.setRange(1, MAX_SIMULATORS)
+        self.count.setValue(1)
+        form.addRow('Number of simulators', self.count)
+        layout.addLayout(form)
+        self.tabs = QtWidgets.QTabWidget()
+        self.simulators = [SimulatorPanel(repo, i + 1) for i in range(MAX_SIMULATORS)]
+        for panel in self.simulators:
+            panel.start_button.hide()
+            panel.stop_button.hide()
+            panel.clear_parameters.toggled.connect(panel.update_hint)
+        layout.addWidget(self.tabs)
+        self.count.valueChanged.connect(self.update_tabs)
+        self.update_tabs()
+        buttons = QtWidgets.QHBoxLayout()
+        self.start_button = QtWidgets.QPushButton('Start all')
+        self.stop_button = QtWidgets.QPushButton('Stop all')
+        self.stop_button.setEnabled(False)
+        self.start_button.clicked.connect(self.start)
+        self.stop_button.clicked.connect(self.stop)
+        buttons.addWidget(self.start_button)
+        buttons.addWidget(self.stop_button)
+        layout.addLayout(buttons)
+        self.status = QtWidgets.QLabel('Stopped')
+        layout.addWidget(self.status)
+        self.timer = QtCore.QTimer(self)
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self.poll)
+        self.timer.start()
+
+    def update_tabs(self):
+        selected = self.tabs.currentIndex()
+        self.tabs.clear()
+        for i, panel in enumerate(self.simulators[:self.count.value()]):
+            self.tabs.addTab(panel, f'Simulator {i + 1}')
+        self.tabs.setCurrentIndex(max(0, min(selected, self.count.value() - 1)))
+
+    def validate(self):
+        endpoints, identities, builds = {}, {}, set()
+        reply_ports = {int(TARGETS[p.camera.currentData()]['vendor_reply_port'])
+                       for p in self.simulators[:self.count.value()]
+                       if TARGETS[p.camera.currentData()].get('vendor_reply_port')}
+        for panel in self.simulators[:self.count.value()]:
+            env, build = panel.environment()
+            if build in builds:
+                raise ValueError('Simulators must use separate build/data directories')
+            builds.add(build)
+            settings = mavlink_settings(build, panel.instance, panel.clear_parameters.isChecked())
+            component = settings['camera_component_id']
+            if not 100 <= component <= 105:
+                raise ValueError(f'Simulator {panel.instance}: camera component must be 100–105')
+            if component in identities:
+                raise ValueError(f'Simulators {identities[component]} and {panel.instance} have camera component '
+                                 f'{component}. Change the saved camera component or clear parameters.')
+            identities[component] = panel.instance
+            prefix = panel.camera.currentData().upper() + '_SITL_'
+            rtsp = int(env[prefix + 'RTSP_PORT'])
+            vendor_tcp, vendor_udp = vendor_ports(TARGETS[panel.camera.currentData()],
+                                                   int(env[prefix + 'CAMERA_PORT']))
+            ports = [('web', int(env[prefix + 'WEB_PORT']), ('TCP',)),
+                     ('RTSP', rtsp, ('TCP',)), ('live video', rtsp + 1, ('TCP',)),
+                     ('vendor TCP', vendor_tcp, ('TCP',)), ('vendor UDP', vendor_udp, ('UDP',))]
+            if panel.camera.currentData() == 'mt11':
+                raw_port = int(env.get('CAMERA_APP_RAW_THERMAL_PORT', rtsp + 2))
+                if raw_port:
+                    ports.append(('raw thermal', raw_port, ('TCP',)))
+            for transport in ('TCP', 'UDP'):
+                port = int(env.get(prefix + 'MAVLINK_' + transport + '_PORT', settings[transport.lower() + '_port']))
+                if port:
+                    ports.append(('MAVLink', port, (transport,)))
+            gimbal = int(env.get(prefix + 'GIMBAL_PORT', 0))
+            if gimbal:
+                ports.append(('gimbal', gimbal, ('UDP',)))
+            for name, port, protocols in ports:
+                if not 1 <= port <= 65535:
+                    raise ValueError(f'Simulator {panel.instance}: invalid {name} port {port}')
+                for protocol in protocols:
+                    if protocol == 'UDP' and port in reply_ports:
+                        raise ValueError(f'Simulator {panel.instance}: UDP port {port} is reserved for vendor replies')
+                    key = (protocol, port)
+                    if key in endpoints:
+                        raise ValueError(f'{protocol} port {port} is shared by {endpoints[key]} '
+                                         f'and simulator {panel.instance} {name}')
+                    endpoints[key] = f'simulator {panel.instance} {name}'
+
+    def start(self):
+        if self.phase != 'idle':
+            return
+        try:
+            self.validate()
+        except (ValueError, OSError) as error:
+            self.status.setText(str(error))
+            return
+        self.closing = False
+        self.failure = None
+        self.active = []
+        self.pending = list(self.simulators[:self.count.value()])
+        self.phase = 'launching'
+        self.count.setEnabled(False)
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        for panel in self.pending:
+            panel.set_controls(False)
+        self.status.setText('Starting simulators…')
+        self.launch_next()
+
+    def launch_next(self):
+        if self.pending:
+            panel = self.pending.pop(0)
+            self.active.append(panel)
+            panel.start()
+        else:
+            self.phase = 'running'
+            self.status.setText(f'{len(self.active)} simulators running')
+
+    def stop(self):
+        if self.phase == 'idle':
+            return
+        self.pending.clear()
+        self.phase = 'stopping'
+        self.stop_button.setEnabled(False)
+        self.status.setText('Stopping simulators…')
+        for panel in self.active:
+            panel.stop()
+
+    def poll(self):
+        if self.phase == 'idle':
+            return
+        if self.phase != 'stopping':
+            for panel in self.active:
+                if panel.phase in ('idle', 'stopping'):
+                    self.failure = f'Simulator {panel.instance} stopped; see its log'
+                    self.stop()
+                    break
+            if self.phase == 'launching' and all(p.phase == 'running' for p in self.active):
+                self.launch_next()
+        if self.phase == 'stopping' and all(p.phase == 'idle' for p in self.active):
+            self.phase = 'idle'
+            self.count.setEnabled(True)
+            self.start_button.setEnabled(True)
+            for panel in self.simulators:
+                panel.set_controls(True)
+            self.status.setText(self.failure or 'Stopped')
+            if self.closing:
+                self.close()
 
     def closeEvent(self, event):
         if self.phase == 'idle':

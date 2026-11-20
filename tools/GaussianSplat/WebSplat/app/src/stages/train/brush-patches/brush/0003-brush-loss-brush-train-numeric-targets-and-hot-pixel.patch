@@ -1,0 +1,401 @@
+From d9081448e378afbdd07708a3659fc59a7de5d2a2 Mon Sep 17 00:00:00 2001
+From: Andrew Tridgell <andrew@tridgell.net>
+Date: Sun, 8 Nov 2026 17:13:13 +1100
+Subject: [PATCH 03/12] brush-loss, brush-train: numeric targets and hot-pixel
+ weighted L1
+
+The loss kernels read float targets (f32 bits, opaque, same value for every
+channel) when ImageLossConfig.float_gt is set, and weight the L1 term of
+pixels whose target exceeds hot_threshold by 1 + hot_weight (forward and
+backward). New training options --hot-weight (default 0, off) and
+--hot-threshold. Eval of numeric targets skips the 8-bit round trip, clamps
+to [0, 1] and saves renders as 16-bit gray (value * 65535).
+---
+ crates/brush-loss/src/lib.rs         | 65 +++++++++++++++++++++-------
+ crates/brush-loss/tests/reference.rs |  5 +++
+ crates/brush-train/src/config.rs     | 15 +++++++
+ crates/brush-train/src/eval.rs       | 36 ++++++++++++---
+ crates/brush-train/src/lod.rs        |  1 +
+ crates/brush-train/src/train.rs      |  3 ++
+ 6 files changed, 103 insertions(+), 22 deletions(-)
+
+diff --git a/crates/brush-loss/src/lib.rs b/crates/brush-loss/src/lib.rs
+index 0d064bc..190eee3 100644
+--- a/crates/brush-loss/src/lib.rs
++++ b/crates/brush-loss/src/lib.rs
+@@ -180,14 +180,28 @@ mod kernels {
+         x: u32,
+         oob: bool,
+         w: u32,
++        #[comptime] float_gt: bool,
+     ) -> (F, F) {
+         let val = gt_packed[(y * w + x) as usize];
+-        let byte_c = f32::cast_from((val >> (c * 8u32)) & 0xffu32);
+-        let byte_a = f32::cast_from((val >> 24u32) & 0xffu32);
+         let zero = F::cast_from(0.0_f32);
+-        let gt_c = F::cast_from(byte_c * INV_255);
+-        let gt_a = F::cast_from(byte_a * INV_255);
+-        (select(oob, zero, gt_c), select(oob, zero, gt_a))
++        if float_gt {
++            // f32 bits of a numeric target, the same for every channel, opaque.
++            let gt_c = F::cast_from(f32::reinterpret(val));
++            (select(oob, zero, gt_c), select(oob, zero, F::cast_from(1.0_f32)))
++        } else {
++            let byte_c = f32::cast_from((val >> (c * 8u32)) & 0xffu32);
++            let byte_a = f32::cast_from((val >> 24u32) & 0xffu32);
++            let gt_c = F::cast_from(byte_c * INV_255);
++            let gt_a = F::cast_from(byte_a * INV_255);
++            (select(oob, zero, gt_c), select(oob, zero, gt_a))
++        }
++    }
++
++    /// L1 weight of a pixel: `1 + hot_weight` where the target exceeds `hot_threshold`.
++    #[cube]
++    fn hot_factor<F: Float>(gt: F, hot_threshold: f32, hot_weight: f32) -> F {
++        let one = F::cast_from(1.0_f32);
++        select(gt > F::cast_from(hot_threshold), one + F::cast_from(hot_weight), one)
+     }
+ 
+     /// Map a tile-local position offset by `halo` to global image coords.
+@@ -242,9 +256,12 @@ mod kernels {
+         bg_r: f32,
+         bg_g: f32,
+         bg_b: f32,
++        hot_threshold: f32,
++        hot_weight: f32,
+         #[comptime] composite: bool,
+         #[comptime] mask: bool,
+         #[comptime] reduce: bool,
++        #[comptime] float_gt: bool,
+     ) {
+         let c = CUBE_POS_Z;
+         let tile_y0 = CUBE_POS_Y * BLOCK_Y;
+@@ -260,7 +277,7 @@ mod kernels {
+             let mut v = F::cast_from(0.0_f32);
+             if in_bounds {
+                 let idx = ((pix_y * w + pix_x) * cn + 3u32) as usize;
+-                let (_, gt_a) = read_gt::<F>(gt_packed, 0u32, pix_y, pix_x, false, w);
++                let (_, gt_a) = read_gt::<F>(gt_packed, 0u32, pix_y, pix_x, false, w, float_gt);
+                 v = F::abs(pred[idx] - gt_a);
+                 if mask {
+                     v = v * gt_a;
+@@ -309,7 +326,7 @@ mod kernels {
+                 let local_x = tid % SHARED_X;
+                 let (gy, gx, oob) = coords(tile_y0, tile_x0, local_y, local_x, HALO, h, w);
+                 let pv = read_pred::<F>(pred, c, gy, gx, oob, cn, w);
+-                let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w);
++                let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w, float_gt);
+                 let gt_eff = if composite {
+                     gt_c + (F::cast_from(1.0_f32) - gt_a) * bg_c
+                 } else {
+@@ -415,10 +432,10 @@ mod kernels {
+             let centre = ((UNIT_POS_Y + HALO) * SHARED_X + (UNIT_POS_X + HALO)) as usize;
+             let p1 = s_tile[centre * 2];
+             let p2 = s_tile[centre * 2 + 1];
+-            let l1 = F::abs(p1 - p2);
++            let l1 = F::abs(p1 - p2) * hot_factor::<F>(p2, hot_threshold, hot_weight);
+             let mut loss_v = F::cast_from(l1_weight) * l1 + F::cast_from(ssim_weight) * val;
+             if mask {
+-                let (_, gt_a) = read_gt::<F>(gt_packed, c, pix_y, pix_x, false, w);
++                let (_, gt_a) = read_gt::<F>(gt_packed, c, pix_y, pix_x, false, w, float_gt);
+                 loss_v = loss_v * gt_a;
+             }
+             loss_out = loss_v;
+@@ -461,9 +478,12 @@ mod kernels {
+         bg_r: f32,
+         bg_g: f32,
+         bg_b: f32,
++        hot_threshold: f32,
++        hot_weight: f32,
+         #[comptime] composite: bool,
+         #[comptime] mask: bool,
+         #[comptime] alpha_match: bool,
++        #[comptime] float_gt: bool,
+     ) {
+         let c = CUBE_POS_Z;
+         let tile_y0 = CUBE_POS_Y * BLOCK_Y_BWD;
+@@ -478,7 +498,7 @@ mod kernels {
+                 let idx = ((pix_y * w + pix_x) * cn + 3u32) as usize;
+                 let mut g = F::cast_from(0.0_f32);
+                 if alpha_match {
+-                    let (_, gt_a) = read_gt::<F>(gt_packed, 0u32, pix_y, pix_x, false, w);
++                    let (_, gt_a) = read_gt::<F>(gt_packed, 0u32, pix_y, pix_x, false, w, float_gt);
+                     let diff = pred[idx] - gt_a;
+                     let zero = F::cast_from(0.0_f32);
+                     let sign = if diff > zero {
+@@ -536,7 +556,7 @@ mod kernels {
+                 let local_x = tid % EXT_X_BWD;
+                 let (gy, gx, oob) = coords(tile_y0, tile_x0, local_y, local_x, 2u32 * HALO, h, w);
+                 let pv = read_pred::<F>(pred, c, gy, gx, oob, cn, w);
+-                let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w);
++                let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w, float_gt);
+                 let gt_eff = if composite {
+                     gt_c + (F::cast_from(1.0_f32) - gt_a) * bg_c
+                 } else {
+@@ -667,7 +687,7 @@ mod kernels {
+                     chain_at::<F>(dl_dpartials, c, gy, gx, h, w, F::cast_from(rgb_weight)),
+                 );
+                 if mask {
+-                    let (_unused, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w);
++                    let (_unused, gt_a) = read_gt::<F>(gt_packed, c, gy, gx, oob, w, float_gt);
+                     chain = chain * gt_a;
+                 }
+ 
+@@ -735,7 +755,7 @@ mod kernels {
+ 
+             let pix_idx = ((pix_y * w + pix_x) * cn + c) as usize;
+             let p1 = pred[pix_idx];
+-            let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, pix_y, pix_x, false, w);
++            let (gt_c, gt_a) = read_gt::<F>(gt_packed, c, pix_y, pix_x, false, w, float_gt);
+             let gt_eff = if composite {
+                 gt_c + (F::cast_from(1.0_f32) - gt_a) * bg_c
+             } else {
+@@ -764,7 +784,10 @@ mod kernels {
+                 chain_centre = chain_centre * gt_a;
+             }
+             dl_dpred[pix_idx] = F::cast_from(ssim_weight) * ssim_grad
+-                + F::cast_from(l1_weight) * l1_sign * chain_centre;
++                + F::cast_from(l1_weight)
++                    * l1_sign
++                    * hot_factor::<F>(gt_eff, hot_threshold, hot_weight)
++                    * chain_centre;
+         }
+     }
+ 
+@@ -810,7 +833,7 @@ mod kernels {
+ /// before comparing against `pred`. `None` skips the math entirely — set it
+ /// when GT has no real alpha (synthesised `a = 1` makes the term zero) or
+ /// when `bg == 0`, since the kernel pays for the always-on math otherwise.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone, Copy, Default)]
+ pub struct ImageLossConfig {
+     pub l1_weight: f32,
+     pub ssim_weight: f32,
+@@ -822,6 +845,12 @@ pub struct ImageLossConfig {
+     /// channel is then ignored and gets a zero gradient. The eval map's alpha
+     /// channel holds the unweighted per-pixel term.
+     pub alpha_weight: f32,
++    /// GT holds f32 bits of a numeric target (see `brush_dataset::scene`), not RGBA8.
++    pub float_gt: bool,
++    /// The L1 term of pixels whose target exceeds `hot_threshold` is weighted by
++    /// `1 + hot_weight` (thermal hot spots). `hot_weight = 0` disables it.
++    pub hot_threshold: f32,
++    pub hot_weight: f32,
+ }
+ 
+ /// Side of the square tiles the loss kernel reduces; partial sums come back
+@@ -985,9 +1014,12 @@ fn launch_image_forward(
+         bg.x,
+         bg.y,
+         bg.z,
++        cfg.hot_threshold,
++        cfg.hot_weight,
+         composite,
+         cfg.mask,
+         reduce,
++        cfg.float_gt,
+     );
+     if reduce { partials } else { map }
+ }
+@@ -1044,9 +1076,12 @@ fn launch_image_backward(
+         bg.x,
+         bg.y,
+         bg.z,
++        cfg.hot_threshold,
++        cfg.hot_weight,
+         composite,
+         cfg.mask,
+         alpha_match,
++        cfg.float_gt,
+     );
+     dl_dpred
+ }
+diff --git a/crates/brush-loss/tests/reference.rs b/crates/brush-loss/tests/reference.rs
+index 897c6fa..4080114 100644
+--- a/crates/brush-loss/tests/reference.rs
++++ b/crates/brush-loss/tests/reference.rs
+@@ -63,6 +63,7 @@ fn ssim_only_cfg() -> ImageLossConfig {
+         composite_bg: None,
+         mask: false,
+         alpha_weight: 0.0,
++        ..Default::default()
+     }
+ }
+ 
+@@ -122,6 +123,7 @@ async fn image_loss_backward_runs() {
+             composite_bg: None,
+             mask: false,
+             alpha_weight: 0.0,
++            ..Default::default()
+         },
+     );
+     let grads = loss.backward();
+@@ -157,6 +159,7 @@ async fn alpha_match_via_4ch_pred() {
+         composite_bg: None,
+         mask: false,
+         alpha_weight: 1.0,
++        ..Default::default()
+     };
+     let map = image_loss_eval(pred.clone(), gt.clone(), cfg);
+     assert_eq!(map.dims(), [h, w, 4]);
+@@ -207,6 +210,7 @@ async fn partials_match_map_sums() {
+         composite_bg: None,
+         mask: false,
+         alpha_weight: 1.0,
++        ..Default::default()
+     };
+     let map = image_loss_eval(pred.clone(), gt.clone(), cfg);
+     let map_sums = to_vec(map.sum_dims(&[0, 1]).reshape([4])).await;
+@@ -251,6 +255,7 @@ async fn partials_gradient_matches_finite_difference() {
+         composite_bg: None,
+         mask: false,
+         alpha_weight: 1.0,
++        ..Default::default()
+     };
+     let tiles = w.div_ceil(TILE_SIZE) * h.div_ceil(TILE_SIZE);
+ 
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index 9c1155a..50b3c14 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -81,6 +81,17 @@ pub struct TrainConfig {
+     #[arg(long, help_heading = "Refine options", default_value = "0.5")]
+     pub split_at_screen_size: f32,
+ 
++    /// Extra L1 weight on pixels whose target exceeds --hot-threshold (thermal hot
++    /// spots): their L1 term is multiplied by 1 + hot_weight. 0 disables.
++    #[clap(long, help_heading = "Training options", default_value = "0.0")]
++    #[serde(default)]
++    pub hot_weight: f32,
++
++    /// Target value (in training units, e.g. scaled temperature) above which a pixel is hot.
++    #[clap(long, help_heading = "Training options", default_value = "1.0")]
++    #[serde(default = "default_hot_threshold")]
++    pub hot_threshold: f32,
++
+     /// Weight of SSIM loss (compared to l1 loss)
+     #[clap(long, help_heading = "Training options", default_value = "0.2")]
+     pub ssim_weight: f32,
+@@ -154,3 +165,7 @@ impl TrainConfig {
+         self.total_train_iters + self.lod_levels * self.lod_refine_steps
+     }
+ }
++
++fn default_hot_threshold() -> f32 {
++    1.0
++}
+diff --git a/crates/brush-train/src/eval.rs b/crates/brush-train/src/eval.rs
+index 2c607ca..ad481c3 100644
+--- a/crates/brush-train/src/eval.rs
++++ b/crates/brush-train/src/eval.rs
+@@ -2,7 +2,7 @@
+ use std::path::Path;
+ 
+ use anyhow::Result;
+-use brush_dataset::scene::view_to_packed_data;
++use brush_dataset::scene::{is_float_target, view_to_packed_data};
+ use brush_loss::{ImageLossConfig, image_loss_eval, psnr_from_mse};
+ use brush_render::camera::Camera;
+ use brush_render::gaussian_splats::Splats;
+@@ -17,6 +17,8 @@ pub struct EvalSample {
+     pub psnr: Tensor<1>,
+     pub ssim: Tensor<1>,
+     pub render_aux: RenderAux,
++    /// Numeric (e.g. thermal) target: `rendered` is unquantised and saves as 16-bit gray.
++    pub float_gt: bool,
+ }
+ 
+ pub async fn eval_stats(
+@@ -28,6 +30,7 @@ pub async fn eval_stats(
+ ) -> Result<EvalSample> {
+     let res = glam::uvec2(gt_img.width(), gt_img.height());
+ 
++    let float_gt = is_float_target(&gt_img);
+     let (gt_packed_data, _has_alpha) = view_to_packed_data(gt_img.clone(), alpha_mode);
+     let gt_packed: Tensor<2, Int> = Tensor::from_data(gt_packed_data, device);
+ 
+@@ -36,8 +39,13 @@ pub async fn eval_stats(
+         render_splats(splats, gt_cam, res, Vec3::ZERO, None, TextureMode::Float).await;
+     let render_rgb = img.slice(s![.., .., 0..3]);
+ 
+-    // Simulate an 8-bit roundtrip for fair comparison.
+-    let render_rgb = (render_rgb * 255.0).round() / 255.0;
++    // Simulate an 8-bit roundtrip for fair comparison with 8-bit images; numeric
++    // targets are compared unquantised, clamped to their [0, 1] range.
++    let render_rgb = if float_gt {
++        render_rgb.clamp(0.0, 1.0)
++    } else {
++        (render_rgb * 255.0).round() / 255.0
++    };
+ 
+     let cfg = |l1, ssim| ImageLossConfig {
+         l1_weight: l1,
+@@ -45,6 +53,8 @@ pub async fn eval_stats(
+         composite_bg: None,
+         mask: false,
+         alpha_weight: 0.0,
++        float_gt,
++        ..Default::default()
+     };
+     // MSE = mean(L1^2) since |a - b|^2 == (a - b)^2.
+     let mse = image_loss_eval(render_rgb.clone(), gt_packed.clone(), cfg(1.0, 0.0))
+@@ -59,6 +69,7 @@ pub async fn eval_stats(
+         ssim,
+         rendered: render_rgb,
+         render_aux,
++        float_gt,
+     })
+ }
+ 
+@@ -70,10 +81,21 @@ impl EvalSample {
+         let img = self.rendered.clone();
+         let [h, w, _] = [img.dims()[0], img.dims()[1], img.dims()[2]];
+         let data = img.clone().into_data_async().await?.try_into_vec::<f32>()?;
+-        let img: image::DynamicImage = Rgb32FImage::from_raw(w as u32, h as u32, data)
+-            .expect("Failed to create image from tensor")
+-            .into();
+-        let img: image::DynamicImage = img.into_rgb8().into();
++        let img: image::DynamicImage = if self.float_gt {
++            // channel 0 as value * 65535, the encoding of the 16-bit targets
++            let gray = data
++                .chunks_exact(3)
++                .map(|p| (p[0].clamp(0.0, 1.0) * 65535.0).round() as u16)
++                .collect();
++            image::ImageBuffer::<image::Luma<u16>, _>::from_raw(w as u32, h as u32, gray)
++                .expect("Failed to create image from tensor")
++                .into()
++        } else {
++            let img: image::DynamicImage = Rgb32FImage::from_raw(w as u32, h as u32, data)
++                .expect("Failed to create image from tensor")
++                .into();
++            img.into_rgb8().into()
++        };
+         let parent = path.parent().expect("Eval must have a filename");
+         tokio::fs::create_dir_all(parent).await?;
+         log::info!("Saving eval view to {path:?}");
+diff --git a/crates/brush-train/src/lod.rs b/crates/brush-train/src/lod.rs
+index 014dae0..25097ad 100644
+--- a/crates/brush-train/src/lod.rs
++++ b/crates/brush-train/src/lod.rs
+@@ -105,6 +105,7 @@ pub async fn compute_pup_scores(
+             composite_bg: None,
+             mask: false,
+             alpha_weight: 0.0,
++            ..Default::default()
+         };
+         // Mean L1 over the RGB channels of the RGBA render.
+         let loss = image_loss(diff_out.img, gt_packed, l1_cfg);
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index b46d080..94c289f 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -305,6 +305,9 @@ impl SplatTrainer {
+                 } else {
+                     0.0
+                 },
++                float_gt: batch.float_gt,
++                hot_threshold: self.config.hot_threshold,
++                hot_weight: self.config.hot_weight,
+             };
+             // The kernel takes the RGBA image as rendered.
+             // `loss` is only reassigned by the LPIPS path below, which is

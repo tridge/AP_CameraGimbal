@@ -31,6 +31,8 @@ def load_targets():
 
 
 TARGETS = load_targets()
+# Hardware-only targets (APCAM_HAVE_SITL 0) have no simulator build.
+SITL_TARGETS = {name: target for name, target in TARGETS.items() if target.get('have_sitl', 1)}
 
 
 def transform(target, channel, inverted, vector, *, rates=False, inverse=False):

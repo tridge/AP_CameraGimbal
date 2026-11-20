@@ -58,9 +58,9 @@ def main():
     (root / 'app/web.pass').write_text('recording-test-password\n')
     web_binary = output / 'web'
     with (output / 'build.log').open('w') as log:
-        subprocess.run(['make', '-C', str(REPO / 'camera_app'), 'tests/test_mp4'], stdout=log, stderr=log, check=True)
+        subprocess.run(['make', '-C', str(REPO / 'camera_app'), 'tests/test_mp4'], stdout=log, stderr=log, check=True, close_fds=False)
         subprocess.run(['make', '-C', str(REPO / 'web'), 'sitl', f'SITL_ROOT={root}',
-                        f'SITL_TARGET={web_binary}'], stdout=log, stderr=log, check=True)
+                        f'SITL_TARGET={web_binary}'], stdout=log, stderr=log, check=True, close_fds=False)
     fixture = output / 'source.h264'
     subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10',
                     '-t', '2.3', '-c:v', 'libx264', '-x264-params',

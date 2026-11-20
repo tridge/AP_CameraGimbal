@@ -1,4 +1,4 @@
-# Third-party build dependencies
+# Third-party dependencies
 
 The `modules/mavlink` git submodule pins the MAVLink message definitions and
 the pymavlink generator (`git submodule update --init --recursive`):
@@ -71,3 +71,56 @@ source versions and each set has a checked SHA256SUMS. They contain required
 kernel modules, ISP tuning and network defaults, with no vendor camera app,
 Boa, sound or graphical assets. The kernel modules and tuning retain their
 respective component licensing; they are separate from AP application code.
+
+The built-in timezone name/rule table in `include/apcam/timezones.h` is derived
+from the public-domain IANA tzdata 2026d release. Its source archive SHA-256 is
+`0cb2aa8e333c3dc049badc42a0c61f21987b8cd44e107fa900bad764aacc7767`.
+See `timezones/LICENSE` and `timezones/README.md` for the source, regeneration
+procedure and current-rule coverage. No IANA implementation code is included.
+
+The image tracker uses dlib **20.0.1** (Boost Software License 1.0), pinned by
+`tools/bootstrap_dlib.sh` to release archive SHA-256
+`dab5b4ec4b68bd7dc128a1fb7900723f89d2da107e44cd5def7d38fc57252a9d`.
+Only the CPU correlation tracker and its FFT implementation are compiled;
+there are no neural-network weights, GUI, CUDA or BLAS dependencies.
+Source: <https://github.com/davisking/dlib/tree/v20.0.1>.
+The bundled KISS FFT is BSD-3-Clause, copyright Mark Borgerding 2003–2010.
+Both license notices are in `web/webroot/licenses`, copied into every camera
+package with the web assets.
+
+The ZT30 qualification inputs under `packaging/zt30/platform` are byte-for-byte
+libraries from the tested SIYI ZT30 0.1.9 installation, pinned in that directory's
+`SHA256SUMS`. They include glibc 2.30 (LGPL-2.1-or-later), the GCC 9 C++ and support
+runtimes (GPL-3.0-or-later with the GCC Runtime Library Exception where applicable),
+and SigmaStar MI/ISP libraries with vendor-specific licensing. They are used to
+validate ELF dependencies and are not installed by `.apbundle` application updates.
+These inputs remain subject to their component license terms. Vendor redistribution
+permission and the availability of corresponding source for the retained runtime
+inputs have not been established by this port; maintainers must confirm those terms
+before distributing the inputs. This entry records provenance, not a grant of rights.
+
+The camera Files player bundles an unmodified **mpegts.js 1.8.0** browser build
+(Apache-2.0), from
+<https://registry.npmjs.org/mpegts.js/-/mpegts.js-1.8.0.tgz> (`dist/mpegts.js`).
+Source: <https://github.com/xqq/mpegts.js/tree/v1.8.0>.
+Its SHA-256 is
+`e998f7a6cec5fcab56ac14e8c22d61a42565c1ebf7174b3fda078343eda6cab0`.
+Copyright and attribution include Bilibili, magicxqq / zheng qian and もにょてっく.
+The upstream release contains no separate NOTICE file.
+
+The upstream source map identifies bundled `events` (Joyent and Node
+contributors), `es6-promise` (Yehuda Katz, Tom Dale, Stefan Penner and
+contributors), `process` (Roman Shtylman), `webworkify-webpack` (Boris Sirota
+and the xqq fork), and the webpack runtime (JS Foundation and contributors),
+under MIT. It also credits Dailymotion's hls.js helpers (Apache-2.0) and a
+UTF-8 helper derived from libWinTF8. This product includes software developed
+by StarBrilliant; the libWinTF8 copyright and redistribution terms are retained.
+
+The full Apache and MIT licence texts, original source copyright and
+attribution notices, and libWinTF8 terms are retained in
+`web/webroot/mpegts-license.html`, shipped with the web assets by the camera
+package builders. No player UI link is required to retain these notices.
+When updating the bundle, recheck its source map and upstream licences and
+update these notices and the pinned checksum together. The bundled JavaScript
+must retain its existing notices; any local source changes need an explicit
+modification notice as required by Apache-2.0 section 4(b).

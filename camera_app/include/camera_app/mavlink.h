@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /* pymavlink-generated bindings for the dialect selected by the Makefile
- * (MAVLINK_DIALECT). The helper bodies are compiled once in mavlink.c, and
+ * (MAVLINK_DIALECT). The helper bodies are compiled once in mavlink.cpp, and
  * every link carries its own parser state, so the per-channel globals are
  * never used and are kept to a single entry. */
 #define MAVLINK_SEPARATE_HELPERS

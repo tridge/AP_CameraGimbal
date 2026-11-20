@@ -9,6 +9,9 @@ concurrency:
   group: ardupilot-camera-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  MAKEFLAGS: -j8
+
 jobs:
   mt11-sitl:
     runs-on: ubuntu-24.04

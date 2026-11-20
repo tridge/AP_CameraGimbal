@@ -1,8 +1,8 @@
 #ifndef APCAM_LENS_H
 #define APCAM_LENS_H
 #include "target.h"
-/* System zoom is relative to the primary wide lens. A second RGB lens can
- * cover the higher magnifications; thermal is independently selected. */
+/* Targets may select RGB lenses from a wide-relative system zoom or retain
+ * zoom-module state independently from the selected RGB/thermal scene. */
 #if APCAM_NUM_LENSES > 1 && APCAM_LENS2_TYPE == APCAM_LENS_TYPE_RGB
 #define APCAM_HAVE_ZOOM_LENS 1
 #define APCAM_ZOOM_LENS_BASE APCAM_LENS2_BASE_MAGNIFICATION
@@ -15,7 +15,7 @@
 static inline int apcam_uses_zoom_lens(float zoom)
 {
 #if APCAM_NUM_LENSES > 1 && APCAM_LENS2_TYPE == APCAM_LENS_TYPE_RGB
-    return zoom > APCAM_ZOOM_LENS_BASE;
+    return APCAM_ZOOM_SELECTS_LENS && zoom > APCAM_ZOOM_LENS_BASE;
 #else
     (void)zoom;
     return 0;
@@ -23,6 +23,8 @@ static inline int apcam_uses_zoom_lens(float zoom)
 }
 static inline float apcam_zoom_lens_optical(float zoom)
 {
+    if (!APCAM_ZOOM_SELECTS_LENS)
+        return zoom < APCAM_ZOOM_LENS_OPTICAL_MAX ? zoom : APCAM_ZOOM_LENS_OPTICAL_MAX;
     if (!apcam_uses_zoom_lens(zoom)) return 1.0f;
     unsigned tenths = (unsigned)(zoom * 10.0f / APCAM_ZOOM_LENS_BASE + 0.0001f);
     if (tenths < 10U) tenths = 10U;

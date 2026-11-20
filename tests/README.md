@@ -10,7 +10,15 @@ directly over TCP and UDP. It then starts ArduCopter once per transport with
 `NET_P1` configured as a MAVLink 2 TCP or UDP client and verifies discovery,
 mount angle control, zoom, focus, still capture and video recording through
 `AP_Mount_MAVLink` and `AP_Camera_MAVLinkCamV2`. This intentionally does not
-use a simulated serial port for the camera link.
+use a simulated serial port for the camera link. Stream information and capture
+status are requested from the camera component through ArduPilot MAVLink routing.
+Earth-frame gimbal feedback is checked directly on the device link because it is
+addressed to the autopilot. Upstream ArduPilot does not yet relay camera
+stream/capture state or convert earth-frame gimbal feedback into its manager's
+body-frame convention. Physical pointing and the device's feedback quaternion/frame
+flags are both checked for angle and geographic ROI commands.
+ROI uses an absolute AMSL altitude because upstream `AP_Mount_MAVLink` does not
+yet convert relative-home ROI locations to AMSL when forwarding them to a gimbal.
 
 To run it locally:
 

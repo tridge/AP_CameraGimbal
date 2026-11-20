@@ -31,9 +31,14 @@ Features:
 - a typed parameter page with codec/resolution menus, decoded imaging-path
   masks, ISP controls, network checks, thermal controls and calibration guards;
 - an optional SupportProxy section for MAVLink and video forwarding, signing
-  and publishing credentials, stream names and ports, and an additional IPv4
-  address and default gateway; see
+  and publishing credentials, stream names and ports; see
   [SupportProxy configuration](../camera_app/README.md#supportproxy);
+- independent primary/secondary IPv4 addresses and a default gateway under
+  Parameters → Network, applied on app restart with validation and reconnect
+  guidance; see [Camera IP configuration](../camera_app/README.md#camera-ip-configuration);
+- off-by-default network packet capture on every camera, including A8, with
+  live start/stop, status and Wireshark PCAP downloads under Parameters → Network;
+  see [Network packet capture](../camera_app/README.md#network-packet-capture);
 - raw editing of the AP CameraGimbal configuration, with syntax validation,
   atomic saves and a backup;
 - restart of AP CameraGimbal while the web service remains available for recovery;
@@ -81,8 +86,14 @@ both the MT11 and A8 builds is translated, including parameter labels and
 help, notices, error replies and the text in the page scripts. Technical
 identifiers such as parameter keys, paths, ports and codec names, and the
 captured application output on the Debug page, stay as they are. The strings
-live in one table in `mt11-web.c`, indexed by a string id with one column per
+live in `APC_Translations.h`, indexed by a string id with one column per
 language.
+
+Changing language preserves the current parameter tab and file/directory path.
+The browser asks before discarding edited forms, including login credentials;
+credentials and form contents are not copied into browser storage. Live view
+retains the selected stream and command-rate preference for the browser tab,
+and reads the camera's current zoom rather than resetting its display to 1×.
 
 The service deliberately implements HTTP rather than TLS. It is intended only
 for the MT11's isolated management network.
@@ -91,7 +102,9 @@ for the MT11's isolated management network.
 
 The ArduPilot camera app feeds its existing encoded H.264 access
 units to a small in-process fragmented-MP4 writer. Its private TCP service is
-bound only to `127.0.0.1:8555`; it is neither an additional public camera port
+bound only to `127.0.0.1:8555` by default. For Z1-Mini, setting
+`CAMERA_APP_RTSP_PORT` in both the camera app and web server environments moves
+the private service to that port plus one. It is neither an additional public camera port
 nor an RTSP proxy. `mt11-web` authenticates `/live/video1.mp4` and
 `/live/video2.mp4`, selects the corresponding private stream, and relays the
 bytes without decoding or transcoding. The native `<video>` element consumes
@@ -120,7 +133,11 @@ Manual pan/tilt is disabled until explicitly enabled on the page. Each held
 direction request uses the selected 5--60 degrees/second command rate (30 by
 default) for 180 ms and the HTTP worker then sends three stop packets. This
 bounds motion even if the browser disconnects. Centre and 1.0x--10.0x zoom are
-one-shot operations. The live gimbal panel updates roll, pitch and yaw angles
+one-shot operations. Optical moves may take several seconds; the control API
+allows five seconds for their completion and queued lease renewals. Command
+rejection is reported without releasing a valid lease; failed renewal still
+disables manual control. Rapid zoom requests are coalesced to the newest value.
+The live gimbal panel updates roll, pitch and yaw angles
 and angular rates at 4 Hz, with yaw positive to the right. Aircraft, MAVLink
 and Lua gimbal controllers can
 still conflict with manual commands, which is why the page presents an
@@ -154,6 +171,45 @@ download does not block status and control requests. Click a Name, Type, Size,
 Modified or Mode column header to sort; click again to reverse direction. Size
 and date use their numeric values. Parent navigation and directories stay above
 files, and the selected sort order is remembered within the browser tab.
+
+MISB `.ts` recordings also play on the File viewer page in browsers supporting
+H.264 Media Source Extensions (including Chrome and Firefox). The bundled,
+Apache-2.0-licensed mpegts.js 1.8.0 transmuxes the video in the browser; the camera
+only serves the original bytes, without transcoding. Licence texts and component
+attributions are bundled in `webroot/mpegts-license.html` and documented in
+`THIRD_PARTY.md`. Playback does not require an Internet connection or HTTPS.
+
+The TS player reads small HTTP ranges at the start and end to establish the
+timeline, then buffers a short section around playback. Seeking into an unread
+part uses bounded timestamp/keyframe probes and restarts at a nearby keyframe;
+it does not download or index the whole recording. Each seek has an aggregate
+probe budget of at most 64 MiB (less for smaller files; recordings under
+8 MiB may be read completely during a difficult seek). Failed probes leave the
+previous playback window usable. An undecodable input
+also stops fetching after 32 MiB without buffered video progress. Its time display and seek bar
+refer to the complete recording, even after a range seek. Pausing stops further
+prefetch once the short buffer fills. Opening an active recording uses its length
+at that moment; reopen the page to include subsequently recorded frames. MP4
+recordings retain the native browser player. Download always retrieves the
+original file, including embedded telemetry; the simple Files player displays
+video only. Browsers without the required decoder show a download fallback.
+
+The dependency-free `make -C web test` checks TS program parsing, wrapping PTS,
+variable-bitrate seeks, HTTP/authentication, and pending-play/error lifecycles.
+The player targets the camera muxer's continuous PTS timeline, random access
+flags and repeated codec headers at keyframes; arbitrary third-party TS clock
+discontinuities are not supported.
+
+The opt-in Firefox regression test exercises decoded playback, bounded network
+reads, paused buffering, and unbuffered seeks using a temporary profile. Run it
+inside a dedicated Xephyr display against a completed recording of at least
+32 MiB and two minutes (use the actual server-side path in SITL):
+
+```sh
+DISPLAY=:100 python3 web/tests/test_ts_playback_firefox.py \
+  --url http://127.0.0.1:8081 --recording /mnt/DCIM/record/example.ts
+```
+
 
 Deletion has a deliberately narrower boundary than reading: `/mnt` itself and
 everything outside it are rejected. The server resolves the target again at
@@ -202,9 +258,20 @@ packages and concurrent uploads are refused. Once publication completes, the
 browser continues the progress display while polling the camera. A temporary
 network loss is treated as the expected reboot, and a new web-server process
 token confirms that the upgraded camera has returned. The wait times out after
-60 seconds with a power/network diagnostic rather than claiming success.
+120 seconds with a power/network diagnostic rather than claiming success.
 The stock updater scans `/mnt` approximately every five seconds. Uploading
 firmware can erase the kernel and rootfs, so stable power is mandatory.
+
+On the XFRobot Z1-Mini the same button accepts `Z1Mini_AP_*.gcu` overlays and
+the web server installs them itself. The upload is streamed to `/tmp`, the ZIP
+listing is checked against the generated package's file allowlist (required
+files present, bounded central directory and total extracted size), the archive
+is extracted one file at a time with the camera's `unzip` into
+`/opt/bin/gcu.new`, `SHA256SUMS` and the manifest target are verified, and the
+new tree is atomically exchanged with `/opt/bin/gcu` before the camera reboots.
+If the filesystem does not support atomic directory exchange, the upload fails
+while preserving the existing installation. Rejected packages leave the
+installation untouched.
 
 Custom firmware packages carry `/app/camera.ini.default`, not
 `/app/camera.ini`. Early startup copies the default only on a first install or
@@ -283,3 +350,42 @@ failures never start the vendor camera application. The AP app serves raw therma
 frames on TCP 7345 on targets with that capability.
 
 Target properties and platform paths come from [the target headers](../include/apcam/README.md).
+
+## C++ server and installed webroot
+
+`APC_HTTPRequest` owns each request buffer and parsing limits;
+`APC_HTTPResponse` owns response framing and the browser security policy.
+Authentication, language selection and firmware transactions retain their
+existing routes. Page-specific data and escaped values are passed to HTML
+fragments in `webroot/`; small conditional rows stay with their C++ renderer.
+All substantial JavaScript and CSS are ordinary files there. Translated scripts
+still receive a per-request `L` object before their JavaScript body.
+
+`APC_WebRoot` permits only names in the build-generated asset manifest. It
+opens flat regular files relative to a directory descriptor, refuses symlinks
+and special files, and limits each asset to 256 KiB. HTML fragments are private:
+only explicit script/style routes are served. Their `{{0}}` substitutions are
+values already escaped by the page for the destination context; templates are
+never used as printf format strings. Missing or invalid templates fail the
+whole page rather than publishing truncated forms. Missing or unavailable
+assets return HTTP 503 with a reinstall message on cameras without the recovery
+UI described below.
+
+Every firmware package installs `webroot` alongside the application data
+(`APP_DIR/webroot`); updating an executable alone is no longer a complete web
+installation. `make -C camera_app install-web` transfers the complete webroot
+before replacing and restarting the web binary. Its destination defaults to
+`/app/webroot` and can be changed with `REMOTE_WEBROOT`; a failed transfer
+stops the installation before restart. ZR10 and Z1-Mini packages include assets
+in their checksums. Native
+SITL uses the source webroot, and the standalone Windows payload includes its
+own copy selected with `CAMERA_GIMBAL_SITL_WEBROOT`. There is no dependency on a
+system web server, JavaScript package manager or an internet-hosted UI bundle.
+
+Z1-Mini has an asset-independent recovery page when any webroot file is missing
+or unavailable. Open the camera's main URL, log in with the existing credentials
+and upload a complete `Z1Mini_AP_*.gcu` package. Its small built-in login/upload
+page uses the usual authentication, CSRF checks and atomic firmware installer.
+Only the upload JavaScript is also compiled into the Z1 server, generated from
+the normal source; no CSS, templates or external JavaScript files are needed.
+The normal UI returns automatically when all assets are installed.

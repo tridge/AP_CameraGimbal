@@ -16,7 +16,10 @@ import time
 import urllib.request
 import urllib.parse
 
-from gimbal_sim import Gimbal
+if __package__:
+    from .gimbal_sim import Gimbal
+else:
+    from gimbal_sim import Gimbal
 
 
 def crc16(data):
@@ -45,12 +48,37 @@ def request(sock, sequence, opcode, payload=b"", timeout=2.0):
     raise TimeoutError(f"no SIYI opcode 0x{opcode:02x} reply")
 
 
-def reserve_port(socktype):
-    sock = socket.socket(socket.AF_INET, socktype)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
+_reserved_ports = set()
+
+
+def reserve_port(socktype, span=1):
+    """Choose unused test ports, including adjacent live-video listeners.
+
+    BSD commonly allocates consecutive ephemeral ports. Remember a whole range
+    so a later web-port allocation cannot collide with RTSP's live port (+1).
+    """
+    for _ in range(1000):
+        sockets = []
+        try:
+            sock = socket.socket(socket.AF_INET, socktype)
+            sockets.append(sock)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            ports = {(socktype, port + offset) for offset in range(span)}
+            if port + span > 65536 or ports & _reserved_ports:
+                continue
+            for offset in range(1, span):
+                adjacent = socket.socket(socket.AF_INET, socktype)
+                sockets.append(adjacent)
+                adjacent.bind(("127.0.0.1", port + offset))
+            _reserved_ports.update(ports)
+            return port
+        except OSError:
+            pass
+        finally:
+            for sock in sockets:
+                sock.close()
+    raise RuntimeError("Could not allocate isolated test ports")
 
 
 def web_request(port, path):
@@ -81,7 +109,55 @@ def terminate(process):
         process.wait(timeout=3)
 
 
-def verify_rtsp_video(port, path, expected_size):
+def read_rtsp_sdp(port, path, host='127.0.0.1'):
+    """A single DESCRIBE must succeed, including before the first video frame."""
+    uri = f'rtsp://{host}:{port}/{path}'
+    with socket.create_connection((host, port), timeout=2) as sock:
+        sock.sendall(f'DESCRIBE {uri} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n'.encode())
+        response = b''
+        while b'\r\n\r\n' not in response:
+            part = sock.recv(4096)
+            assert part, 'closed during DESCRIBE'
+            response += part
+        header, body = response.split(b'\r\n\r\n', 1)
+        assert header.startswith(b'RTSP/1.0 200 '), response
+        length = int(re.search(rb'Content-Length: (\d+)', header, re.I)[1])
+        while len(body) < length:
+            part = sock.recv(4096)
+            assert part, 'closed during SDP'
+            body += part
+    return body[:length].decode()
+
+
+def verify_rtsp_sdp(port, path, codec='h264', host='127.0.0.1'):
+    """Parameter sets appear in fresh SDP once the encoder has produced them."""
+    deadline = time.monotonic() + 5
+    while True:
+        sdp = read_rtsp_sdp(port, path, host)
+        if 'sprop-' in sdp:
+            break
+        assert time.monotonic() < deadline, sdp
+        time.sleep(.05)
+    assert f'IN IP4 {host}\r\n' in sdp, sdp
+    assert '\r\ns=AP_CameraGimbal\r\n' in sdp, sdp
+    assert '\r\nc=IN IP4 0.0.0.0\r\n' in sdp, sdp
+    assert f'a=rtpmap:96 {codec.upper()}/90000\r\n' in sdp, sdp
+    fmtp = re.search(r'a=fmtp:96 ([^\r\n]+)', sdp)[1]
+    params = dict(item.split('=', 1) for item in fmtp.split(';'))
+    if codec == 'h264':
+        assert params['packetization-mode'] == '1'
+        sps, pps = [base64.b64decode(value, validate=True) for value in params['sprop-parameter-sets'].split(',')]
+        assert sps[0] & 31 == 7 and pps[0] & 31 == 8
+        assert params['profile-level-id'] == sps[1:4].hex()
+    else:
+        for name, nal in [('vps', 32), ('sps', 33), ('pps', 34)]:
+            parameter = base64.b64decode(params[f'sprop-{name}'], validate=True)
+            assert (parameter[0] >> 1) & 63 == nal
+    return sdp
+
+
+def verify_rtsp_video(port, path, expected_size, codec='h264'):
+    verify_rtsp_sdp(port, path, codec)
     uri = f"rtsp://127.0.0.1:{port}/{path}"
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-rtsp_transport", "tcp",
@@ -94,6 +170,58 @@ def verify_rtsp_video(port, path, expected_size):
     assert len(streams) == 1, (uri, streams)
     actual_size = (streams[0].get("width"), streams[0].get("height"))
     assert actual_size == expected_size, (uri, actual_size, expected_size)
+
+
+def verify_rtsp_rtcp(port, path):
+    """Check initial and periodic SRs against the RTP actually received."""
+    uri = f'rtsp://127.0.0.1:{port}/{path}'
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        stream = sock.makefile('rb')
+        def request(method, url, cseq, headers=''):
+            sock.sendall(f'{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{headers}\r\n'.encode())
+            status = stream.readline()
+            assert status.startswith(b'RTSP/1.0 200 '), status
+            response = {}
+            while True:
+                line = stream.readline()
+                if line == b'\r\n': break
+                assert line
+                name, value = line.decode().split(':', 1)
+                response[name.lower()] = value.strip()
+            stream.read(int(response.get('content-length', 0)))
+            return response
+        request('DESCRIBE', uri, 1, 'Accept: application/sdp\r\n')
+        setup = request('SETUP', uri+'/track0', 2,
+                        'Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n')
+        session = setup['session'].split(';')[0]
+        request('PLAY', uri, 3, f'Session: {session}\r\nRange: 0-\r\n')
+        packets = octets = reports = 0
+        previous_sequence = None
+        deadline = time.monotonic() + 10
+        while reports < 2 and time.monotonic() < deadline:
+            header = stream.read(4)
+            assert len(header) == 4 and header[0] == 36, header
+            payload = stream.read(struct.unpack_from('!H', header, 2)[0])
+            if header[1] == 0:
+                assert payload[0] == 0x80 and payload[1] & 127 == 96
+                seq, timestamp, ssrc = struct.unpack_from('!HII', payload, 2)
+                if previous_sequence is not None:
+                    assert seq == (previous_sequence+1) & 65535
+                previous_sequence = seq
+                packets += 1
+                octets += len(payload)-12
+            else:
+                assert header[1] == 1 and payload[:4] == b'\x80\xc8\x00\x06'
+                sender, seconds, fraction, rtp_time, count, size = struct.unpack_from('!6I', payload, 4)
+                assert (sender, rtp_time, count, size) == (ssrc, timestamp, packets, octets)
+                assert abs(seconds-2208988800+fraction/2**32-time.time()) < 5
+                assert payload[28:30] == b'\x81\xca'  # SDES, one CNAME chunk
+                assert struct.unpack_from('!I', payload, 32)[0] == ssrc
+                assert payload[36] == 1 and payload[37] > 0
+                name_end = 38 + payload[37]
+                assert payload[name_end:] == bytes(len(payload)-name_end)
+                reports += 1
+        assert reports == 2, 'missing initial or periodic RTCP sender report'
 
 
 def main():
@@ -114,7 +242,7 @@ def main():
     expected_vendor_rate = Gimbal(1, args.backend).vendor_rate_response("yaw", 10)
     gimbal_port = reserve_port(socket.SOCK_DGRAM)
     camera_port = reserve_port(socket.SOCK_DGRAM)
-    rtsp_port = reserve_port(socket.SOCK_STREAM)
+    rtsp_port = reserve_port(socket.SOCK_STREAM, span=2)
     web_port = reserve_port(socket.SOCK_STREAM)
     ready = runtime / "run/camera-app.ready"
     gimbal_ready = runtime / "run/test-gimbal.ready"
@@ -185,6 +313,8 @@ def main():
         assert ready.exists(), "camera-app did not become ready"
         verify_rtsp_video(rtsp_port, "video1", expected_sizes[0])
         verify_rtsp_video(rtsp_port, "video2", expected_sizes[1])
+        # the default [stream.main] alias serves the vendor path too
+        verify_rtsp_video(rtsp_port, "main.264", expected_sizes[0])
 
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.connect(("127.0.0.1", camera_port))
@@ -201,11 +331,21 @@ def main():
             # A positive web/SIYI rate command moves right. Both the reported
             # yaw and yaw rate must therefore increase in either mounting.
             client.send(siyi(2, 0x07, bytes((10, 0))))
-            time.sleep(0.25)
-            moved = request(client, 3, 0x0D)
-            moved_yaw, _, _, moved_yaw_rate = struct.unpack_from("<hhhh", moved)
-            moved_yaw /= 10.0
-            moved_yaw_rate /= 10.0
+            # The calibrated A8 model accelerates to its commanded rate.
+            # Wait for feedback convergence instead of assuming 250 ms is
+            # enough on every host and at every telemetry scheduling phase.
+            deadline = time.monotonic() + 2.0
+            while True:
+                time.sleep(0.05)
+                moved = request(client, 3, 0x0D)
+                moved_yaw, _, _, moved_yaw_rate = struct.unpack_from("<hhhh", moved)
+                moved_yaw /= 10.0
+                moved_yaw_rate /= 10.0
+                if (yaw_sign * (moved_yaw - initial_yaw) > 1.0 and
+                        abs(moved_yaw_rate - yaw_sign * expected_vendor_rate) < 0.2):
+                    break
+                if time.monotonic() >= deadline:
+                    break
             assert yaw_sign * (moved_yaw - initial_yaw) > 1.0, (initial_yaw, moved_yaw)
             assert abs(moved_yaw_rate - yaw_sign * expected_vendor_rate) < 0.2, moved_yaw_rate
             client.send(siyi(4, 0x07, b"\x00\x00"))
@@ -246,6 +386,13 @@ def main():
                     raise
                 time.sleep(0.05)
         assert "ArduPilot camera app" in page
+        # Exercise installed assets, not just the generated HTML links.
+        for asset, mime in (('/style.css', 'text/css'), ('/live.js', 'application/javascript'),
+                            ('/parameters.js', 'application/javascript')):
+            with web_request(web_port, asset) as response:
+                assert response.headers.get_content_type() == mime
+                assert len(response.read()) > 100
+
         csrf_match = re.search(r'data-csrf="([0-9a-f]{64})"', page)
         assert csrf_match is not None
         csrf = csrf_match.group(1)
@@ -268,9 +415,13 @@ def main():
         control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         control.connect(("127.0.0.1", camera_port))
         control.send(siyi(80, 0x07, bytes((10, 0))))
-        time.sleep(0.15)
-        with web_request(web_port, "/live/attitude.json") as response:
-            moving = json.load(response)
+        deadline = time.monotonic() + 2.0
+        while True:
+            time.sleep(0.05)
+            with web_request(web_port, "/live/attitude.json") as response:
+                moving = json.load(response)
+            if abs(moving["yaw_rate_dps"] - expected_vendor_rate) < 0.2 or time.monotonic() >= deadline:
+                break
         assert abs(moving["yaw_rate_dps"] - expected_vendor_rate) < 0.2, moving
         control.send(siyi(81, 0x07, b"\x00\x00"))
         control.close()
@@ -288,6 +439,12 @@ def main():
             moved = json.load(response)
         assert moved["yaw_deg"] > pulse_start["yaw_deg"] + 3.0, \
             (pulse_start, moved)
+        deadline = time.monotonic() + 2.0
+        while abs(moved["yaw_rate_dps"]) >= 0.2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            with web_request(web_port, "/live/attitude.json") as response:
+                moved = json.load(response)
+        assert abs(moved["yaw_rate_dps"]) < 0.2, moved
         time.sleep(0.3)
         with web_request(web_port, "/live/attitude.json") as response:
             settled = json.load(response)

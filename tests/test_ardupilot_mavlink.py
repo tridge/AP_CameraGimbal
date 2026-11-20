@@ -175,7 +175,10 @@ def request_ap_camera_information(connection, timeout=45):
     raise TimeoutError("AP_Camera did not relay MT11 CAMERA_INFORMATION")
 
 
-def request_ap_video_stream_information(connection, timeout=15):
+def request_video_stream_information(connection, timeout=15):
+    # Stream metadata belongs to the camera component. ArduPilot routes this
+    # request over NET_P1; its AP_Camera backend does not relay stream metadata
+    # under the flight controller's component ID.
     while connection.recv_match(blocking=False) is not None:
         pass
     deadline = time.monotonic() + timeout
@@ -187,7 +190,7 @@ def request_ap_video_stream_information(connection, timeout=15):
         now = time.monotonic()
         if now >= next_request:
             connection.mav.command_long_send(
-                1, 1, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+                1, CAMERA_COMPONENT, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
                 mavutil.mavlink.MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION,
                 0, 0, 0, 0, 0, 0,
             )
@@ -196,11 +199,11 @@ def request_ap_video_stream_information(connection, timeout=15):
         if message is None:
             continue
         if (message.get_type() == "VIDEO_STREAM_INFORMATION" and
-                message.get_srcComponent() == 1 and message.stream_id > 0):
+                message.get_srcComponent() == CAMERA_COMPONENT and message.stream_id > 0):
             streams[message.stream_id] = message
             expected_count = max(expected_count, message.count)
         elif (message.get_type() == "COMMAND_ACK" and
-              message.get_srcComponent() == 1 and
+              message.get_srcComponent() == CAMERA_COMPONENT and
               message.command == mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE):
             ack = message
         if (ack is not None and expected_count > 0 and
@@ -208,7 +211,7 @@ def request_ap_video_stream_information(connection, timeout=15):
             assert ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
             return streams
     raise TimeoutError(
-        f"AP_Camera stream information; streams={streams}, ack={ack}"
+        f"Routed camera stream information; streams={streams}, ack={ack}"
     )
 
 
@@ -300,27 +303,6 @@ def wait_vehicle_attitude(connection, timeout=10):
     raise TimeoutError("vehicle ATTITUDE")
 
 
-def wait_manager_attitude(connection, timeout=10):
-    while connection.recv_match(blocking=False) is not None:
-        pass
-    deadline = time.monotonic() + timeout
-    next_request = 0.0
-    while time.monotonic() < deadline:
-        now = time.monotonic()
-        if now >= next_request:
-            connection.mav.command_long_send(
-                1, 1, mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
-                mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS,
-                1, 0, 0, 0, 0, 0)
-            next_request = now + 1.0
-        message = connection.recv_match(
-            type="GIMBAL_DEVICE_ATTITUDE_STATUS", blocking=True, timeout=1)
-        if (message is not None and message.get_srcComponent() == 1 and
-                message.gimbal_device_id == 1):
-            return message
-    raise TimeoutError("ArduPilot manager gimbal attitude")
-
-
 def wait_earth_attitude(connection, siyi_port, target_pitch,
                         target_yaw_earth, timeout=20):
     deadline = time.monotonic() + timeout
@@ -340,22 +322,28 @@ def wait_earth_attitude(connection, siyi_port, target_pitch,
         f"earth attitude {target_pitch}/{target_yaw_earth}, latest={latest}")
 
 
-def wait_manager_earth_attitude(connection, target_yaw_earth, timeout=15):
+def wait_gimbal_earth_attitude(connection, target_pitch, target_yaw, timeout=15):
+    # Check the device's authoritative frame flags and quaternion directly.
+    # Its status is addressed to the autopilot, so is not routed to the GCS.
+    # Upstream AP_Mount_MAVLink does not yet convert
+    # earth-frame device feedback into its manager's body-frame convention.
     deadline = time.monotonic() + timeout
     latest = None
     while time.monotonic() < deadline:
-        manager = wait_manager_attitude(connection, timeout=3)
-        vehicle = wait_vehicle_attitude(connection, timeout=3)
-        manager_yaw_body = math.degrees(Quaternion(manager.q).euler[2])
-        vehicle_yaw = math.degrees(vehicle.yaw)
-        earth_error = (
-            manager_yaw_body + vehicle_yaw - target_yaw_earth + 180.0
-        ) % 360.0 - 180.0
-        latest = (manager, manager_yaw_body, vehicle_yaw, earth_error)
-        if abs(earth_error) < 6.0:
-            return manager, manager_yaw_body, vehicle_yaw
+        status = request_device_message(
+            connection, GIMBAL_COMPONENT,
+            mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS,
+            "GIMBAL_DEVICE_ATTITUDE_STATUS", timeout=3)
+        _, pitch, yaw = (math.degrees(value) for value in Quaternion(status.q).euler)
+        yaw_error = (yaw - target_yaw + 180.0) % 360.0 - 180.0
+        latest = (status.flags, pitch, yaw, yaw_error)
+        if abs(pitch - target_pitch) < 2.0 and abs(yaw_error) < 6.0:
+            assert status.flags & mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_LOCK
+            assert status.flags & mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME
+            assert not status.flags & mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME
+            return status
         time.sleep(0.1)
-    raise TimeoutError(f"manager earth yaw {target_yaw_earth}, latest={latest}")
+    raise TimeoutError(f"gimbal earth attitude {target_pitch}/{target_yaw}, latest={latest}")
 
 
 def wait_global_position(connection, timeout=10):
@@ -460,7 +448,7 @@ def exercise_mavproxy_camera(connection, siyi_port, capture_root,
         camera = module.cameras.get((1, CAMERA_COMPONENT))
         gimbal = module.gimbals.get((1, GIMBAL_COMPONENT))
         if (camera is not None and camera.information is not None and
-                len(camera.streams) == 2 and gimbal is not None and
+                len(camera.streams) >= 2 and gimbal is not None and
                 gimbal.information is not None):
             break
     else:
@@ -509,15 +497,15 @@ def exercise_mavproxy_camera(connection, siyi_port, capture_root,
     assert ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
     assert recording_state.exists()
 
-    # Confirm the AP_Camera MAVLinkCamV2 backend relays the remote camera's
-    # authoritative recording state instead of its base-class constant zero.
+    # Query the camera through the routed link: upstream AP_Camera does not
+    # relay the remote camera's capture status under component 1.
     module._request_message(
-        1, 1, mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS)
+        1, CAMERA_COMPONENT, mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS)
     status = module_wait(
         connection, module,
         lambda message: (
             message.get_type() == "CAMERA_CAPTURE_STATUS" and
-            message.get_srcComponent() == 1 and
+            message.get_srcComponent() == CAMERA_COMPONENT and
             message.video_status == 1))
     assert status.video_status == 1
 
@@ -529,12 +517,12 @@ def exercise_mavproxy_camera(connection, siyi_port, capture_root,
     assert not recording_state.exists()
 
     module._request_message(
-        1, 1, mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS)
+        1, CAMERA_COMPONENT, mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS)
     status = module_wait(
         connection, module,
         lambda message: (
             message.get_type() == "CAMERA_CAPTURE_STATUS" and
-            message.get_srcComponent() == 1 and
+            message.get_srcComponent() == CAMERA_COMPONENT and
             message.video_status == 0))
     assert status.video_status == 0
 
@@ -593,6 +581,7 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
     processes = []
     failed = True
     connection = None
+    device_connection = None
     try:
         gimbal_log = log_paths[0].open("w", encoding="utf-8")
         logs.append(gimbal_log)
@@ -640,17 +629,37 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         )
         processes.append(copter)
         connection = connect_mavlink(mavlink_port, copter)
+        device_connection = mavutil.mavlink_connection(
+            f"{'tcp' if transport == 'tcp' else 'udpout'}:127.0.0.1:{network_port}",
+            source_system=255,
+            source_component=mavutil.mavlink.MAV_COMP_ID_MISSIONPLANNER,
+        )
 
         camera_info = request_ap_camera_information(connection)
         assert bytes(camera_info.vendor_name).rstrip(b"\0") == b"ArduPilot"
         assert camera_info.flags & mavutil.mavlink.CAMERA_CAP_FLAGS_CAPTURE_IMAGE
-        streams = request_ap_video_stream_information(connection)
-        assert set(streams) == {1, 2}
+        streams = request_video_stream_information(connection)
+        # MISB is primary; raw thermal keeps ID 3, with APCG previews at 4/5.
+        assert set(streams) == {1, 2, 3, 4, 5}, streams
+        assert all(stream.count == 5 for stream in streams.values()), streams
         assert streams[1].uri.startswith("rtsp://127.0.0.1:")
-        assert streams[1].uri.endswith("/video1")
+        assert streams[1].uri.endswith("/video1.misb")
         assert streams[2].uri.startswith("rtsp://127.0.0.1:")
-        assert streams[2].uri.endswith("/video2")
+        assert streams[2].uri.endswith("/video2.misb")
         assert streams[2].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
+        assert streams[3].type == 200, streams[3]
+        assert streams[3].uri.startswith("http://127.0.0.1:")
+        assert streams[3].uri.endswith("/thermal.mkv")
+        assert streams[3].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
+        assert (streams[3].resolution_h, streams[3].resolution_v) == (640, 512)
+        for source, compatibility in ((1, 4), (2, 5)):
+            preview = streams[compatibility]
+            assert preview.uri == streams[source].uri.removesuffix('.misb'), preview
+            assert preview.type == streams[source].type
+            assert (preview.resolution_h, preview.resolution_v, preview.hfov, preview.encoding) == (
+                streams[source].resolution_h, streams[source].resolution_v,
+                streams[source].hfov, streams[source].encoding)
+
         gimbal_info = request_device_message(
             connection, GIMBAL_COMPONENT,
             mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION,
@@ -673,8 +682,8 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
 
         # Exercise the same earth-frame path used by an ROI.  ArduPilot sends
         # an earth-locked quaternion, the camera app converts it into the
-        # MT11's vehicle-frame SIYI angle, and AP_Mount converts the compliant
-        # earth-frame feedback back to its body-yaw backend convention.
+        # MT11's vehicle-frame SIYI angle. Check physical pointing and the
+        # device's earth-frame feedback independently.
         target_yaw_earth = 70.0
         ack = command(
             connection, 1,
@@ -691,24 +700,12 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         ) % 360.0 - 180.0
         assert abs(earth_error) < 6.0, (
             physical_attitude, vehicle_yaw, target_yaw_earth)
-        manager_attitude, manager_yaw_body, manager_vehicle_yaw = (
-            wait_manager_earth_attitude(connection, target_yaw_earth))
-        target_yaw_body = (
-            target_yaw_earth - manager_vehicle_yaw + 180.0
-        ) % 360.0 - 180.0
-        body_error = (
-            manager_yaw_body - target_yaw_body + 180.0
-        ) % 360.0 - 180.0
-        assert abs(body_error) < 6.0, (
-            manager_vehicle_yaw, target_yaw_body, manager_yaw_body,
-            manager_attitude.flags)
-        assert (manager_attitude.flags &
-                mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME)
+        wait_gimbal_earth_attitude(device_connection, -18.0, target_yaw_earth)
 
         # Exercise native geographic targeting from the operator-facing map
-        # ROI command.  Feed ArduPilot a relative-home location and verify the
-        # mount backend converts it to GLOBAL AMSL before forwarding it to the
-        # MT11, which only accepts AMSL.  The camera then owns the continuously
+        # ROI command. Use GLOBAL AMSL: upstream AP_Mount_MAVLink does not yet
+        # convert relative-home locations to AMSL when forwarding them to a
+        # gimbal, and the MT11 only accepts AMSL. The camera owns the continuously
         # updated bearing/elevation loop.  Put the ROI 100m north and 50m below
         # the stationary SITL vehicle for earth yaw 0 and pitch about -26.6deg.
         position = wait_global_position(connection)
@@ -717,15 +714,11 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         roi_altitude = position.alt * 1.0e-3 - 50.0
         ack = set_roi(
             connection, roi_latitude, roi_longitude,
-            roi_altitude - HOME_ALTITUDE_AMSL,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT)
+            roi_altitude, mavutil.mavlink.MAV_FRAME_GLOBAL)
         assert ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
         roi_pitch = math.degrees(math.atan2(-50.0, 100.0))
         wait_earth_attitude(connection, siyi_port, roi_pitch, 0.0)
-        roi_manager, _roi_body, _roi_vehicle = wait_manager_earth_attitude(
-            connection, 0.0)
-        assert (roi_manager.flags &
-                mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME)
+        wait_gimbal_earth_attitude(device_connection, roi_pitch, 0.0)
 
         ack = command(
             connection, 1, mavutil.mavlink.MAV_CMD_SET_CAMERA_ZOOM,
@@ -795,6 +788,8 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         print(f"PASS ArduPilot NET {transport.upper()}: MAVLink mount and camera")
         failed = False
     finally:
+        if device_connection is not None:
+            device_connection.close()
         if connection is not None:
             connection.close()
         for process in reversed(processes):

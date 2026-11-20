@@ -4,13 +4,17 @@ src/**/*.o
 src/**/*.d
 tests/camera-app-host
 tests/camera-app-a8-host
+tests/camera-app-rpi-host
 tests/test_mp4
 tests/test_mp4_sync
 tests/test_mp4_rollover
 tests/test_protocol
 tests/test_mavlink
 tests/test_mavlink_time
+tests/test_telemetry_time
 tests/test_gimbal_rate
+tests/test_rpi_libcam_caddx
+tests/test_rpi_jpeg
 tests/test_e5739
 tests/test_thermal
 tests/test_thermal_monitor
@@ -28,6 +32,7 @@ tests/test.mp4.fragmented
 tests/test.ffprobe.err
 tests/test.fragmented.ffprobe.err
 tests/test_video_metadata
+tests/test_misb
 tests/test_support_mavlink
 tests/test_exposure
 tests/test_exposure_native

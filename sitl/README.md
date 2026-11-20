@@ -19,7 +19,14 @@ make a8_sitl-test
 make zr10_sitl
 make zr10_sitl-test
 make sitl-live-tracking-test
+make sitl-rate-default-test
 ```
+
+`make sitl-mavlink-test` also exercises circling ROI tracking with sparse
+position data and injected 0–100 ms delay/reordering, in angle and rate modes.
+`make -C camera_app tests/test_telemetry_time tests/test_targeting` builds the
+deterministic clock/history and analytic LOS-rate tests; run both executables
+from `camera_app/tests/` after building them.
 
 The live tracking test uses isolated ports and files, and requires the usual
 MAVLink/video test dependencies. It checks web saves against the
@@ -28,9 +35,15 @@ until recording stops.
 
 The **Tracking control method** setting (`TRACK_METHOD` in MAVLink, or
 `[mavlink] tracking_method=angle|rate` in `camera.ini`) selects how the camera
-tracks a geographic ROI. Angle is the default. Rate combines predicted target
+tracks a geographic ROI. Rate is the default and combines predicted target
 motion with filtered pointing-error correction, and stops on stale vehicle or
 gimbal telemetry. It does not change explicit mount-angle/rate commands.
+Existing explicit `tracking_method=angle` settings remain Angle. MT11 tracking
+uses short minimum-speed pulses for requested rates below its measured motor
+dead zone; other gimbals retain their calibrated conversion. A command-only
+CADDX gimbal first acquires an explicitly requested ROI with an angle target,
+then integrates the tracking rates; its reported pose remains commanded, not
+measured. No initial camera startup movement is introduced.
 
 The camera app checks for configuration-file changes every 500 ms. Image
 controls, capture scope, thermal palette, automatic recording, timezone and
@@ -60,29 +73,109 @@ Alternatively, use the PyQt desktop launcher from the repository root:
 ./sitl_launch.py
 ```
 
-It offers **MT11 / A8 / ZR10**, **Normal / Inverted**, and **Simple test patterns /
-3D terrain and imagery**. Start builds the selected backend and launches SITL;
-Stop or closing the window stops its processes, including cameras restarted
-through the web UI. Build output and service logs appear in the window, and
-**Open Web UI** opens the running camera in your browser.
+Choose **1–4 simulators** (default 1), then select **MT11 / A8 / ZR10 / Z1-Mini**,
+**Normal / Inverted**, and **Simple test patterns / 3D terrain and imagery** in
+each simulator's tab. **3D terrain and imagery** is selected by default.
+Repeated camera types are supported. **Start all** builds
+the cameras sequentially, then leaves them running together. **Stop all** or
+closing the window stops the entire group, including cameras restarted through
+the web UI. A startup failure stops the group and leaves the logs in each tab.
+Each tab has its own **Open Web UI**, build output and service logs.
+
+Fresh simulator slots use these defaults:
+
+| Simulator | Web | MAVLink TCP/UDP | RTSP | Live video | Camera/gimbal components |
+|---|---:|---:|---:|---:|---|
+| 1 | 8081 | 16001 | 8554 | 8555 | 100 / 154 |
+| 2 | 8082 | 16011 | 8564 | 8565 | 101 / 171 |
+| 3 | 8083 | 16021 | 8574 | 8575 | 102 / 172 |
+| 4 | 8084 | 16031 | 8584 | 8585 | 103 / 173 |
+
+SIYI vendor ports are 37260–37263. Z1-Mini UDP command ports are
+2337/2347/2357/2367; TCP uses 2332 for slot 1 and the command port for later
+slots. UDP 2338 is reserved for the XFRobot client's fixed reply endpoint.
+Multiple local Z1-Mini instances share that reply destination, so use TCP to
+keep their vendor telemetry separate. Internal gimbal sockets use automatically
+allocated ports. Existing MAVLink port and component settings are preserved;
+conflicting saved settings are reported before starting the group. Fresh camera
+listeners use 16001 (then 16011/16021/16031 for additional launcher slots),
+separate from sim_vehicle.py's usual GCS output ports. Existing explicitly saved
+TCP/UDP ports are retained until changed or parameters are reset.
+
+When connecting a real camera and a simulator to the same vehicle, give each
+camera a distinct component ID. For example, keep the real MT11 at camera 100 /
+gimbal 154 (mount 1), and set the simulator's `camera_component_id` to 101 /
+gimbal 171 (mount 2). The gimbal component follows the camera component
+automatically; restart the camera app after changing its identity. Different
+network ports alone do not distinguish MAVLink devices. Duplicate identities
+can make map ROI commands drive the simulator while video comes from the real
+camera. After correcting a duplicate identity or disconnecting the simulator,
+restart vehicle SITL so its MAVLink mount backend discovers the intended link
+again. Set the corresponding `MNTn_TARG_RATE` above zero to enable commands.
+
+Slot 1 keeps its existing build/runtime directory. Additional slots use
+`<build>-instance-<number>/<camera>/runtime`, with separate parameters, login
+settings, recordings and logs. These are siblings of slot 1 so cleaning its
+build directory cannot delete another slot. **Clear parameters on launch** applies only to
+that tab. The launcher number seeds port and component defaults when creating
+or explicitly resetting a configuration, so web changes remain effective.
+
+When a separate MAVProxy instance connects to a vehicle serial port and serves
+UniGCS on UDP 14550, start `sim_vehicle.py` with `--no-extra-ports`. Otherwise
+its default `--out 127.0.0.1:14550` can feed that second MAVProxy, which learns
+the localhost sender as another client and sends traffic back through the
+vehicle. This can circulate identical camera packets thousands of times per
+second and stall UniGCS parameter fetching before it will scan for cameras.
+For an existing session, run `output remove 127.0.0.1:14550` in the MAVProxy
+started by sim_vehicle; retain the separate instance's UniGCS output.
 
 Windows users can run the standalone installer or portable ZIP without installing
 Python, Cygwin or FFmpeg. See [Windows packaging and usage](../windows/README.md).
 
+On macOS, install Xcode Command Line Tools (`xcode-select --install`) and
+Homebrew, then prepare a native SITL environment:
+
+```sh
+brew install python ffmpeg coreutils
+git submodule update --init --recursive
+python3 -m venv build/terrain-venv
+. build/terrain-venv/bin/activate
+pip install PyQt6 psutil pymavlink lxml -r sitl/requirements-video.txt
+make dependencies
+python3 sitl_launch.py
+```
+
+`coreutils` supplies `sha256sum` for dependency verification. The Mac launcher
+uses `psutil` to find its processes, including cameras restarted by the web UI.
+For 3D video, also install the terrain requirements and a MAVProxy checkout
+with map3d as described below. Hardware firmware cross-compilation still uses
+Linux; these instructions build native macOS simulators. Linux-only system
+statistics and host IP configuration are unavailable in macOS SITL.
+
 The launcher supports PyQt6 or PyQt5 (for example, install `python3-pyqt6` on
 Debian/Ubuntu). Terrain mode automatically uses `build/terrain-venv/bin/python`
 when present, or the `CAMERA_GIMBAL_SITL_PYTHON` override. The port and MAVLink
-environment overrides described below still apply; A8 MAVLink remains disabled
-by default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for both
-the build and launch. Test the GUI without a display using
+environment overrides described below still apply as slot-1 base ports, with
+the same offsets for later slots (MAVLink port 0 stays disabled). A8 launched
+from the GUI enables MAVLink; standalone `make a8_sitl-run` retains its existing
+disabled default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for
+both build and launch, with numbered sibling directories for additional slots.
+Terrain imagery download threads default to 16 per simulator (64 for four
+terrain slots). Set `CAMERA_GIMBAL_SITL_TILE_THREADS` to reduce this per-process
+limit; the environment override applies to every slot.
+Test the GUI without a display using
 `QT_QPA_PLATFORM=offscreen python3 sitl/test_launch.py`.
 Add `--real` to build and launch both real backends in isolated temporary
 directories, checking mounting orientation, web restarts and process cleanup.
+`QT_QPA_PLATFORM=offscreen python3 sitl/test_launch_multi.py` builds and runs
+four MT11s, then all four camera types, checking concurrent web servers, video,
+MAVLink identities and cleanup on isolated test ports.
 
 Keep that command running and press Ctrl-C in the same terminal to stop all
-three processes. For MT11, another terminal can use `make sitl-kill`. The kill
-target matches this repository's exact MT11 SITL executable and script paths
-and is safe when SITL is already stopped. A per-model launcher lock prevents
+three processes. Use the GUI's Stop all button to stop a multi-simulator group.
+`make sitl-kill` is a repository-wide recovery command: its shared script matching
+can stop launchers and gimbal simulators from other slots and models too. It is
+safe when SITL is already stopped. Each runtime has a launcher lock to prevent
 accidental duplicate instances.
 
 The default endpoints are:
@@ -90,8 +183,14 @@ The default endpoints are:
 - web UI: `http://127.0.0.1:8081/` (login page; username `admin`, password
   `ardupilot`; English, Simplified Chinese or Japanese);
 - public SIYI API: UDP and TCP port 37260; and
+- initial MT11, A8 mini and ZR10 UniGCS discovery on UDP 37258 and private control on TCP 37256
+  for the first instance; see [protocol coverage and tests](../docs/unigcs.md).
+  Select H.265 for the main stream when testing UniGCS; H.264 display is not
+  working in the tested client.
+  Native private pan/tilt rates and centre/look-down presets share the public
+  SDK/MAVLink gimbal simulation; native modes and subscriptions remain pending;
 - H.264 RTSP test streams: `rtsp://127.0.0.1:8554/video1` and `/video2`;
-- MAVLink 2 camera/gimbal service: UDP and TCP port 14550; and
+- MAVLink 2 camera/gimbal service: UDP and TCP port 16001; and
 - simulated private gimbal link: an automatically selected free UDP port,
   printed by the launcher.
 
@@ -119,8 +218,9 @@ state and are observable through SIYI attitude queries.
 ## Optional 3D terrain video
 
 Set `CAMERA_GIMBAL_SITL_VIDEO=terrain` for satellite imagery draped over the
-same ArduPilot quantized meshes used by MAVProxy's map3d module. The default
-remains `simple`, with generated test streams. All four targets support terrain.
+same ArduPilot quantized meshes used by MAVProxy's map3d module. The GUI defaults
+to terrain; command-line launches default to `simple`, with generated test streams.
+All four targets support terrain.
 Both sources apply camera image controls before encoding live video and recordings.
 
 Simple video needs NumPy, OpenCV and PyAV, without VTK or map3d. The Windows
@@ -163,7 +263,11 @@ normal MAVProxy tile cache.
 Send the simulated vehicle's MAVLink stream to the camera. Position and AMSL
 altitude come from the selected flight controller, and the view uses the
 simulated gimbal's level-referenced roll/pitch and vehicle-relative yaw.
-Missing or stale telemetry produces a waiting screen. Gimbal controls and
+Missing or stale telemetry produces a waiting screen. When the predicted camera
+position is below the loaded terrain mesh, video and still images show a brown
+screen labelled **Below Ground**. Normal rendering resumes above the surface.
+Raw thermal carries the same warning in synthetic greyscale. This check uses
+terrain height, not altitude relative to home. Gimbal controls and
 optical/digital zoom alter the rendered view and its advertised FOV. A8's two
 streams encode the same visible scene at their configured resolutions; MT11's
 thermal view uses synthetic temperature and the selected palette with the
@@ -193,10 +297,12 @@ jitter without buffering future telemetry. Frames are rendered ahead of their
 50 ms presentation deadlines and published on that cadence. Two queued encoded
 frames plus the frame awaiting display provide about 150 ms of render headroom
 at 20 fps, so a short texture upload does not pause playback. Prediction remains
-capped at 250 ms; the frame queue cannot grow without bound. Gimbal Euler rates are
-estimated from successive timestamped samples with angle wrapping. Recorded SEI
-also includes optional NED `velocity` and vehicle `yaw_rate_rad_s` fields; old
-telemetry readers continue to work.
+capped at 250 ms; the frame queue cannot grow without bound. The predictor uses
+measured vehicle and gimbal yaw rates, avoiding rate noise from differences of
+rounded gimbal angles. Other Euler rates, and legacy gimbal records without a
+rate, use successive timestamped samples with angle wrapping. Recorded SEI
+includes optional NED `velocity` and `yaw_rate_rad_s` fields in both attitude
+objects; old telemetry readers continue to work.
 
 Prefetch and performance settings:
 
@@ -253,8 +359,8 @@ MT11_SITL_WEB_PORT       default 8081
 MT11_SITL_CAMERA_PORT    default 37260
 MT11_SITL_GIMBAL_PORT    optional fixed port; default is OS-selected
 MT11_SITL_RTSP_PORT      default 8554 (native web video uses the next port)
-MT11_SITL_MAVLINK_TCP_PORT default 14550; 0 disables TCP
-MT11_SITL_MAVLINK_UDP_PORT default 14550; 0 disables UDP
+MT11_SITL_MAVLINK_TCP_PORT default 16001; 0 disables TCP
+MT11_SITL_MAVLINK_UDP_PORT default 16001; 0 disables UDP
 MT11_SITL_ORIENTATION    upright or inverted; default upright
 ```
 
@@ -264,10 +370,10 @@ The A8 launcher has the equivalent `A8_SITL_WEB_PORT`,
 `A8_SITL_ORIENTATION` variables. Its MAVLink ports default to zero so a
 standalone A8 simulation cannot accidentally accept gimbal targets broadcast
 by another ArduPilot instance on port 14550. Set one or both port variables to
-14550 when deliberately testing MAVLink integration.
+16001 when deliberately testing MAVLink integration.
 
 The MT11 MAVLink ports normally come from the persistent simulated
-`app/camera.ini`, whose initial values are 14550. Setting either model's
+`app/camera.ini`, whose initial values are 16001. Setting either model's
 MAVLink launcher variable explicitly overrides that INI value for the process
 and for web-triggered restarts; leave MT11 variables unset when changing its
 ports in the web UI. A8 always uses its isolated launcher defaults unless the
@@ -392,14 +498,14 @@ Camera SITL skips network address/route changes. Test the production network
 configuration code separately inside a disposable network namespace:
 
 ```sh
-python3 sitl/test_support_network.py
+python3 sitl/test_network.py
 # If unprivileged network namespaces are unavailable:
-python3 sitl/test_support_network.py --sudo
+python3 sitl/test_network.py --sudo
 ```
 
-This creates a dummy interface, verifies that its existing address survives,
-adds the configured address and default route, and checks repeated setup and
-invalid settings. The `--sudo` variant requires passwordless sudo for
+This creates dummy interfaces and checks primary address replacement, optional
+secondary addressing, default routes, removal, repeated startup and rollback
+after failure. IPv6 and other interfaces must remain unchanged. The `--sudo` variant requires passwordless sudo for
 `unshare`; neither variant changes the host network.
 
 SITL preserves the selected backend's `runtime/app/camera.ini` across builds,
@@ -456,3 +562,69 @@ palette/source changes, autofocus, still captures and recording) with:
 ```sh
 make sitl-image-controls-test
 ```
+
+## Network capture tests
+
+Network capture is available on all physical camera targets and Linux SITL.
+It starts disabled, writes four rotating 16 MiB PCAP files beneath
+`mnt/DCIM/network` in the simulator runtime, and is controlled live from
+**Parameters → Network**. Linux packet sockets require root or `CAP_NET_RAW`;
+macOS/Windows SITL reports an unsupported-operation error if enabled.
+
+These tests isolate generated loopback traffic from the host network:
+
+```sh
+make -C camera_app network-capture-test
+make a8_sitl
+make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
+sudo unshare -n python3 sitl/test_network_capture.py
+```
+
+Install `tcpdump` for independent PCAP decoding; the tests also use `tshark`
+when available. They cover timestamps, UDP/TCP payloads, file rotation,
+disable/re-enable, missing storage, insufficient privileges, web authentication
+and CSRF checks, and the complete A8 web-to-PCAP download path. Camera firmware
+does not need either decoder installed.
+
+## Raw thermal FFV1 stream
+
+SITL-MT11 advertises stream 3, lossless 640x512 16-bit FFV1 in Matroska, at
+RTSP port + 2 (normally `http://127.0.0.1:8556/thermal.mkv`). In **3D terrain and imagery** mode, raw thermal and thermal display video use
+the same rendered 640x512 sensor image, field of view and predicted camera pose.
+Imagery brightness is mapped to synthetic 15–45°C samples; this is not a physical
+thermal model. Palette, display gain and overlays do not change the raw samples.
+Frames are upright and include the rendered pose and presentation timestamp.
+The raw source rate follows the terrain renderer frame rate.
+**Simple test patterns** mode retains the labelled full-depth diagnostic pattern
+at 25 fps, with capture-time simulated telemetry.
+Use `camera view rawthermal` in the updated MAVProxy camera module.
+See [build, viewer, automated tests and protocol details](../camera_app/RAW_THERMAL.md).
+
+Raw thermal recording and streaming use independent live rates,
+`RAW_RECORD_FPS` (0–25; 0 disables recording) and `RAW_STREAM_FPS` (1–25),
+both defaulting to 5 fps. These are also in web Parameters → Video and in
+`[thermal] record_fps` / `stream_fps`. Raw `.mkv` files follow the existing
+manual and automatic video recording policy, including While Armed.
+`python3 sitl/test_raw_thermal_stream.py --mavproxy /path/to/MAVProxy`
+checks both rates, slow clients, recording without streaming, arm/disarm,
+live changes through both MAVLink protocols and INI reload, and exact decoded
+sensor samples. Add `--terrain` to test the terrain renderer through the C++
+bridge, FFV1 stream and MAVProxy reader with offline textured meshes, checking
+every decoded pixel against the renderer output. See [raw thermal details](../camera_app/RAW_THERMAL.md).
+
+### Raw thermal through SupportProxy
+
+Build SupportProxy with its Matroska relay support, then run:
+
+```sh
+python3 sitl/test_support_proxy.py --proxy ../SupportProxy --raw-thermal --reconnect
+```
+
+`--mavproxy` names a MAVProxy checkout with the raw thermal reader (default
+`../MAVProxy`); `make sitl-supportproxy-test` passes `MAVPROXY_REPO` when set.
+
+This checks stream 3 discovery over the proxy, all native sample bits against
+the SITL pattern, capture-time position metadata, and recovery after restarting
+the proxy alongside the two existing display streams. The camera runs without
+its local raw HTTP listener, so stream 3 start/stop commands are also checked
+with SupportProxy as the only transport.

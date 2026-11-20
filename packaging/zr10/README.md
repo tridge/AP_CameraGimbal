@@ -11,7 +11,7 @@ git submodule update --init --recursive
 make release RELEASE_TARGETS=ZR10
 ```
 
-This creates `release/<tag>/ZR10/ZR10_UpgradeSD.bin` with installation and update
+This creates `release/<tag>/SIYI_ZR10/ZR10_UpgradeSD.bin` with installation and update
 instructions, build information and checksums. The firmware updates only the
 customer application partition; it retains the bootloader, kernel, drivers and
 gimbal firmware.
@@ -73,10 +73,15 @@ installation requires the original SIYI SD image to restore vendor operation.
 ## Operation and validation
 
 - Web: `http://192.168.144.25/`.
-- MAVLink: TCP/UDP 14550. SIYI: TCP/UDP 37260.
+- MAVLink: TCP/UDP 16001. SIYI: TCP/UDP 37260.
 - RTSP: `rtsp://192.168.144.25:8554/video1` and `/video2`.
 - Media: `/mnt/DCIM/capture` and `/mnt/DCIM/record`.
 - Logs: `/tmp/camera-app.log` and `/tmp/zr10-web.log`.
+
+The service enables `ALLMULTI` on `eth0` before starting UniGCS discovery,
+matching the receive-filter workaround confirmed on A8. This accepts Ethernet
+multicast without enabling promiscuous mode; the kernel still selects packets
+for each socket. Discovery on physical ZR10 hardware remains to be verified.
 
 Streaming and recording support 720p, 1080p and 1440p. Optical zoom is 1–10x.
 Factory image tuning and autofocus are retained; manual image settings and
