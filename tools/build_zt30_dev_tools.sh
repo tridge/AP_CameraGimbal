@@ -14,7 +14,8 @@ cd "$output/dropbear-2026.94"
 printf '%s\n' '#define DROPBEAR_SVR_PASSWORD_AUTH 0' '#define DROPBEAR_SVR_PAM_AUTH 0' > localoptions.h
 CC=${cross}gcc AR=${cross}ar RANLIB=${cross}ranlib CFLAGS='-O2 -march=armv7-a -mfloat-abi=hard' LDFLAGS='-Wl,--as-needed' \
     ./configure --host=arm-linux-gnueabihf --disable-zlib --disable-lastlog \
-    --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx --enable-bundled-libtom
+    --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+    --disable-openpty --disable-loginfunc --enable-bundled-libtom
 # Bound foreground server logs on this temporary development filesystem.
 python3 - <<'CAP_LOG'
 from pathlib import Path
@@ -30,6 +31,14 @@ prefix = """        struct stat log_stat;
 """
 p.write_text(s.replace(needle, prefix + needle))
 CAP_LOG
-make -j8 PROGRAMS='dropbear dropbearkey'
+set -- PROGRAMS='dropbear dropbearkey'
+# Configure/link options may change while all source/object mtimes remain
+# unchanged. Do not return stale dynamically linked tools from that rebuild.
+rm -f dropbear dropbearkey
+if [ -n "${MAKEFLAGS:-}" ]; then
+    "${MAKE:-make}" "$@"
+else
+    make -j4 "$@"
+fi
 mkdir -p "$output/bin"
 install -m 0755 dropbear dropbearkey "$output/bin/"

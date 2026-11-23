@@ -17,7 +17,7 @@ TARGETS = {
     'A8': ('SIYI', 'a8_package', 'A8_PACKAGE_OUT', 'SIYI_4K_MINI_UpgradeSD.bin'),
     'MT11': ('SIYI', 'mt11_package', 'MT11_PACKAGE_OUT', 'MT11_FW_ArduPilot_{version}_{short_revision}.bin'),
     'ZR10': ('SIYI', 'zr10_firmware', 'ZR10_FIRMWARE_OUT', 'ZR10_UpgradeSD.bin'),
-    'ZT30': ('SIYI', 'zt30_package', 'ZT30_PACKAGE_OUT', 'ZT30_AP_{version}_{short_revision}.apbundle'),
+    'ZT30': ('SIYI', 'zt30_firmware', 'ZT30_FIRMWARE_OUT', 'SIYI_ZT30_UpgradeSD.bin'),
     'Z1-Mini': ('XFRobot', 'z1mini_native_package', 'Z1MINI_NATIVE_PACKAGE_OUT', 'Z1Mini_AP_native_{version}_{short_revision}.gcu'),
 }
 

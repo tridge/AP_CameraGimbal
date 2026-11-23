@@ -105,7 +105,7 @@ if Path('fail').exists():
             'SIYI_A8': 'SIYI_4K_MINI_UpgradeSD.bin',
             'SIYI_MT11': f'MT11_FW_ArduPilot_v1.0_{self.revision[:6]}.bin',
             'SIYI_ZR10': 'ZR10_UpgradeSD.bin',
-            'SIYI_ZT30': f'ZT30_AP_v1.0_{self.revision[:6]}.apbundle',
+            'SIYI_ZT30': 'SIYI_ZT30_UpgradeSD.bin',
             'XFRobot_Z1-Mini': f'Z1Mini_AP_native_v1.0_{self.revision[:6]}.gcu',
         }
         for name, firmware in expected.items():

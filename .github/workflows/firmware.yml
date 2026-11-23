@@ -50,7 +50,7 @@ jobs:
       - name: Test native ZT30 thermal metadata
         run: make -C camera_app zt30-thermal-metadata-test
       - name: Build and test ZT30 application slots and bundle failures
-        run: make build/zt30/zt30-slot zt30_slots-test zt30_bundle-test zt30_update-test
+        run: make build/zt30/zt30-slot zt30_slots-test zt30_bundle-test zt30_update-test zt30-firmware-test
       - name: Compile and link both native ZT30 applications
         run: make zt30_ram_camera_build zt30_dev_camera_build
       - name: Check packaging and UUID helpers

@@ -49,7 +49,7 @@ static void handle_zt30_upgrade(int fd, const APC_HTTPRequest *request, const ch
     if (!rollback && !valid_csrf_header(request)) {send_text_errorf(fd, 403, "Forbidden", S_CSRF_RELOAD); return;}
     char filename[256] = {}, type[128] = {};
     if (!rollback) {
-        if (!request->content_length || request->content_length > apcam_zt30::bundle_limit) {send_text_errorf(fd, 413, "Payload Too Large", S_E_FW_SIZE); return;}
+        if (!request->content_length || request->content_length > apcam_zt30::firmware_limit) {send_text_errorf(fd, 413, "Payload Too Large", S_E_FW_SIZE); return;}
         if (!find_header(request, "Content-Type", type, sizeof(type)) || strncasecmp(type, "application/octet-stream", 24) ||
             (type[24] && type[24] != ';')) {send_text_errorf(fd, 415, "Unsupported Media Type", S_E_FW_CONTENT_TYPE); return;}
         if (!find_header(request, "X-Firmware-Name", filename, sizeof(filename)) || !valid_firmware_name(filename)) {
