@@ -44,6 +44,7 @@
 
 #ifdef CAMERA_APP_ZT30_DEV
 #include "../zt30/zoom_feedback.h"
+#include "../zt30/zoom_control.h"
 #endif
 
 #define PI_F 3.14159265358979323846f
@@ -321,6 +322,9 @@ static int send_startup(struct ca_backend *backend)
 {
 #ifdef CAMERA_APP_ZT30_DEV
     ca_zt30::zoom_feedback().reset();
+    ca_zt30::optical_zoom().reset();
+    const uint8_t zoom_stop=0;
+    if(send_link(backend,A8_LINK_FLAG_PLAIN,0x04,&zoom_stop,1)<0)return -1;
 #endif
 
 #ifdef CAMERA_APP_ZT30_DEV
@@ -411,6 +415,7 @@ static bool capture_photo(struct ca_backend *backend)
 static void emit_zoom_value(struct ca_backend *backend, uint8_t opcode)
 {
     float zoom = backend->zoom_get(backend->zoom_opaque);
+    if(!isfinite(zoom) || zoom<1 || zoom>APCAM_ZOOM_CONTROL_MAX)return;
     unsigned tenths = (unsigned)(zoom * 10.0f + 0.5f);
     uint8_t payload[2] = {
         (uint8_t)(tenths / 10U),
@@ -528,6 +533,7 @@ static void handle_tunnel_reply(struct ca_backend *backend,
         const bool previously_known=isfinite(ca_zt30::zoom_feedback().get(now));
         if (ca_zt30::zoom_feedback().observe(packet.payload[0],packet.payload[1],now) && !previously_known)
             ca_log("ZT30 optical zoom feedback active %.1fx",ca_zt30::zoom_feedback().get(now));
+        return; // Internal optical polls must not overwrite combined client zoom.
     }
 #endif
     if ((packet.control & 2U) && packet.opcode == 0x01U && packet.payload_length == 12U &&
@@ -974,7 +980,18 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     case 0x0a:
         if (packet.payload_length || !ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
         break; // shared configuration getter, no camera action
-    case 0x02: case 0x0d: case 0x18: case 0x19: case 0x31:
+    case 0x18:
+        if(packet.payload_length) { errno=EINVAL;return -1; }
+        if(!backend->zoom_get || !isfinite(backend->zoom_get(backend->zoom_opaque))) { errno=EAGAIN;return -1; }
+        emit_zoom_value(backend,packet.opcode);return 0;
+    case 0x0f:
+        if(packet.payload_length!=2 || packet.payload[0]<1 || packet.payload[0]>180 ||
+           packet.payload[1]>9 || (packet.payload[0]==180 && packet.payload[1])) { errno=EINVAL;return -1; }
+        break; // Media queues optical control and applies the digital crop.
+    case 0x16:
+        if(packet.payload_length) { errno=EINVAL;return -1; }
+        break;
+    case 0x02: case 0x0d: case 0x19: case 0x31:
         if (packet.payload_length) { errno=EINVAL;return -1; }
         if (backend->reply_to_mcu) { errno=ENOTSUP;return -1; }
         return send_tunnel(backend,packet_data,length);
@@ -1252,6 +1269,19 @@ void ca_backend_periodic(struct ca_backend *backend)
 #ifdef CAMERA_APP_ZT30_DEV
     if (!backend) return;
     now=monotonic_ms();
+    {
+        auto &zoom=ca_zt30::optical_zoom();
+        const int wanted=zoom.wanted(ca_zt30::zoom_feedback().get(now),now);
+        if(wanted!=zoom.current()) {
+            const uint8_t direction=uint8_t(int8_t(wanted));
+            if(send_link(backend,A8_LINK_FLAG_PLAIN,0x04,&direction,1)==0)zoom.sent(wanted,now);
+            else if(wanted) {
+                // A partial start may reach the MCU when the pending UART
+                // frame is flushed. Arm a stop even before send succeeds.
+                zoom.sent(wanted,now);zoom.cancel();
+            }
+        }
+    }
     if (backend->rate_stop_ms && now>=backend->rate_stop_ms && now>=backend->rate_retry_ms) {
         if (dev_rates(backend,0,0)<0) {
             backend->rate_retry_ms=monotonic_ms()+50U;
@@ -1262,7 +1292,7 @@ void ca_backend_periodic(struct ca_backend *backend)
         }
     }
     (void)ca_backend_request_gimbal_attitude(backend);
-    if (!backend->zoom_query_ms || now-backend->zoom_query_ms>=1000U) {
+    if (!backend->zoom_query_ms || now-backend->zoom_query_ms>=(ca_zt30::optical_zoom().active()?80U:1000U)) {
         backend->zoom_query_ms=now;
         (void)send_public_command(backend,0x18U,NULL,0U);
     }
@@ -1426,6 +1456,14 @@ void ca_backend_close(struct ca_backend *backend)
     if (backend == NULL) return;
 #ifdef CAMERA_APP_ZT30_DEV
     if (backend->uart_fd>=0) {
+        ca_zt30::optical_zoom().cancel();
+        if(ca_zt30::optical_zoom().current()) {
+            const uint8_t stop=0;
+            for(unsigned i=0;i<3;i++)if(send_link(backend,A8_LINK_FLAG_PLAIN,0x04,&stop,1)==0) {
+                ca_zt30::optical_zoom().sent(0,monotonic_ms());break;
+            }
+            if(ca_zt30::optical_zoom().current())ca_log("ZT30 zoom stop failed on shutdown: %s",strerror(errno));
+        }
         bool stopped=false;
         for (unsigned i=0;i<3 && !stopped;i++) stopped=dev_rates(backend,0,0)==0;
         if (!stopped) ca_log("ZT30 gimbal stop failed on shutdown: %s",strerror(errno));
