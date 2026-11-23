@@ -19,6 +19,20 @@ FOV box are live settings; "Overlays in recordings" controls their inclusion
 in saved video. The raw thermal plane always retains the original counts.
 Thermal palette and raw streaming/recording rates also apply live.
 
+## Zoom
+
+The Live page's zoom slider is available after enabling manual controls. Select
+Zoom RGB to view the zoom lens. Values from 1× to 30× move the optical lens;
+values above 30× add up to 6× digital zoom, for 180× combined zoom. The displayed
+value follows measured lens feedback and the applied digital crop while the
+lens moves. A large optical change can take around 20 seconds.
+
+Digital zoom crops the zoom sensor's browser, RTSP, recording and JPEG outputs.
+The wide sensor and raw thermal plane retain their original view. Lens motion
+uses bounded pulses with explicit stops and stops on stale feedback, lack of
+progress, timeout or shutdown. Bench tests cover 1×, 30×, 60× and 180×, including
+returning to 1×. Focus actuation and autofocus after zoom remain unqualified.
+
 ## Field of view
 
 The target uses SIYI's published horizontal FOV values:
@@ -42,7 +56,7 @@ endpoints and requires fresh, valid zoom feedback.
 ## Remaining hardware limits
 
 Automatic upright mounting is the supported native orientation. Inverted
-coordinate transforms, optical zoom/focus actuation, image tracking,
+coordinate transforms, focus actuation, image tracking,
 side-by-side composition, lidar and calibrated thermometry are not qualified.
 Raw thermal values are counts, not temperatures. Geographic ROI and survey
 settings use the shared camera controllers; entering survey on a stationary

@@ -28,6 +28,7 @@ int main() {
             mavlink_msg_camera_information_decode(&reply,&info);
             assert(info.flags & CAMERA_CAP_FLAGS_CAPTURE_IMAGE);
             assert(info.flags & CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE);
+            assert(info.flags & CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM);
             if(!initial_flags)initial_flags=info.flags;
             assert(info.flags==initial_flags);
             assert(info.resolution_h==(scope==CA_PHOTO_SCOPE_THERMAL?640:3840));

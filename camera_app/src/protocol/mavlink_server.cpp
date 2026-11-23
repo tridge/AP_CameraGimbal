@@ -721,12 +721,12 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
 #ifdef CAMERA_APP_ZT30_DEV
-    // Native video recording and photos use independently owned encoders.
-    // Optical setters remain separate from the qualified stream controls.
+    // Keep native capabilities stable before media's first frame arrives.
     info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM | CAMERA_CAP_FLAGS_CAPTURE_IMAGE |
                  CAMERA_CAP_FLAGS_CAPTURE_VIDEO | CAMERA_CAP_FLAGS_HAS_MODES |
                  CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
-                 CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE;
+                 CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE |
+                 CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM;
     if(ca_media_survey_available(server->media,server->settings.survey.lens))
         info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
     // Optional gimbal identity above is based on actual fresh MCU feedback.

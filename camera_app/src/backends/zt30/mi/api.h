@@ -52,5 +52,6 @@ struct Api {
     int (*scl_set_port)(uint32_t,uint32_t,uint32_t,SclPort*);
     int (*scl_enable_port)(uint32_t,uint32_t,uint32_t);
     int (*scl_disable_port)(uint32_t,uint32_t,uint32_t);
+    int (*scl_get_port)(uint32_t,uint32_t,uint32_t,SclPort*);
 };
 } // namespace ca_zt30

@@ -972,7 +972,12 @@ zt30_dev_package: zt30_dev_camera build/zt30/zt30-slot
 	$(MAKE) -C web zt30-web ZT30_CROSS_COMPILE=$(ZT30_CROSS_COMPILE)
 	python3 tools/build_zt30_dev_package.py build --customer-root '$(ZT30_CUSTOMER_ROOT)' --camera-app camera_app/build/zt30-dev/camera-app --web-app web/zt30-web --sdk build/zt30/encoder-sdk.so --dropbear '$(ZT30_DEV_TOOLS)/dropbear' --dropbearkey '$(ZT30_DEV_TOOLS)/dropbearkey' --output '$(ZT30_DEV_PACKAGE_OUT)'
 
-.PHONY: zt30_native_control-test
+.PHONY: zt30_native_control-test zt30-zoom-test
+zt30-zoom-test:
+	@mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include tests/test_zt30_zoom.cpp -pthread -o build/tests/zt30-zoom-test
+	build/tests/zt30-zoom-test
+
 zt30_native_control-test: generated
 	mkdir -p build/tests
 	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build tests/test_zt30_native_control.cpp camera_app/src/protocol/siyi.cpp camera_app/src/protocol/private_uart.cpp -lutil -Wl,--wrap=write -o build/tests/zt30-native-control-test
