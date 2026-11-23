@@ -183,10 +183,18 @@ struct ca_survey_config {
     unsigned turn_deg;
 };
 
+enum ca_vpn_provider { CA_VPN_ZEROTIER = 0 };
+struct ca_vpn_config {
+    bool enabled;
+    enum ca_vpn_provider provider;
+    char network_id[17];
+};
+
 struct ca_config {
     struct ca_survey_config survey;
     struct ca_network_config network;
     bool network_capture;
+    struct ca_vpn_config vpn;
     /* Complete URI advertised for stream 1 on host-OS targets; empty = built
      * from the host. Size: APCAM_VIDEO_URI_SIZE. */
     char video1_uri[160];

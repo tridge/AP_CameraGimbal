@@ -377,6 +377,10 @@ enum string_id {
     S_NETWORK_SITL,
     S_P_NETWORK_INTERFACE,
     S_H_NETWORK_INTERFACE,
+    S_OPT_ZEROTIER,
+    S_P_VPN_ENABLE, S_H_VPN_ENABLE,
+    S_P_VPN_PROVIDER, S_H_VPN_PROVIDER,
+    S_P_VPN_NETWORK, S_H_VPN_NETWORK,
     S_P_NETWORK_CAPTURE,
     S_H_NETWORK_CAPTURE,
     S_P_UART_DEVICE_OVERRIDE,
@@ -1043,6 +1047,13 @@ static constexpr Translations translations = [] {
     result[S_NETWORK_SITL] = {"SITL uses the host network; address and gateway settings are saved but do not change the host network.", "SITL 使用主机网络；地址和网关设置会保存，但不会更改主机网络。", "SITL はホストのネットワークを使用します。アドレスとゲートウェイの設定は保存されますが、ホストのネットワークは変更しません。"};
     result[S_NETWORK_RECONNECT] = {"Network changes apply on camera-app restart. If the primary address changes, reconnect here after restarting:", "网络更改在相机应用重启后生效。主地址更改后，请重新连接：", "ネットワーク設定はカメラアプリの再起動後に反映されます。プライマリアドレスを変更した場合、再起動後はこちらに接続してください："};
     result[S_P_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"};
+    result[S_OPT_ZEROTIER] = {"ZeroTier", "ZeroTier", "ZeroTier"};
+    result[S_P_VPN_ENABLE] = {"VPN enable", "启用 VPN", "VPN を有効化"};
+    result[S_H_VPN_ENABLE] = {"Off by default. Save with VPN enabled to join; save with it disabled to disconnect. Applies without restarting. Disabling from a VPN connection disconnects your browser; reconnect using the camera's LAN address.", "默认关闭。启用并保存以加入，禁用并保存以断开，无需重启。通过 VPN 禁用后，请使用相机局域网地址重新连接。", "初期設定は無効です。有効にして保存すると参加、無効にして保存すると切断します。再起動は不要です。VPN 経由で無効化した場合は LAN アドレスで再接続してください。"};
+    result[S_P_VPN_PROVIDER] = {"VPN provider", "VPN 服务", "VPN プロバイダー"};
+    result[S_H_VPN_PROVIDER] = {"ZeroTier is currently supported. Requires an Internet gateway.", "目前支持 ZeroTier，需要可访问互联网的网关。", "現在は ZeroTier に対応しています。インターネット接続可能なゲートウェイが必要です。"};
+    result[S_P_VPN_NETWORK] = {"VPN network ID", "VPN 网络 ID", "VPN ネットワーク ID"};
+    result[S_H_VPN_NETWORK] = {"16 hexadecimal digits from ZeroTier Central. Enable and save to join, then authorize the displayed node ID in Central. Identity is kept when disabled. VPN does not replace the default gateway or DNS.", "ZeroTier Central 中的16位十六进制网络 ID。启用并保存后，在 Central 授权显示的节点 ID。禁用时保留身份，不替换默认网关或 DNS。", "ZeroTier Central の16桁の16進ネットワーク ID。有効にして保存し、表示されたノード ID を Central で承認してください。無効化しても ID は保持され、デフォルトゲートウェイと DNS は変更しません。"};
     result[S_P_NETWORK_CAPTURE] = {"Network capture", "网络抓包", "ネットワークキャプチャ"};
     result[S_H_NETWORK_CAPTURE] = {"Off by default. Save to start or stop capturing all network interfaces, including loopback. Keeps the latest four 16 MiB PCAP files in DCIM/network on the microSD card. Disable before downloading and open the files in Wireshark.", "默认关闭。保存后开始或停止抓取所有网络接口（包括回环）的数据包。在 microSD 卡的 DCIM/network 中保留最新的四个 16 MiB PCAP 文件。下载前请禁用，然后用 Wireshark 打开。", "初期設定は無効です。保存するとループバックを含む全インターフェースのキャプチャを開始・停止します。microSD の DCIM/network に最新の16 MiB PCAPファイルを4個保持します。ダウンロード前に無効にし、Wiresharkで開いてください。"};
     result[S_P_UART_DEVICE_OVERRIDE] = {"Gimbal link", "云台连接", "ジンバル接続"};

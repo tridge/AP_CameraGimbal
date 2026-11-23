@@ -389,3 +389,6 @@ page uses the usual authentication, CSRF checks and atomic firmware installer.
 Only the upload JavaScript is also compiled into the Z1 server, generated from
 the normal source; no CSS, templates or external JavaScript files are needed.
 The normal UI returns automatically when all assets are installed.
+
+VPN on ZT30 and MT11 is configured under Parameters → Network and defaults off.
+See [VPN setup and build notes](../packaging/vpn/README.md).

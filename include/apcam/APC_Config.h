@@ -186,6 +186,8 @@ private:
 #endif
     };
 
+    inline static constexpr ca_config_option vpn_options[] = {{"zerotier", CA_VPN_ZEROTIER}};
+
     inline static constexpr Field _fields[] = {
         {"video", "telemetry", Kind::Enum, offsetof(ca_config, video_telemetry_format),
          sizeof(ca_video_telemetry_format), telemetry_options,
@@ -385,6 +387,14 @@ private:
         {"network", "gateway", Kind::String,
          offsetof(struct ca_config, network.gateway),
          sizeof(((struct ca_config *)0)->network.gateway), NULL, 0U, 0, 15, NULL},
+#if APCAM_HAVE_VPN
+        {"network", "vpn_enabled", Kind::Bool, offsetof(ca_config, vpn.enabled),
+         sizeof(((ca_config *)0)->vpn.enabled), NULL, 0U, 0, 1, NULL},
+        {"network", "vpn_provider", Kind::Enum, offsetof(ca_config, vpn.provider),
+         sizeof(((ca_config *)0)->vpn.provider), vpn_options, 1U, 0, 0, NULL},
+        {"network", "vpn_network_id", Kind::String, offsetof(ca_config, vpn.network_id),
+         sizeof(((ca_config *)0)->vpn.network_id), NULL, 0U, 0, 16, NULL},
+#endif
         {"network", "capture", Kind::Bool,
          offsetof(struct ca_config, network_capture),
          sizeof(((struct ca_config *)0)->network_capture), NULL, 0U, 0, 1, NULL},
@@ -497,6 +507,7 @@ private:
                 unsigned prefix;
                 if (!apcam_ipv4_prefix(value, &address, &prefix)) return -1;
             }
+            if (!strcmp(field->key, "vpn_network_id") && !apcam_vpn_network_id_valid(value)) return -1;
             memcpy(destination, value, length + 1U);
             return 0;
         }

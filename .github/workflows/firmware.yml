@@ -180,6 +180,7 @@ jobs:
       - name: Test network capture and A8 web download
         run: |
           make -C camera_app network-capture-test
+          make vpn-test
           make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
           sudo unshare -n "$(command -v python3)" sitl/test_network_capture.py
       - name: Test bounded video fixture catch-up

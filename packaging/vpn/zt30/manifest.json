@@ -1,0 +1,17 @@
+{
+  "version": "1.16.2",
+  "kernel_device": "/dev/mtd6",
+  "kernel_sha256": "78bad1dd95d859e153d5d951bd4bd277909db3b482f8df21a7aa140b500ed179",
+  "files": {
+    "zerotier-one": {
+      "size": 1251520,
+      "sha256": "99c6544f8a1a0038090c0eefd94b1ff212987bf98cbd6bfabfc8fc8041d009bc"
+    },
+    "tun.ko": {
+      "size": 31636,
+      "sha256": "6bd7622310229bca31789b69f1b3a1ec150d077be798d2b16f4e5aeb9d01ad76"
+    }
+  },
+  "kernel_offset": 0,
+  "kernel_size": 5242880
+}

@@ -667,6 +667,10 @@ static const struct option survey_lenses[] = {
 static const char *const UART_DEVICE_OVERRIDE_CHOICES[] = {
     "/dev/serial0", "/dev/ttyAMA0", "/dev/ttyAMA1", "/dev/ttyUSB0", "udp://192.168.144.15:15002",
 };
+#if APCAM_HAVE_VPN
+static const struct option vpn_provider_options[] = {{"zerotier", S_OPT_ZEROTIER}};
+#endif
+
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -801,6 +805,14 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 31, 1, NULL, 0},
     {"network_gateway", "network", "gateway", S_P_NETWORK_GATEWAY, S_H_NETWORK_GATEWAY,
      PARAM_TEXT, 0, 15, 1, NULL, 0},
+#if APCAM_HAVE_VPN
+    {"network_vpn_enabled", "network", "vpn_enabled", S_P_VPN_ENABLE, S_H_VPN_ENABLE,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"network_vpn_provider", "network", "vpn_provider", S_P_VPN_PROVIDER, S_H_VPN_PROVIDER,
+     PARAM_ENUM, 0, 0, 0, vpn_provider_options, 1},
+    {"network_vpn_network_id", "network", "vpn_network_id", S_P_VPN_NETWORK, S_H_VPN_NETWORK,
+     PARAM_TEXT, 0, 16, 0, NULL, 0},
+#endif
     {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
 #if !APCAM_HAVE_NETWORK_CONFIG
@@ -885,7 +897,11 @@ static const char *replacement_defaults[] = {
 #if APCAM_HAVE_RAW_THERMAL
     "0", "Raw Thermal (16-bit)",
 #endif
-    "", "false", "false", "false", "eth0", "", "", "", "false",
+    "", "false", "false", "false", "eth0", "", "", "",
+#if APCAM_HAVE_VPN
+    "false", "zerotier", "",
+#endif
+    "false",
 #if !APCAM_HAVE_NETWORK_CONFIG
     "",
 #endif
@@ -1868,6 +1884,13 @@ static bool span_equal(const char *start, const char *end, const char *text)
     return strlen(text) == length && memcmp(start, text, length) == 0;
 }
 
+#if APCAM_HAVE_VPN
+#include "APC_VPN.h"
+#if !defined(MT11_WEB_TEST)
+#include "build/vpn-runtime.h"
+#endif
+#endif
+
 static bool ini_get_value(const char *config, const char *wanted_section,
                           const char *wanted_key, char *output, size_t output_size)
 {
@@ -1924,6 +1947,42 @@ static bool ini_get_value(const char *config, const char *wanted_section,
     }
     return false;
 }
+
+#if APCAM_HAVE_VPN
+#ifndef VPN_DIRECTORY
+#define VPN_DIRECTORY APP_DIR "/vpn"
+#endif
+[[maybe_unused]] static bool read_vpn_config(ca_vpn_config &vpn)
+{
+    size_t size=0;
+    char *config=read_file(REPLACEMENT_CONFIG_PATH, MAX_CONFIG, &size);
+    if (!config) return false;
+    bool valid=APC_VPN::parse(config,vpn);
+    free(config);
+    return valid;
+}
+#endif
+
+#if APCAM_HAVE_VPN && !defined(MT11_WEB_TEST)
+static void ensure_vpn_worker()
+{
+    int lock=open(RUNTIME_DIR "/vpn.lock",O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
+    if (lock<0) return;
+    if (flock(lock,LOCK_EX|LOCK_NB)<0) {close(lock);return;}
+    pid_t parent=getpid(),worker=fork();
+    if (!worker) {
+        close(listen_fd); listen_fd=-1;
+        static const APC_VPN::Resources resources={vpn_client,sizeof(vpn_client),vpn_tun,sizeof(vpn_tun),
+            vpn_kernel_device,vpn_kernel_hash,vpn_kernel_offset,vpn_kernel_size};
+        APC_VPN service(RUNTIME_DIR,VPN_DIRECTORY,read_vpn_config,&resources);
+        // Inherit the held lock atomically; polling cannot spawn a second owner.
+        service.supervise(parent,lock);
+        _exit(0);
+    }
+    close(lock);
+    if (worker<0) log_message("Cannot start VPN supervisor: %s",strerror(errno));
+}
+#endif
 
 static struct ini_update *find_update(struct ini_update *updates, size_t count,
                                       const char *section,
@@ -2152,6 +2211,7 @@ static bool valid_text_parameter(const struct parameter *parameter,
         unsigned prefix;
         if (!strcmp(parameter->key, "interface"))
             return length && strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
+        if (!strcmp(parameter->key, "vpn_network_id")) return apcam_vpn_network_id_valid(text);
         if (!length) return true;
         if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
         if (!strcmp(parameter->key, "video1_uri"))
@@ -2339,12 +2399,19 @@ static bool collect_replacement_parameter_updates(
             request, replacement_parameters,
             sizeof(replacement_parameters) / sizeof(replacement_parameters[0]),
             updates, capacity, &count, error, error_size)) return false;
+    const char *vpn_enabled = "false", *vpn_id = "";
     const char *primary = "", *secondary = "", *gateway = "";
     for (size_t i = 0; i < count; i++) {
         if (strcmp(updates[i].section, "network")) continue;
+        if (!strcmp(updates[i].key, "vpn_enabled")) vpn_enabled = updates[i].value;
+        if (!strcmp(updates[i].key, "vpn_network_id")) vpn_id = updates[i].value;
         if (!strcmp(updates[i].key, "primary_address")) primary = updates[i].value;
         if (!strcmp(updates[i].key, "secondary_address")) secondary = updates[i].value;
         if (!strcmp(updates[i].key, "gateway")) gateway = updates[i].value;
+    }
+    if (!strcmp(vpn_enabled, "true") && !*vpn_id) {
+        snprintf(error, error_size, "%s", T(S_H_VPN_NETWORK));
+        return false;
     }
     if (!apcam_network_valid(primary, secondary, gateway)) {
         snprintf(error, error_size, "%s", T(S_E_NETWORK));
@@ -5371,6 +5438,9 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                     "Negative nominal overlap indicates gaps; check actual captured footprints in MAVProxy.</p>");
             }
             if (tab == TAB_NETWORK) {
+#if APCAM_HAVE_VPN
+                page.append("<pre id=vpn-status aria-live=polite>VPN: waiting for status</pre>");
+#endif
                 char capture_message[512];
                 bool failed;
                 bool available = network_capture_status(capture_message, sizeof(capture_message), &failed);
@@ -6119,6 +6189,21 @@ static bool sb_append_js(APC_StringBuffer *sb, const char *text)
     }
     return true;
 }
+
+#if APCAM_HAVE_VPN
+static void send_vpn_status(int fd)
+{
+    const char *fallback="{\"message\":\"VPN service unavailable\",\"running\":false}";
+    size_t size=0;
+    struct stat st{};
+    char *json=nullptr;
+    if (stat(RUNTIME_DIR "/vpn-status.json",&st)==0 && time(nullptr)-st.st_mtime<=15)
+        json=read_file(RUNTIME_DIR "/vpn-status.json",16384,&size);
+    send_response(fd,200,"OK","application/json; charset=utf-8",json?json:fallback,
+                  json?size:strlen(fallback),"Cache-Control: no-store\r\n");
+    free(json);
+}
+#endif
 
 static void send_network_capture_status(int fd)
 {
@@ -7569,6 +7654,10 @@ static void handle_request(int fd, const char *peer)
         } else
 #endif
         send_page(fd, NULL, false);
+#if APCAM_HAVE_VPN
+    } else if (!strcmp(request.method,"GET") && !strcmp(request.path,"/vpn-status")) {
+        send_vpn_status(fd);
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/network-capture-status") == 0) {
         send_network_capture_status(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
@@ -8095,6 +8184,13 @@ int main(int argc, char **argv)
 #endif
     log_message("%s listening on 0.0.0.0:%u", SERVER_NAME, port);
     while (listen_fd >= 0) {
+#if APCAM_HAVE_VPN && !defined(MT11_WEB_TEST)
+        ensure_vpn_worker();
+        struct pollfd incoming={listen_fd,POLLIN,0};
+        int ready=poll(&incoming,1,1000);
+        if (ready==0 || (ready<0 && errno==EINTR)) continue;
+        if (ready<0 || (incoming.revents&(POLLERR|POLLHUP|POLLNVAL))) break;
+#endif
         struct sockaddr_in peer_address;
         socklen_t peer_length = sizeof(peer_address);
         char peer[INET_ADDRSTRLEN] = "unknown";

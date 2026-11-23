@@ -271,6 +271,11 @@ static int read_config(struct ca_config *config, FILE *file,
         }
     }
 #endif
+    if (parsed.vpn.enabled && !parsed.vpn.network_id[0]) {
+        snprintf(error, error_size, "VPN needs a 16-digit ZeroTier network ID");
+        errno = EINVAL;
+        goto fail;
+    }
     if (!apcam_network_valid(parsed.network.primary_address, parsed.network.secondary_address, parsed.network.gateway)) {
         snprintf(error, error_size, "Network needs distinct host addresses and a gateway reachable through either configured subnet");
         errno = EINVAL;
