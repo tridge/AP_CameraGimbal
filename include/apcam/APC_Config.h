@@ -201,7 +201,7 @@ private:
 #endif
         {"survey", "pattern", Kind::Enum, offsetof(ca_config, survey.pattern), sizeof(unsigned),
          survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0]), 0, 0, "SURV_PATTERN"},
-	{"survey", "aim", Kind::Enum, offsetof(ca_config, survey.aim), sizeof(unsigned),
+        {"survey", "aim", Kind::Enum, offsetof(ca_config, survey.aim), sizeof(unsigned),
          survey_aims, sizeof(survey_aims)/sizeof(survey_aims[0]), 0, 0, "SURV_AIM"},
         {"survey", "lens", Kind::Enum, offsetof(ca_config, survey.lens), sizeof(unsigned),
          survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0]), 0, 0, "SURV_LENS"},

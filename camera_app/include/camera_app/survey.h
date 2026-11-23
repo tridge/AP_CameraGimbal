@@ -46,8 +46,8 @@ struct ca_survey_grid {
               float aspect, float rate_deg_s, uint64_t now);
     void target(int64_t cycle, unsigned slot, int32_t &lat, int32_t &lon,
                 int64_t &row, int &column) const;
-    void target_ahead(const ca_survey_pose &, double fore_m, double aft_m, unsigned slot,
-		      int32_t &lat, int32_t &lon, int64_t &row, int &column) const;
+    void target_ahead(const ca_survey_pose &, double lead_m, double fore_m, double aft_m,
+                      unsigned slot, int32_t &lat, int32_t &lon, int64_t &row, int &column) const;
     double along(const ca_survey_pose &) const;
     double cross_track(const ca_survey_pose &) const;
     double alignment_error(const ca_survey_pose &) const;

@@ -178,6 +178,15 @@ int main(int argc, char **argv)
     assert(ca_config_param_save(&config,path,survey_lens,2)==0);
     assert(config.survey.lens==2);
     assert(ca_config_param_save(&config,path,survey_lens,0)==0);
+    int survey_aim=ca_config_param_find("SURV_AIM");
+    assert(config.survey.aim==CA_SURVEY_AIM_ROWS);
+    assert(ca_config_param_options(survey_aim,&survey_options,&survey_min,&survey_max)==2);
+    assert(ca_config_param_save(&config,path,survey_aim,1)==0);
+    assert(config.survey.aim==CA_SURVEY_AIM_AHEAD);
+    assert(ca_config_load(&reloaded,path,error,sizeof(error))==0);
+    assert(reloaded.survey.aim==CA_SURVEY_AIM_AHEAD);
+    assert(ca_config_param_save(&config,path,survey_aim,2)<0);
+    assert(ca_config_param_save(&config,path,survey_aim,0)==0);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);

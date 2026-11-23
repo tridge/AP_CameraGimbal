@@ -36,13 +36,26 @@ Choose **Survey pattern** before saving:
   or lateral views. Forward/rear distances use the configured AGL percentages.
 - **Fore-only (three pitch angles)** (`3`, `fore_only`): far → middle → near,
   all straight ahead along the flight path. Targets are at 3×, 2× and 1× the
-  forward distance, rounded to common ground rows. The rear distance is unused.
-  At the default 50% AGL, the nominal distances are 150%, 100% and 50% AGL
+  forward distance, rounded to common ground rows (with `SURV_AIM=rows`). The
+  rear distance is unused. At the default 50% AGL, the nominal distances are 150%, 100% and 50% AGL
   (approximately 34°, 45° and 63° down), before row rounding and aircraft motion.
   Successive sweeps revisit each ground row at all three pitch angles, without
   a lateral sweep or a deliberate 180° yaw reversal.
-- **Fore-wide (three yaw angles)** (`4`, `fore_wide`): front-left → front-centre → front-right,
-  Targets are at 1× the forward distance at 3 yaw angles covering left, centre and right, rounded to common ground rows. The rear distance is unused.
+- **Fore-wide (three yaw angles)** (`4`, `fore_wide`): front-left → front-centre →
+  front-right. Targets are at 1× the forward distance, one lateral spacing left,
+  centred and right, rounded to common ground rows (with `SURV_AIM=rows`). The rear
+  distance is unused.
+
+Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
+
+- **Fixed ground rows** (`0`, `rows`, default): targets lie on rows fixed at the
+  start of the leg, so successive sweeps revisit the same ground from different views.
+- **Ahead of aircraft** (`1`, `ahead`): each view is placed at its forward or rear
+  distance from where the aircraft is expected to be at capture: its position when
+  the view starts, plus the travel during the view's slew allowance, settling time
+  and half the burst. Targets are not rounded to rows, so views do not revisit
+  common ground; `row` in capture metadata is the nearest row, for reference only.
+  Each target stays fixed for its burst, and the gimbal holds it while the aircraft moves.
 
 Both remains the default for existing configurations. The reduced patterns budget
 only their selected views, giving shorter sweeps and closer ground rows. Saving a
@@ -102,6 +115,7 @@ parameters. The corresponding INI section is `[survey]`.
 | MAVLink parameter | INI key | Default | Meaning |
 | --- | --- | --- | --- |
 | SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only, 4 fore-wide |
+| SURV_AIM | aim | rows | 0 fixed ground rows, 1 ahead of the aircraft; INI uses names |
 | SURV_LENS | lens | thermal | 0 thermal, 1 wide, 2 zoom; INI uses names |
 | SURV_OVERLAP | overlap | 50 | Requested overlap percent, 0–90 |
 | SURV_FORE | fore_pct | 50 | Forward offset as percent of AGL; nearest offset for fore-only |
@@ -118,7 +132,7 @@ parameters. The corresponding INI section is `[survey]`.
 | SURV_MIN_SPEED | min_speed | 5 | Minimum ground speed in m/s |
 | SURV_TURN_DEG | turn_deg | 15 | Course departure that ends the current leg |
 
-Overlap determines lateral spacing from the selected lens footprint. Fore/aft
+Overlap determines lateral spacing from the selected lens footprint. With `SURV_AIM=rows`, fore/aft
 positions are quantised to common ground rows to permit repeat views. Row spacing
 increases when the slew and capture cycle cannot keep up with the requested
 along-track overlap. Thus realised offsets can exceed the requested AGL factors.
