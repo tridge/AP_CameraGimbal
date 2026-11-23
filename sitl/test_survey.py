@@ -238,7 +238,10 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                 elif pattern=='fore_aft':
                     assert any(v=={0,2} for v in views.values()), 'no front/rear revisit'
                 elif pattern=='fore_wide':
-                    assert any(v=={9,10,11} for v in views.values()), 'no far/middle/near revisit'
+                    sweeps={}
+                    for r in records:
+                        sweeps.setdefault((r['leg'],r['cycle'],r['row']),set()).add(r['column'])
+                    assert any(c=={-1,0,1} for c in sweeps.values()), 'no left/centre/right sweep on one row'
                 elif pattern=='fore_only':
                     assert any(v=={9,10,11} for v in views.values()), 'no far/middle/near revisit'
             allowed={'both':set(range(9)), 'left_right':{5,3}, 'fore_aft':{1,7}, 'fore_only':{9,10,11}, 'fore_wide':{0,1,2}}[pattern]

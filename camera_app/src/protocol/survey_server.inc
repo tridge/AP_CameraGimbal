@@ -395,11 +395,18 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         r.session=v.session; r.generation=v.generation; r.leg=v.leg; r.cycle=v.cycle; r.slot=v.grid.slots[v.slot];
         r.pattern=cfg.pattern; r.position=v.slot; r.positions=v.grid.slot_count;
         if(cfg.aim==CA_SURVEY_AIM_AHEAD) {
+            // The target stays fixed for the burst, so lead it by the travel
+            // expected before capture: this view's slew allowance plus settling,
+            // centred on the burst, but never beyond this view's deadline.
             const double agl=pose.alt-pose.ground;
-            v.grid.target_ahead(path_pose,cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,v.slot,
-                                r.target_lat,r.target_lon,r.row,r.column);
+            const double burst_s=(cfg.burst-1)*cfg.burst_ms*.001;
+            double lead_s=v.grid.budget[v.slot]-cfg.dwell_ms*.001-burst_s/2+cfg.settle_ms*.001;
+            lead_s=fmax(0,fmin(lead_s,deadline>now?(deadline-now)*.001:0));
+            const double along_speed=fmax(0,path_pose.vn*cos(v.grid.course)+path_pose.ve*sin(v.grid.course));
+            v.grid.target_ahead(path_pose,along_speed*lead_s,cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,
+                                v.slot,r.target_lat,r.target_lon,r.row,r.column);
         } else
-            v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
+	v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
         r.target_alt=pose.ground; r.lens=cfg.lens;
         auto terrain=ca_terrain_height(r.target_lat,r.target_lon,r.target_alt);
         r.target_terrain_uploaded=terrain==CA_TERRAIN_READY;
