@@ -6,12 +6,13 @@ script=(Path(__file__).resolve().parents[1]/'webroot/upgrade.js').read_text()
 harness=r'''
 const vm=require('vm'),assert=require('assert');
 const source=JSON.parse(require('fs').readFileSync(0,'utf8')).script;
+for(const filename of ['ZT30_AP_test.apbundle','SIYI_ZT30_UpgradeSD.bin'])
 for(const state of ['confirmed','rolled-back','abandoned','login']) {
  let change,reloaded=0,redirected='',alerts=[],timers=[],polls=0;
  const slot='b'.repeat(64),old='a'.repeat(64),epoch='c'.repeat(64);
- const nodes={'firmware-upload':{},'firmware':{files:[{name:'ZT30_AP_test.apbundle',size:1024}],addEventListener:(t,f)=>change=f},
+ const nodes={'firmware-upload':{},'firmware':{files:[{name:filename,size:1024}],addEventListener:(t,f)=>change=f},
  'select-firmware':{addEventListener:()=>{}},'firmware-progress':{},'firmware-status':{}};
- const L={applicationUpdate:'true',prefix:'ZT30_AP_',suffix:'.apbundle',maxSize:'33554432',confirmUpload:'Install %s?',
+ const L={applicationUpdate:'true',prefix:'ZT30_AP_',suffix:'.apbundle',installName:'SIYI_ZT30_UpgradeSD.bin',maxSize:'117440512',confirmUpload:'Install %s?',
  uploaded:'Checking application',back:'Ready',appFailed:'Rolled back',closed:'Closed'};
  const context={L,Date,document:{currentScript:{dataset:{csrf:old}},getElementById:id=>nodes[id]},
  confirm:()=>true,alert:s=>alerts.push(s),setTimeout:f=>timers.push(f),window:{location:{reload:()=>reloaded++,replace:p=>redirected=p}},

@@ -6,18 +6,32 @@ vendor SDK, kernel, bootloader and gimbal MCU firmware are outside the bundle.
 They require the stable AP launchers and a safe slots directory, at launcher
 version 1. Staging remains available when the active selection is damaged.
 
-Build the release bundle and its instructions/checksums with:
+Build the combined microSD/web release with:
 
 ```
 make release RELEASE_TARGETS=ZT30
 ```
 
-The package is written to `release/<version>/SIYI_ZT30/`. The default build
-checks the pinned runtime in `packaging/zt30/platform` and builds the native
-camera application, web server and SDK adapter before creating the bundle.
-`make zt30_package` builds just the bundle under `build/`; `ZT30_PACKAGE_OUT`
-overrides its path. This is a web application update, and requires the stable
-AP launchers described below to be installed already.
+The output is `release/<version>/SIYI_ZT30/SIYI_ZT30_UpgradeSD.bin`.
+It contains a U-Boot script, a fresh AP-only customer UBIFS image, the application
+bundle, an indexed SHA-256 checksum footer and the stock SD trailer. The SD
+script loads only the UBIFS span, checks its CRC before writing, and updates only
+`ubi0:customer`. It does not save environment or update other partitions.
+SD installation replaces customer data, including existing AP settings and SSH
+identities. The retained `/config` SDK, tuning and modules must already match.
+This path requires physical loader/cold-boot/recovery qualification.
+
+The AP web updater accepts that same file, validates both image and bundle
+checksums, and stages only the embedded application through the existing slot
+and trial/rollback path. It preserves settings, stable launchers and platform
+files. No UBIFS extraction or partition write is performed by the web updater.
+
+Older installed web versions only understand `.apbundle`. Build the bridge
+bundle with `make zt30_package` and upload `build/ZT30_AP_*.apbundle` once to
+install the web support for combined images. `ZT30_PACKAGE_OUT` overrides the
+bridge path; `ZT30_FIRMWARE_OUT` overrides the combined output from
+`make zt30_firmware`. Initial SD installation also includes the stable launchers,
+slot helper and recovery SSH tools, built from pinned source.
 
 For a different retained runtime, set `ZT30_RUNTIME_ROOT` to a captured root
 containing `/config/lib` and `/lib`, with a `SHA256SUMS` manifest at its root.
@@ -66,7 +80,8 @@ layout version1 alone does not identify the newer trial-maintenance commands.
 Do it through the existing SSH maintenance path before selecting the first
 bundle with the web uploader. Subsequent application bundles use the web UI.
 
-Select ZT30_AP_*.apbundle on Status. Authentication and CSRF protection use the
+Select `SIYI_ZT30_UpgradeSD.bin` (or a legacy `ZT30_AP_*.apbundle`) on Status.
+Authentication and CSRF protection use the
 same policy as other camera installers. One upload is allowed, at most32MiB
 and120seconds, into tmpfs. Restart and slot-writer locks protect the transaction.
 The persistent starting trial precedes activation. A new app must have the

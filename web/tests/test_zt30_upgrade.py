@@ -7,6 +7,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tests'))
 from test_zt30_bundle import Bundle,canonical,sha
+import zt30_firmware as firmware
+from test_zt30_dev_package import payload as ubifs_fixture
 
 with tempfile.TemporaryDirectory(prefix='zt30-http-upgrade-') as directory:
  base=Path(directory);app=base/'app';app.mkdir(mode=0o755);run=base/'run';run.mkdir(mode=0o755)
@@ -175,7 +177,12 @@ int main(int argc,char **argv) {
    status,message=upload(bundle(version)[0],csrf);assert status==500,(status,message)
    assert b'previous AP application restored' in message,message;assert os.readlink(app/'active')=='slots/'+old
    assert json.loads((app/'trial.json').read_bytes())['state']=='rolled-back';preserved()
-  status,message=upload(payload,csrf);assert status==201,(status,message)
+  # Validate the full SD container, then stage only its application bundle.
+  image=firmware.pack(ubifs_fixture(),payload)
+  bad=bytearray(image);bad[firmware.SCRIPT_BYTES+8192]^=1
+  assert upload(bytes(bad),csrf,**{'X-Firmware-Name':'SIYI_ZT30_UpgradeSD.bin'})[0]==400
+  assert os.readlink(app/'active')=='slots/'+old;preserved()
+  status,message=upload(image,csrf,**{'X-Firmware-Name':'SIYI_ZT30_UpgradeSD.bin'});assert status==201,(status,message)
   answer=json.loads(message);assert answer=={'slot':id,'thermal':False},answer
   assert os.readlink(app/'active')=='slots/'+id
   status,result=request('/upgrade-result');assert status==200

@@ -1,6 +1,7 @@
 #pragma once
 #include "zt30_slots.h"
 #include "zt30_bundle_elf.h"
+#include "zt30_firmware.h"
 #include "sha256.h"
 #include "json_reader.h"
 #include <set>
@@ -224,13 +225,15 @@ inline bool stage_bundle(const std::string &root, const std::string &bundle, con
     // Caller holds .slot-update.lock for the entire validation/publication.
     if (!canonical_root(root, error) || !directory(root+"/slots")) return fail(error, "A safe managed slots directory is required");
     int fd = open(bundle.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC); struct stat st{}; unsigned char header[12];
+    uint64_t offset = 0, bundle_size = 0;
     bool ok = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 12 &&
-        uint64_t(st.st_size) <= bundle_limit && read_exact(fd, header, sizeof(header)) && !memcmp(header, "APCZT301", 8);
+        firmware_bundle_span(fd, uint64_t(st.st_size), offset, bundle_size) &&
+        lseek(fd, off_t(offset), SEEK_SET) >= 0 && read_exact(fd, header, sizeof(header)) && !memcmp(header, "APCZT301", 8);
     uint32_t length = ok ? uint32_t(header[8]) | (uint32_t(header[9])<<8) | (uint32_t(header[10])<<16) | (uint32_t(header[11])<<24) : 0;
     BundleManifest m;
-    if (ok && length && length <= manifest_limit && uint64_t(length)+12 <= uint64_t(st.st_size)) {
+    if (ok && length && length <= manifest_limit && uint64_t(length)+12 <= bundle_size) {
         m.text.resize(length); ok = read_exact(fd, &m.text[0], length) && parse_bundle_manifest(m, error) &&
-            m.size+length+12 == uint64_t(st.st_size);
+            m.size+length+12 == bundle_size;
     } else ok = false;
     if (!ok) {if (fd >= 0) close(fd); return fail(error, error.empty() ? "Invalid or truncated application bundle" : error);}
     for (const auto &r : m.runtime) {

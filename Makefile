@@ -6,7 +6,7 @@ include tools/build.mk
 
 # Check before any recipes run, including parallel release builds. Host tests,
 # SITL, source downloads and clean targets do not need hardware toolchains.
-HARDWARE_BUILD_GOALS := all release mt11_package _mt11_package \
+HARDWARE_BUILD_GOALS := all release mt11_package _mt11_package zt30_firmware \
 	a8_package zt30_package zr10 zr10_dependencies zr10_package zr10_firmware \
 	z1mini z1mini_package z1mini_native_package z1mini_retained_isp_package packaging/mt11/thermal_socket
 ifneq ($(filter $(HARDWARE_BUILD_GOALS),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
@@ -34,6 +34,8 @@ RELEASE_ROOT ?= release
 RELEASE_TARGETS ?= A8 MT11 ZR10 ZT30 Z1-Mini
 ZT30_RUNTIME_ROOT ?= $(CURDIR)/packaging/zt30/platform
 ZT30_PACKAGE_OUT ?= build/ZT30_AP_$(MT11_VERSION)_$(MT11_GIT_HASH).apbundle
+ZT30_FIRMWARE_OUT ?= build/SIYI_ZT30_UpgradeSD.bin
+ZT30_RELEASE_TOOLS ?= build/deps/zt30-release-tools
 MT11_PACKAGE_OUT ?= build/MT11_FW_ArduPilot_$(MT11_VERSION)_$(MT11_GIT_HASH).bin
 MT11_WEB_PASSWORD ?= ardupilot
 MT11_ROOT_PASSWORD ?= ardupilot
@@ -602,6 +604,22 @@ zt30_package: generated
 	python3 tools/build_zt30_app_bundle.py --runtime-root '$(ZT30_RUNTIME_ROOT)' \
 		--readelf '$(ZT30_CROSS_COMPILE)readelf' \
 		--version '$(MT11_VERSION)_$(MT11_GIT_HASH)' --output '$(ZT30_PACKAGE_OUT)'
+
+.PHONY: zt30_firmware zt30_release_tools zt30-firmware-test
+zt30_release_tools:
+	+sh tools/build_zt30_release_tools.sh '$(ZT30_RELEASE_TOOLS)' '$(ZT30_CROSS_COMPILE)'
+
+# The same file supports stock microSD boot and the AP web slot updater.
+# Keep zt30_package as the bridge for web versions predating this container.
+zt30_firmware: zt30_package build/zt30/zt30-slot zt30_release_tools
+	python3 tools/build_zt30_firmware.py --bundle '$(ZT30_PACKAGE_OUT)' \
+		--slot-tool build/zt30/zt30-slot --dropbear '$(ZT30_RELEASE_TOOLS)/bin/dropbear' \
+		--dropbearkey '$(ZT30_RELEASE_TOOLS)/bin/dropbearkey' \
+		--runtime-root '$(ZT30_RUNTIME_ROOT)' --readelf '$(ZT30_CROSS_COMPILE)readelf' \
+		--output '$(ZT30_FIRMWARE_OUT)'
+
+zt30-firmware-test:
+	python3 tests/test_zt30_firmware.py
 
 # ABI observation probe; no explicit pipeline Init/Exit/bind/buffer calls.
 ZT30_CROSS_COMPILE ?= $(A8_CROSS_COMPILE)

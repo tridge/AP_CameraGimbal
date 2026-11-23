@@ -24,6 +24,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import build_zt30_app_bundle as builder
+import zt30_firmware as firmware
+from test_zt30_dev_package import payload as ubifs_fixture
 
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -166,6 +168,25 @@ int statvfs(const char *path, struct statvfs *st) {
             self.call('stage',self.bundle(m),ok=False);self.active_old()
         m=copy.deepcopy(self.manifest);m['unknown']=True
         self.call('stage',self.bundle(m),ok=False)
+    def test_dual_use_sd_container_stages_the_same_application(self):
+        raw = self.bundle().read_bytes()
+        path = self.base/'SIYI_ZT30_UpgradeSD.bin'
+        path.write_bytes(firmware.pack(ubifs_fixture(), raw))
+        selected = self.call('stage', path)
+        self.assertEqual(selected, sha(canonical(self.manifest)))
+        self.active_old()
+
+    def test_damaged_sd_container_leaves_slots_and_settings_unchanged(self):
+        image = firmware.pack(ubifs_fixture(), self.bundle().read_bytes())
+        path = self.base/'SIYI_ZT30_UpgradeSD.bin'
+        before = set((self.root/'slots').iterdir())
+        for at in (0, firmware.SCRIPT_BYTES+8192, len(image)-113, len(image)-25, len(image)-1):
+            damaged = bytearray(image); damaged[at] ^= 1; path.write_bytes(damaged)
+            self.call('stage', path, ok=False); self.active_old()
+            self.assertEqual(set((self.root/'slots').iterdir()), before)
+        for damaged in (image[:-1], image+b'x'):
+            path.write_bytes(damaged); self.call('stage', path, ok=False); self.active_old()
+
     def test_paths_modes_duplicates_order_and_missing_files(self):
         for bad in ('../camera.ini','/customer/camera.ini','webroot/../web.pass','webroot/.hidden.js',
                     'webroot/x//evil.js','app-init.sh','webroot/live.js/extra'):

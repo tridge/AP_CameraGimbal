@@ -127,13 +127,15 @@ The output is `release/<version>/`, where `<version>` is the latest reachable
 Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10`, `SIYI_ZT30` and
 `XFRobot_Z1-Mini` (for example, `release/v1.0/SIYI_A8/`).
 
-ZT30 releases contain `ZT30_AP_<version>_<revision>.apbundle` for the web
-upgrader on cameras with the stable AP launchers installed. Build only that
-bundle with `make release RELEASE_TARGETS=ZT30`. The required retained runtime
-libraries are pinned under `packaging/zt30/platform`; they are checked during
-the build and on the receiving camera, and are not included in the update.
-See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md) for installation
-requirements and recovery behavior.
+ZT30 releases contain `SIYI_ZT30_UpgradeSD.bin` for microSD installation and
+AP web updates. Build it with `make release RELEASE_TARGETS=ZT30`. SD installs
+require a **FAT32** card; exFAT cannot install firmware. SD installs
+replace the customer filesystem; web updates stage only the embedded application
+bundle and preserve settings. Older web versions need one bridge update built
+with `make zt30_package`. The retained runtime libraries are pinned under
+`packaging/zt30/platform`; they are checked during the build and web update,
+and are not replaced. See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md)
+for compatibility and installation details.
 Native parameter behavior, FOV assumptions and hardware limits are described in
 [`packaging/zt30/NATIVE_SETTINGS.md`](packaging/zt30/NATIVE_SETTINGS.md).
 
