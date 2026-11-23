@@ -1,0 +1,43 @@
+--- a/tun_main.c
++++ b/tun_main.c
+@@ -487 +487,2 @@
+-	const struct cred *cred = current_cred();
++	struct cred *cred;
++	bool denied;
+@@ -490 +491,5 @@
+-	return ((uid_valid(tun->owner) && !uid_eq(cred->euid, tun->owner)) ||
++	/* Use exported credential helpers rather than the vendor task_struct layout. */
++	cred = prepare_creds();
++	if (!cred)
++		return true;
++	denied = ((uid_valid(tun->owner) && !uid_eq(cred->euid, tun->owner)) ||
+@@ -492,0 +498,2 @@
++	abort_creds(cred);
++	return denied;
+@@ -1896 +1903 @@
+-static void tun_get_iff(struct net *net, struct tun_struct *tun,
++static void tun_get_iff(struct tun_struct *tun,
+@@ -2094 +2101 @@
+-		tun_get_iff(current->nsproxy->net_ns, tun, &ifr);
++		tun_get_iff(tun, &ifr);
+@@ -2352 +2359,7 @@
+-		__f_setown(file, task_pid(current), PIDTYPE_PID, 0);
++		struct pid *pid = find_get_pid(task_pid_vnr(current));
++		if (!pid) {
++			fasync_helper(fd, file, 0, &tfile->fasync);
++			return -ESRCH;
++		}
++		__f_setown(file, pid, PIDTYPE_PID, 0);
++		put_pid(pid);
+@@ -2363 +2376,2 @@
+-	struct net *net = current->nsproxy->net_ns;
++	/* Keep task_struct private to the vendor kernel. */
++	struct net *net = get_net_ns_by_pid(task_pid_vnr(current));
+@@ -2366,0 +2381,2 @@
++	if (IS_ERR(net))
++		return PTR_ERR(net);
+@@ -2369,0 +2386 @@
++	put_net(net);
+@@ -2417 +2434 @@
+-		tun_get_iff(current->nsproxy->net_ns, tun, &ifr);
++		tun_get_iff(tun, &ifr);

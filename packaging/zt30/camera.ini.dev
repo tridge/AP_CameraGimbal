@@ -94,6 +94,11 @@ publish_password = ""
 # Address settings apply on camera-app restart. Blank primary leaves current addresses in place.
 # An explicit primary replaces the interface's IPv4 addresses; IPv6 is unchanged.
 [network]
+# Optional VPN: enable and save to join this ZeroTier network.
+vpn_enabled=false
+vpn_provider=zerotier
+vpn_network_id=
+
 interface = eth0
 primary_address = ""
 secondary_address = ""

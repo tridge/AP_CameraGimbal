@@ -6,6 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A ZeroTier network ID is an opaque 64-bit hex string, never a number:
+ * leading zeroes must survive INI and web round trips. Empty is allowed off. */
+static inline bool apcam_vpn_network_id_valid(const char *text)
+{
+    return !*text || (strlen(text) == 16 &&
+        strspn(text, "0123456789abcdefABCDEF") == 16 &&
+        strspn(text, "0") != 16);
+}
+
 /* Shared by config parsing, web validation and the network service. */
 static inline bool apcam_ipv4_host(const char *text, struct in_addr *address)
 {

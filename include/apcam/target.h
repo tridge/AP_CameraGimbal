@@ -74,6 +74,10 @@
 #define APCAM_MAIN_FPS_MIN 5
 #endif
 /* Targets on a host OS which owns networking set this to 0. */
+#ifndef APCAM_HAVE_VPN
+#define APCAM_HAVE_VPN 0
+#endif
+
 #ifndef APCAM_HAVE_NETWORK_CONFIG
 #define APCAM_HAVE_NETWORK_CONFIG 1
 #endif

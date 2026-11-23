@@ -83,6 +83,10 @@
     }
     if (get('network_uart_device_override') && !uartDeviceOverride(value('network_uart_device_override'))) invalid(get('network_uart_device_override'));
     if (value('network_video1_uri') && !videoUri(value('network_video1_uri'))) invalid(get('network_video1_uri'));
+    const vpnID = value('network_vpn_network_id');
+    if (get('network_vpn_enabled') && ((value('network_vpn_enabled') === 'true' && !vpnID) ||
+        (vpnID && (!/^[0-9a-fA-F]{16}$/.test(vpnID) || /^0+$/.test(vpnID)))))
+      invalid(get('network_vpn_network_id'));
     const parseAddress = text => {
       const parts = text.split('/');
       if (parts.length !== 2 || !host(parts[0]) || !/^([1-9]|[12][0-9]|3[0-2])$/.test(parts[1])) return null;
@@ -259,4 +263,20 @@
   }
   pattern.addEventListener('change', update);
   update();
+})();
+
+(() => {
+  const output = document.getElementById('vpn-status');
+  if (!output) return;
+  async function refreshVPN() {
+    if (document.hidden || document.getElementById('parameters-network').hidden) return;
+    try {
+      const response = await fetch('/vpn-status', {cache: 'no-store', signal: AbortSignal.timeout(5000)});
+      if (!response.ok) throw new Error('status unavailable');
+      const status = await response.json();
+      output.textContent = ['VPN: ' + status.message, status.node, status.networks].filter(Boolean).join('\n');
+    } catch (_) { output.textContent = 'VPN: status unavailable'; }
+  }
+  refreshVPN();
+  setInterval(refreshVPN, 3000);
 })();

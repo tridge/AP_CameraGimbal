@@ -175,3 +175,6 @@ AP_CameraGimbal is licensed under the GNU General Public License version 3.
 See [`COPYING.txt`](COPYING.txt) for the complete license text. Device-specific
 third-party binary inputs are documented separately in
 [`THIRD_PARTY.md`](THIRD_PARTY.md).
+
+VPN on ZT30 and MT11 is configured under Parameters → Network and defaults off.
+See [VPN setup and build notes](packaging/vpn/README.md).

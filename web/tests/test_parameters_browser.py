@@ -25,7 +25,7 @@ CHECKS = r"""
     assert(active().id === 'tab-system', 'default System tab');
     assert(panels.filter(panel => !panel.hidden).length === 1, 'one visible panel');
     const categories = {timezone: 'system', orientation: 'system', mavlink_system_id: 'system',
-      network_capture: 'network', mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
+      network_vpn_enabled: 'network', network_vpn_provider: 'network', network_vpn_network_id: 'network', network_capture: 'network', mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
       brightness: 'video', autorecord: 'video', main_resolution: 'video',
       proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy', survey_lens: 'survey', survey_overlap: 'survey'};
     for (const [name, category] of Object.entries(categories)) {
@@ -109,6 +109,15 @@ CHECKS = r"""
     }
     submit();
     assert(blocked === false, 'valid configuration rejected');
+    assert(field('network_vpn_enabled').value === 'false', 'VPN defaults off');
+    rejected({network_vpn_enabled: 'true', network_vpn_network_id: ''}, 'network_vpn_network_id');
+    rejected({network_vpn_network_id: 'abfd31bd474e3f2z'}, 'network_vpn_network_id');
+    rejected({network_vpn_network_id: '0000000000000000'}, 'network_vpn_network_id');
+    reset();
+    field('network_vpn_enabled').value = 'true';
+    field('network_vpn_network_id').value = '0123456789abcdef';
+    submit(); assert(blocked === false, 'valid VPN network rejected');
+    reset();
     rejected({network_secondary_address: '192.168.2.97'}, 'network_secondary_address');
     assert(document.getElementById('network_secondary_address-error').textContent.includes('/24'), 'missing prefix guidance');
     field('network_secondary_address').value = '192.168.2.97/24';

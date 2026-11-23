@@ -14,6 +14,7 @@ export MT11_VERSION MT11_GIT_HASH
 VERSION_HEADER := build/version.h
 ICON_HEADER := build/icons.h
 WEBROOT_HEADER := build/webroot.h
+VPN_HEADER := build/vpn-runtime.h
 WEBROOT_FILES := $(wildcard webroot/*)
 # Keep CFLAGS as a compatibility input for existing build scripts.
 CFLAGS ?= -O2 -pipe
@@ -71,7 +72,7 @@ A8_HOST_CHECK := tests/a8-web-host
 
 .PHONY: all clean sitl test FORCE generated
 
-generated: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) build/zr10_upgrade.h
+generated: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) build/zr10_upgrade.h
 
 $(VERSION_HEADER): FORCE ../tools/write_build_version.py
 	python3 ../tools/write_build_version.py $@
@@ -82,25 +83,28 @@ $(ICON_HEADER): ../tools/build_icons.py ../assets/camera-gimbal.svg ../assets/fa
 $(WEBROOT_HEADER): ../tools/build_webroot.py $(WEBROOT_FILES) FORCE
 	python3 ../tools/build_webroot.py webroot $@
 
+$(VPN_HEADER): ../tools/build_vpn_resources.py $(wildcard ../packaging/vpn/*/*.xz ../packaging/vpn/*/manifest.json)
+	python3 ../tools/build_vpn_resources.py --output $@
+
 FORCE:
 
 all: mt11-web
 
-mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
 	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
-a8-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+a8-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
 	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(A8_HOST_CHECK): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+$(A8_HOST_CHECK): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(HOST_TEST): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+$(HOST_TEST): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST -DWEBROOT_PATH='"$(TEST_ROOT)/webroot"' \
 		-DAPP_DIR='"$(TEST_ROOT)/app"' \
@@ -128,13 +132,13 @@ sitl: $(SITL_TARGET)
 .PHONY: portable-sitl
 portable-sitl: $(SITL_BIN_ROOT)/mt11-web-portable
 
-$(SITL_BIN_ROOT)/mt11-web-portable: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+$(SITL_BIN_ROOT)/mt11-web-portable: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST -DMT11_WEB_SITL \
 		-DWEB_PORTABLE_SITL -o $@ $< -lm
 
-$(SITL_TARGET): mt11-web.cpp gcu_manifest.h Makefile $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+$(SITL_TARGET): mt11-web.cpp gcu_manifest.h Makefile $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(SITL_DEFINES) $(SITL_EXTRA_DEFINES) -o $@ $< -lm
@@ -143,7 +147,7 @@ tests/test_string_buffer: tests/test_string_buffer.cpp APC_StringBuffer.h
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
-tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WEBROOT_HEADER)
+tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WEBROOT_HEADER) $(VPN_HEADER)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
@@ -173,12 +177,12 @@ clean:
 	rm -rf tests/runtime tests/rpi-runtime build
 
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
-zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
 	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
 
 .PHONY: zr10-test
-zr10-test: $(VERSION_HEADER) $(WEBROOT_HEADER) build/zr10_upgrade.h
+zr10-test: $(VERSION_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) build/zr10_upgrade.h
 	python3 tests/test_zr10.py
 	python3 tests/test_zr10_service.py
 
@@ -188,12 +192,12 @@ build/zr10_upgrade.h: ../tools/zr10_firmware.py ../packaging/zr10/upgrade_script
 # Raspberry Pi: native build on Raspberry Pi OS, installed beside camera-app.
 # The MAVLink headers are generated by the Z1-Mini rule below.
 RPI_MAVLINK := ../camera_app/build/mavlink/all/include
-rpi_libcam_caddx-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
+rpi_libcam_caddx-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
 	$(RPI_CROSS_COMPILE)g++ $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -o $@ $< -lm
 
 # The RPi web service with test paths, for the host parameters test.
-$(RPI_HOST_CHECK): mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
+$(RPI_HOST_CHECK): mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member \
 		-DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -DMT11_WEB_TEST \
@@ -215,7 +219,7 @@ $(RPI_HOST_CHECK): mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER
 
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
-z1mini-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(Z1MINI_MAVLINK)/all/mavlink.h Makefile
+z1mini-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(Z1MINI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
 	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
 
@@ -230,14 +234,14 @@ $(Z1MINI_MAVLINK)/all/mavlink.h:
 	$(MAKE) -C ../camera_app CAMERA_BACKEND=z1mini build/mavlink/all/include/all/mavlink.h
 
 .PHONY: network-status-test
-network-status-test: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER)
+network-status-test: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER)
 	python3 tests/test_network_status.py
 
 # Initial ZT30 RAM services: no video ownership or persistent camera changes.
 ZT30_CROSS_COMPILE ?= arm-linux-
-zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DZT30_WEB_DEV -o $@ $< -lm
 
 # AP-only persistent ZT30 layout; initial native app has one RGB stream.
-zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h zt30-upgrade.h zt30-bundle-status.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h zt30-upgrade.h zt30-bundle-status.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -I../include -o $@ $(filter %.cpp,$^) -lm

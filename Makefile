@@ -1035,3 +1035,12 @@ zt30_unigcs_encoder-test:
 	@mkdir -p build/tests
 	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build -ffunction-sections -fdata-sections -Wl,--gc-sections tests/test_zt30_unigcs_encoder.cpp -o build/tests/zt30-unigcs-encoder-test
 	build/tests/zt30-unigcs-encoder-test
+
+.PHONY: vpn-test
+vpn-test:
+	$(MAKE) -C web generated
+	mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -DAPCAM_TARGET=APCAM_TARGET_MT11 tests/test_vpn_service.cpp -o build/tests/vpn-service-test
+	python3 -c 'import subprocess,tempfile; t=tempfile.TemporaryDirectory(prefix="apcg-vpn-service-"); subprocess.run(["build/tests/vpn-service-test",t.name],check=True,timeout=90)'
+	python3 tests/test_vpn_resources.py
+	python3 web/tests/test_vpn.py
