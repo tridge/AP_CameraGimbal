@@ -20,6 +20,7 @@ struct survey_runtime {
     unsigned slot=0, burst=0;
     int32_t remaining=-1;
     unsigned interval_ms=0;
+    unsigned frame_ms=0; // frame spacing for the current view's burst
     bool local_terrain=false;
     bool paused=true, owned=false, grid_valid=false, target_valid=false, pending=false, acquired=false;
     mavlink_terrain_report_t terrain{};
@@ -396,19 +397,26 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         r.session=v.session; r.generation=v.generation; r.leg=v.leg; r.cycle=v.cycle; r.slot=v.grid.slots[v.slot];
         r.pattern=cfg.pattern; r.position=v.slot; r.positions=v.grid.slot_count;
         v.hold_ms=0;
+        // Frames are spaced by the burst interval or the requested capture
+        // interval, whichever is longer. Fix it for this view's burst so a
+        // new IMAGE_START_CAPTURE interval applies from the next view.
+        v.frame_ms=unsigned(fmax(cfg.burst_ms,v.interval_ms));
         if(cfg.aim==CA_SURVEY_AIM_AHEAD) {
             // The target stays fixed for the burst. Plan the first frame for
-            // after this view's slew allowance and settling, leaving room for the
-            // burst before the deadline, and hold it until then. Place the target
-            // where the aircraft will be at the middle of the burst. A gimbal
-            // slower than the allowance captures late, as in rows mode.
+            // after this view's slew allowance and settling, and no earlier than
+            // the capture interval allows, leaving room for the burst before the
+            // deadline, and hold it until then. Place the target where the
+            // aircraft will be at the middle of the burst. A gimbal slower than
+            // the allowance captures late, as in rows mode.
             const double agl=pose.alt-pose.ground;
-            // Frames are spaced by the burst interval or the requested capture
-            // interval, whichever is longer.
-            const double burst_s=(cfg.burst-1)*fmax(cfg.burst_ms,v.interval_ms)*.001;
+            const double burst_s=(cfg.burst-1)*v.frame_ms*.001;
             const double window_s=deadline>now?(deadline-now)*.001-burst_s-.15:0;
-            const double first_s=fmax(0,fmin(v.grid.budget[v.slot]-cfg.dwell_ms*.001-burst_s+cfg.settle_ms*.001,window_s));
-            v.hold_ms=now+uint64_t(first_s*1000);
+            const double ready_s=v.next_image_ms>now?(v.next_image_ms-now)*.001:0;
+            if(ready_s>window_s) { v.state="capture interval leaves no time for view"; return; }
+            // The slew allowance is the budget less its dwell and its own burst term.
+            const double allowance_s=v.grid.budget[v.slot]-cfg.dwell_ms*.001-(cfg.burst-1)*cfg.burst_ms*.001+cfg.settle_ms*.001;
+            const double first_s=fmin(fmax(allowance_s,ready_s),window_s);
+	    v.hold_ms=now+uint64_t(first_s*1000);
             const double along_speed=fmax(0,path_pose.vn*cos(v.grid.course)+path_pose.ve*sin(v.grid.course));
             v.grid.target_ahead(path_pose,along_speed*(first_s+burst_s/2),cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,
                                 v.slot,r.target_lat,r.target_lon,r.row,r.column);
@@ -446,7 +454,7 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     // An ahead target was placed for a planned capture time; an earlier
     // first frame would land further ahead than intended.
     if(!v.burst && now<v.hold_ms) { if(settled) v.state="holding for capture point"; return; }
-    uint64_t burst_reserve=uint64_t((cfg.burst-v.burst-1)*fmax(cfg.burst_ms,v.interval_ms))+150;
+    uint64_t burst_reserve=uint64_t(cfg.burst-v.burst-1)*v.frame_ms+150;
     if(!settled && now+burst_reserve<deadline) return;
     ca_metadata m; ca_metadata_snapshot(&m); double corners[4][2];
     if(!ca_survey_footprint(m,v.request.target_alt,v.request.hfov,v.request.aspect,corners)) return;
@@ -456,6 +464,6 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     r.settled=settled; r.pointing_error_deg=error; r.residual_rate_deg_s=residual; r.ground=pose.ground;
     if(ca_media_survey_start(s->media,r)) {
         ++s->next_image_index; ++v.burst; v.pending=true;
-        v.next_image_ms=now+fmax(cfg.burst_ms,v.interval_ms);
+        v.next_image_ms=now+v.frame_ms;
     }
 }

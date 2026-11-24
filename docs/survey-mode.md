@@ -55,6 +55,8 @@ Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
   distance from where the aircraft will be at the middle of the burst. The first
   frame is held until the planned time even if the gimbal settles sooner; a gimbal
   slower than the allowance captures late, so the view falls slightly short.
+  A capture interval (IMAGE_START_CAPTURE) longer than the view cadence delays
+  the plan, and a view whose burst no longer fits before its deadline is skipped.
   Targets are not rounded to rows, so views do not revisit common ground; `row` in
   capture metadata is the nearest row, for reference only. Each target stays fixed
   for its burst, and the gimbal holds it while the aircraft moves. At low altitude
