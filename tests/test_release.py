@@ -59,7 +59,7 @@ if Path('fail').exists():
 
     def test_make_selects_highest_reachable_version(self):
         for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk',
-                     'tools/build.mk', 'tools/zt30_stream.mk'):
+                     'tools/build.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)
@@ -89,7 +89,7 @@ if Path('fail').exists():
         check('v1.1')
 
     def test_make_default_release_targets(self):
-        for name in ('Makefile', 'tools/build.mk', 'tools/zt30_stream.mk'):
+        for name in ('Makefile', 'tools/build.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)

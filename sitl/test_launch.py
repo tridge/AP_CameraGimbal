@@ -105,8 +105,8 @@ def main(real=False):
     with tempfile.TemporaryDirectory(prefix='sitl-launch-') as temp:
         repo = Path(temp)
         (repo / 'sitl').mkdir()
-        # Match the real phony build goals, including the existing sitl directory.
-        (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n\t@echo built $@\n')
+        # Match the real phony build goal, despite the existing sitl directory.
+        (repo / 'Makefile').write_text('.PHONY: sitl\nsitl:\n\t@echo built $(CAMERA)\n')
         (repo / 'sitl/terrain_video.py').write_text("print('terrain dependencies available')\n")
         (repo / 'sitl/run.sh').write_text('exec python3 "$(dirname "$0")/fake.py"\n')
         (repo / 'sitl/fake.py').write_text('''
@@ -202,7 +202,7 @@ time.sleep(60)
                 print('PASS four identical/mixed simulators, separate directories/ports, stop-all and close cleanup')
 
                 # A failure after another simulator started must unwind the group.
-                (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n'
+                (repo / 'Makefile').write_text('.PHONY: sitl\nsitl:\n'
                     '\t@test "$$CAMERA_GIMBAL_SITL_INSTANCE" != 2\n')
                 group.start()
                 until(app, lambda: group.simulators[0].phase == 'running')
@@ -218,7 +218,7 @@ time.sleep(60)
                 assert all(not owned_processes(p.token) for p in group.simulators[:2] if p.token)
                 print('PASS partial startup failure stops the whole group')
 
-                (repo / 'Makefile').write_text('.PHONY: sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl\nsitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl:\n\t@sleep 60\n')
+                (repo / 'Makefile').write_text('.PHONY: sitl\nsitl:\n\t@sleep 60\n')
                 group.start()
                 until(app, lambda: group.simulators[0].phase == 'building')
                 token = group.simulators[0].token
@@ -261,7 +261,7 @@ time.sleep(60)
                 group.close()
                 until(app, lambda: group.phase == 'idle')
 
-            (repo / 'Makefile').write_text('sitl a8_sitl:\n\t@echo deliberate build failure\n\t@false\n')
+            (repo / 'Makefile').write_text('.PHONY: sitl\nsitl:\n\t@echo deliberate build failure\n\t@false\n')
             window.video.setCurrentIndex(0)
             window.start_button.click()
             until(app, lambda: window.phase == 'idle')
