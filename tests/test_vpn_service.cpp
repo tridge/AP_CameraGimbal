@@ -78,6 +78,8 @@ int main(int argc,char **argv) {
     assert(wait_for([]{return !read("/vpn/state/networks.d/0123456789abcdef.conf").empty();}));
     assert(read("/vpn/state/networks.d/abfd31bd474e3f28.conf").empty());
     int client=atoi(read("/interface").c_str());assert(alive(client));kill(client,SIGKILL);
+    assert(wait_for([]{auto s=read("/vpn-status.json"); return s.find("client exited")!=std::string::npos &&
+        s.find("\"running\":false")!=std::string::npos;},5));
     assert(wait_for([client]{return atoi(read("/interface").c_str())!=client;},20));
     configure("1 bad-network");
     assert(wait_for([]{return read("/vpn-status.json").find("Invalid VPN")!=std::string::npos;}));

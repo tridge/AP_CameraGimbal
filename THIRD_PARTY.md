@@ -124,3 +124,13 @@ When updating the bundle, recheck its source map and upstream licences and
 update these notices and the pinned checksum together. The bundled JavaScript
 must retain its existing notices; any local source changes need an explicit
 modification notice as required by Apache-2.0 section 4(b).
+
+The optional MT11/ZT30 VPN embeds **ZeroTier One 1.16.2**, built without the
+non-free controller and SSO, under MPL-2.0. Its bundled http-parser/nlohmann
+components use MIT, while libnatpmp and miniupnpc retain their BSD notices.
+The external TUN/TAP modules use upstream **Linux 4.9.227** (ZT30) and
+**Linux 4.19.90** (MT11), plus the GPL-2.0 compatibility patches, configurations
+and ABI checks in `packaging/vpn`. Build scripts pin the upstream source
+archives and installed binary hashes. License texts, component notices and
+exact source/build pointers ship in `web/webroot/licenses/vpn` with both camera
+packages and ZT30 application bundles; see its `SOURCES.txt`.

@@ -370,6 +370,11 @@ def test_login_and_languages(csrf):
                                  headers={"Accept": "text/html"})
     assert status == 401 and "WWW-Authenticate" in dict(headers)
 
+    # Polling with an expired session must let the UI show its login page,
+    # without a browser-native Basic authentication prompt.
+    status, _, headers = raw_request("GET", "/vpn-status", {"Cookie": "session=expired"})
+    assert status == 401 and "WWW-Authenticate" not in dict(headers)
+
     status, body, headers = raw_request("GET", "/login")
     assert status == 200 and b"<html lang=en>" in body
     assert b"name=token value=" in body and b"id=lang-login" in body

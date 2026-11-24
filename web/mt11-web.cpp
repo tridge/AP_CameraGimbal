@@ -6197,8 +6197,9 @@ static void send_vpn_status(int fd)
     size_t size=0;
     struct stat st{};
     char *json=nullptr;
-    if (stat(RUNTIME_DIR "/vpn-status.json",&st)==0 && time(nullptr)-st.st_mtime<=15)
-        json=read_file(RUNTIME_DIR "/vpn-status.json",16384,&size);
+    const std::string path=std::string(RUNTIME_DIR)+"/vpn-status.json";
+    if (stat(path.c_str(),&st)==0 && time(nullptr)-st.st_mtime<=15)
+        json=read_file(path.c_str(),16384,&size);
     send_response(fd,200,"OK","application/json; charset=utf-8",json?json:fallback,
                   json?size:strlen(fallback),"Cache-Control: no-store\r\n");
     free(json);
@@ -7605,7 +7606,7 @@ static void handle_request(int fd, const char *peer)
             send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
                    (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/upgrade-result") == 0 ||
-                    strcmp(request.path, "/network-capture-status") == 0)) {
+                    strcmp(request.path, "/network-capture-status") == 0 || strcmp(request.path, "/vpn-status") == 0)) {
             /* Reboot polling must reach its onload handler when the cookie
              * expires. A Basic challenge can instead block on a browser auth
              * dialog. No status/token is disclosed to this unauthenticated request. */

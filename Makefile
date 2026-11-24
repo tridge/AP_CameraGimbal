@@ -1044,3 +1044,5 @@ vpn-test:
 	python3 -c 'import subprocess,tempfile; t=tempfile.TemporaryDirectory(prefix="apcg-vpn-service-"); subprocess.run(["build/tests/vpn-service-test",t.name],check=True,timeout=90)'
 	python3 tests/test_vpn_resources.py
 	python3 web/tests/test_vpn.py
+	$(MAKE) -C web CAMERA_BACKEND=mt11 portable-sitl SITL_BIN_ROOT=../build/vpn-portable-mt11
+	$(MAKE) -C web CAMERA_BACKEND=zt30 portable-sitl SITL_BIN_ROOT=../build/vpn-portable-zt30

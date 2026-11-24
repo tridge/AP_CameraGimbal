@@ -18,6 +18,8 @@
 #include <sys/prctl.h>
 #endif
 #include <string>
+#include <algorithm>
+#include <cstdio>
 
 class APC_VPN {
 public:
@@ -127,6 +129,7 @@ private:
             dup2(pipefd[1], STDOUT_FILENO); dup2(pipefd[1], STDERR_FILENO);
             close(pipefd[0]); close(pipefd[1]);
             std::string home = "-D" + base + "/state";
+            setenv("LD_LIBRARY_PATH","/lib:/usr/lib",1);
             execl((runtime+"/zerotier-one").c_str(), "zerotier-cli", home.c_str(), "-j", action, argument, (char *)nullptr);
             _exit(127);
         }
@@ -160,8 +163,17 @@ protected:
 #ifdef __linux__
         struct stat st{};
         // Test for an actually registered driver, rather than a stale device node.
-        std::string misc=read_file("/proc/misc");
-        if (misc.find("200 tun\n") == std::string::npos) {
+        FILE *misc=fopen("/proc/misc","r");
+        char line[256];
+        bool registered=false;
+        while (misc && fgets(line,sizeof(line),misc)) {
+            unsigned minor=0;char name[128]{};
+            if (sscanf(line,"%u %127s",&minor,name)==2 && minor==200 && !strcmp(name,"tun")) {
+                registered=true;break;
+            }
+        }
+        if (misc) fclose(misc);
+        if (!registered) {
             if (!resources) {error="VPN TUN support is not installed for this kernel"; return false;}
             int fd=open(resources->kernel_device,O_RDONLY|O_CLOEXEC);
             apcam::SHA256 hash;
@@ -182,11 +194,22 @@ protected:
             if (remaining || hash.finish()!=resources->kernel_hash) {
                 error="VPN kernel differs from the qualified TUN module"; return false;
             }
-            pid_t pid=fork();
-            if (!pid) {execlp("insmod","insmod",(runtime+"/tun.ko").c_str(),(char *)nullptr); _exit(127);}
+            pid_t owner=getpid(),pid=fork();
+            if (!pid) {
+                child_lifetime(owner);
+                execlp("insmod","insmod",(runtime+"/tun.ko").c_str(),(char *)nullptr); _exit(127);
+            }
             if (pid<0) {error="Cannot load VPN TUN module"; return false;}
-            int status=0; while (waitpid(pid,&status,0)<0 && errno==EINTR) {}
-            if (!WIFEXITED(status) || WEXITSTATUS(status)) {error="Cannot load VPN TUN module"; return false;}
+            int status=0;bool exited=false;
+            const uint64_t until=milliseconds()+3000;
+            while (!stopping && milliseconds()<until) {
+                pid_t result=waitpid(pid,&status,WNOHANG);
+                if (result==pid) {exited=true;break;}
+                if (result<0 && errno!=EINTR) break;
+                usleep(20000);
+            }
+            if (!exited) stop_child(pid);
+            if (!exited || !WIFEXITED(status) || WEXITSTATUS(status)) {error="Cannot load VPN TUN module"; return false;}
         }
         if (mkdir("/dev/net",0755)<0 && errno!=EEXIST) return false;
         if (lstat("/dev/net/tun",&st)<0 && errno==ENOENT && mknod("/dev/net/tun",S_IFCHR|0600,makedev(10,200))<0) return false;
@@ -303,12 +326,23 @@ public:
             if (errno!=EWOULDBLOCK || stopping || getppid()!=parent) {close(lock); return;}
             usleep(100000);
         }
-        ca_vpn_config active{}; unsigned counter=0; bool joined=false;
+        ca_vpn_config active{}, requested{}; unsigned counter=0; bool joined=false;
+        unsigned retry_delay=10000;
+        std::string start_error;
         uint64_t retry=0;
         while (!stopping && getppid()==parent) {
             ca_vpn_config desired{};
             bool valid=reader(desired);
-            if (child>0 && waitpid(child,nullptr,WNOHANG)==child) {child=-1; joined=false; retry=milliseconds()+5000;}
+            if (valid && (requested.enabled!=desired.enabled || requested.provider!=desired.provider ||
+                          strcmp(requested.network_id,desired.network_id))) {
+                requested=desired; retry=0; retry_delay=10000;
+            }
+            int exit_status=0;
+            if (child>0 && waitpid(child,&exit_status,WNOHANG)==child) {
+                child=-1; joined=false; retry=milliseconds()+5000;
+                start_error="ZeroTier client exited; restarting";
+                status(true,desired.network_id,start_error);
+            }
             if (!valid || !desired.enabled || desired.provider!=CA_VPN_ZEROTIER ||
                 strcmp(active.network_id,desired.network_id)) {
                 stop_child(child); joined=false;
@@ -317,7 +351,6 @@ public:
             if (!valid) status(false,"","Invalid VPN settings; disconnected");
             else if (!desired.enabled) status(false,desired.network_id,"Disabled");
             else if (child<0 && milliseconds()>=retry) {
-                retry=milliseconds()+10000;
                 std::string error;
                 if (!directory(base) || !prepare_resources()) error="Cannot prepare VPN runtime";
                 else if (access((runtime+"/zerotier-one").c_str(),X_OK)<0) error="VPN client is not installed";
@@ -347,10 +380,16 @@ public:
                         }
                         if (child<0) error="Cannot start VPN client";
                         active=desired; counter=0;
+                        if (child>0) retry_delay=10000;
                     }
                 }
+                if (!error.empty()) {
+                    start_error=error;
+                    retry=milliseconds()+retry_delay;
+                    retry_delay=std::min(retry_delay*2U,300000U);
+                }
                 status(true,desired.network_id,error.empty()?"Starting ZeroTier":error);
-            }
+            } else if (child<0) status(true,desired.network_id,start_error);
             if (child>0 && counter++%3==0) {
                 std::string output,info,networks;
                 if (!joined) joined=command("join",desired.network_id,output);
