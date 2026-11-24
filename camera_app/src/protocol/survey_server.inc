@@ -21,6 +21,7 @@ struct survey_runtime {
     int32_t remaining=-1;
     unsigned interval_ms=0;
     unsigned frame_ms=0; // frame spacing for the current view's burst
+    bool interval_warned=false; // skip warning sent since IMAGE_START_CAPTURE
     bool local_terrain=false;
     bool paused=true, owned=false, grid_valid=false, target_valid=false, pending=false, acquired=false;
     mavlink_terrain_report_t terrain{};
@@ -412,11 +413,15 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
             const double burst_s=(cfg.burst-1)*v.frame_ms*.001;
             const double window_s=deadline>now?(deadline-now)*.001-burst_s-.15:0;
             const double ready_s=v.next_image_ms>now?(v.next_image_ms-now)*.001:0;
-            if(ready_s>window_s) { v.state="capture interval leaves no time for view"; return; }
+            if(ready_s>window_s) {
+                v.state="capture interval leaves no time for view";
+                if(!v.interval_warned) { v.interval_warned=true; parameter_status(s,"Survey: capture interval too long, views skipped"); }
+                return;
+            }
             // The slew allowance is the budget less its dwell and its own burst term.
             const double allowance_s=v.grid.budget[v.slot]-cfg.dwell_ms*.001-(cfg.burst-1)*cfg.burst_ms*.001+cfg.settle_ms*.001;
             const double first_s=fmin(fmax(allowance_s,ready_s),window_s);
-	    v.hold_ms=now+uint64_t(first_s*1000);
+            v.hold_ms=now+uint64_t(first_s*1000);
             const double along_speed=fmax(0,path_pose.vn*cos(v.grid.course)+path_pose.ve*sin(v.grid.course));
             v.grid.target_ahead(path_pose,along_speed*(first_s+burst_s/2),cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,
                                 v.slot,r.target_lat,r.target_lon,r.row,r.column);
