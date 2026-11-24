@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <fcntl.h>
+#include <csignal>
 #include "RtpConnection.h"
 #include <string>
 
@@ -113,6 +114,16 @@ static void tcp_socket_ownership_test(ca_rtsp *server)
 }
 int main()
 {
+    // A shutdown deadlock must fail here instead of consuming the CI job's
+    // entire time budget and preventing every later integration test.
+    signal(SIGALRM,[](int) {
+        const char message[]="FAIL RTSP demand/shutdown test exceeded 30 seconds\n";
+        const ssize_t written=write(STDERR_FILENO,message,sizeof(message)-1);
+        (void)written;
+        _exit(124);
+    });
+    alarm(30);
+    setvbuf(stdout,nullptr,_IOLBF,0);
     ca_video_metadata_set_format(CA_VIDEO_TELEMETRY_MISB);
     ca_rtsp *server=nullptr; unsigned port=free_port();
     assert(ca_rtsp_open(&server,port,"video1",CA_VIDEO_H264,10)==0);
@@ -163,6 +174,21 @@ int main()
             assert(packet.size()>=17 && packet[12]==0 && packet[13]==0 && packet[14]==0 && packet[15]==1);
         }
     }
-    ca_rtsp_close(server);
+    // Close while a client is still playing. Teardown must drain the event
+    // thread before releasing the caller's final server reference.
+    {
+        Client playing(port,"video1");playing.play();
+        ca_rtsp_close(server);
+        char byte;assert(recv(playing.fd,&byte,1,0)==0);
+    }
+    // Race peer disconnect with shutdown, as happens when a viewer exits at
+    // the same time as camera-app. This reproduced the CI hang within 22 runs.
+    for(unsigned i=0;i<32;i++) {
+        assert(ca_rtsp_open(&server,free_port(),"shutdown",CA_VIDEO_H264,10)==0);
+        Client closing(server->server->GetPort(),"shutdown");closing.play();
+        closing.disconnect();
+        ca_rtsp_close(server);
+    }
+    alarm(0);
     puts("PASS idle/DESCRIBE/SETUP/TEARDOWN perform no live packaging; PLAY, aliases, concurrent formats and reconnect work");
 }
