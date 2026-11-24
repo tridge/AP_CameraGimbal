@@ -21,6 +21,7 @@ static int get_crop(uint32_t device,uint32_t channel,uint32_t port,SclPort *crop
 int main() {
     OpticalZoom motor;
     assert(!motor.request(NAN,0) && !motor.request(.9f,0) && !motor.request(30.1f,0));
+    assert(motor.request(2,0) && motor.wanted(NAN,45000)==0 && !motor.active());
     assert(motor.request(2,1000));
     assert(motor.wanted(NAN,1000)==0 && motor.active());
     assert(motor.wanted(1,1000)==1);motor.sent(1,1000);
@@ -35,11 +36,28 @@ int main() {
     assert(motor.wanted(NAN,2001)==0);motor.sent(0,2001);assert(!motor.active());
     assert(motor.request(30,3000) && motor.wanted(1,3000)==1);motor.sent(1,3000);
     assert(motor.wanted(2,48000)==0);motor.sent(0,48000);assert(!motor.active());
+    assert(!motor.request(5,49000));motor.reset();
     assert(motor.request(5,49000));motor.cancel();assert(!motor.active() && !motor.wanted(1,49000));
     assert(motor.request(1,50000) && motor.wanted(1.1f,50000)==-1);motor.sent(-1,50000);
     assert(motor.wanted(1.1f,52000)==0);motor.sent(0,52000);assert(!motor.active());
     assert(motor.request(1.1f,53000) && motor.wanted(1,53000)==1);
     motor.sent(1,53000);assert(motor.wanted(1.1f,53020)==0);motor.sent(0,53020);
+    // A stream of new targets cannot keep a jammed lens alive indefinitely.
+    motor.reset();assert(motor.request(10,60000));
+    for(uint64_t now=60000;now<62000;now+=50) {
+        assert(motor.request(10+float(now-60000)/1000,now));
+        const int next=motor.wanted(2,now);
+        if(next!=motor.current())motor.sent(next,now);
+    }
+    assert(motor.wanted(2,62000)==0);motor.sent(0,62000);
+    assert(!motor.active() && !motor.request(20,62050));
+    assert(motor.request(1,62100));assert(motor.wanted(2,62200)==-1);motor.sent(-1,62200);
+    // Direction reversal stops the old pulse before starting the new one.
+    assert(motor.request(3,62201)==false); // stalled positive direction is latched
+    assert(motor.wanted(1.9f,62202)==-1); // actual movement releases that latch
+    assert(motor.request(3,62203) && motor.wanted(1.9f,62203)==0);
+    motor.sent(0,62203);assert(motor.wanted(1.9f,62342)==0);
+    assert(motor.wanted(1.9f,62343)==1);
     Rect crop{};
     for(float factor : {1.f,1.1f,1.5f,2.f,3.f,6.f}) {
         assert(zoom_crop(factor,crop));

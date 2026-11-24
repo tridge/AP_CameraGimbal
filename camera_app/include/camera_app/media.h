@@ -57,6 +57,8 @@ float ca_media_zoom(const struct ca_media *media);
 /* Lens-relative zoom, independent of vendor hybrid lens selection. */
 int ca_media_set_lens_zoom(struct ca_media *media, enum ca_media_lens lens, float zoom);
 float ca_media_lens_zoom(const struct ca_media *media, enum ca_media_lens lens);
+float ca_media_lens_zoom_command(const struct ca_media *media, enum ca_media_lens lens);
+void ca_media_cancel_zoom(struct ca_media *media);
 /* Effective FOV of the visible/thermal sensor, including current zoom. */
 float ca_media_hfov(const struct ca_media *media, bool thermal);
 unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal);

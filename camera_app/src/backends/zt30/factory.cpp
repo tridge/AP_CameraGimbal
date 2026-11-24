@@ -99,6 +99,7 @@ struct Context {
     Recording recordings;
     std::string record_root;
     std::atomic<unsigned> thermal_hfov_cd{0};
+    std::atomic<float> zoom_command{NAN};
     bool external_main=false,external_sub=false;
     std::mutex route_lock;bool thermal_primary=false,waiting_key[2]{true,true};
     PacketMemory memory{pointer_slot,copy_packet};
@@ -367,20 +368,32 @@ public:
     int set_lens_zoom(enum ca_media_lens selected,float value) override {
         if(selected==CA_MEDIA_LENS_WIDE && value==1)return 0;
         if(selected!=CA_MEDIA_LENS_ZOOM || !std::isfinite(value) || value<1 || value>180) { errno=EINVAL;return -1; }
+        // Reject a stalled combined request before changing the digital crop;
+        // partial success would silently leave the requested zoom unmet.
+        if(!optical_zoom().request(std::min(value,30.0f),monotonic_ns()/1000000)) { errno=EBUSY;return -1; }
         unsigned ports=2U|8U|(context->photo_opened?1U:0U)|
             (context->external_main?4U:0U)|(context->external_sub?16U:0U);
         if(context->digital_zoom.set(std::max(1.0f,value/30),ports)) {
+            optical_zoom().cancel();
             ca_log("ZT30 digital zoom crop failed errno=%d",errno);
             if(errno==EOWNERDEAD)_exit(28);
             return -1;
         }
         zoom_feedback().digital(context->digital_zoom.get());
-        (void)optical_zoom().request(std::min(value,30.0f),monotonic_ns()/1000000);
+        context->zoom_command=value;
         ca_log("ZT30 zoom target %.1fx optical %.1fx digital %.3fx",value,std::min(value,30.0f),context->digital_zoom.get());
         return 0;
     }
     float lens_zoom(enum ca_media_lens value) const override {
         return value==CA_MEDIA_LENS_WIDE ? 1 : value==CA_MEDIA_LENS_ZOOM ? zoom() : NAN;
+    }
+    float lens_zoom_command(enum ca_media_lens value) const override {
+        float command=context->zoom_command.load();
+        return value==CA_MEDIA_LENS_ZOOM && std::isfinite(command) ? command : lens_zoom(value);
+    }
+    void cancel_zoom() override {
+        optical_zoom().cancel();
+        context->zoom_command=zoom();
     }
     float hfov(bool thermal) const override {
         return thermal ? context->thermal_hfov_cd.load()*.01f : zoom_feedback().hfov(lens()==CA_MEDIA_LENS_WIDE,monotonic_ns()/1000000);

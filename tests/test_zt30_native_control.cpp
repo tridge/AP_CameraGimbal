@@ -182,6 +182,13 @@ int main() {
     b->attitude_request_ms=b->zoom_query_ms=monotonic_ms();ca_backend_periodic(b);
     {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[9]==0x6b && v[10]==4 && v[11]==1);}
     assert(empty(fds[1]));
+    assert(ca_backend_prepare_photo(b)==0);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[10]==4 && v[11]==0);}
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && !p.payload[0] && !p.payload[1]);}
+    assert(!ca_zt30::optical_zoom().active() && empty(fds[1]));
+    // Explicit cancellation also stops a subsequent accepted request.
+    assert(ca_zt30::optical_zoom().request(4,monotonic_ms()));
+    ca_zt30::optical_zoom().sent(1,monotonic_ms());
     ca_zt30::optical_zoom().cancel();ca_backend_periodic(b);
     {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[10]==4 && v[11]==0);}
     assert(empty(fds[1]));
@@ -286,6 +293,9 @@ int main() {
     u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();
     ca_backend_periodic(u);
     assert(ca_zt30::optical_zoom().current()==1 && u->tx_offset==5);
+    // A failed synchronous zoom stop must abort photo capture, retaining the
+    // stop obligation for the main loop after the UART becomes writable.
+    assert(ca_backend_prepare_photo(u)<0 && ca_zt30::optical_zoom().current()==1);
     write_blocked=false;u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
     assert(!ca_zt30::optical_zoom().active() && !u->tx_length);
     count=read(pipefds[0],wire,sizeof(wire));assert(count==28);
