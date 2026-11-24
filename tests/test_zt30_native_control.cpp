@@ -177,10 +177,18 @@ int main() {
 
     // Absolute SDK requests queue the lens motor; only periodic owns its wire.
     b->zoom_set=[](void*,float value) { return ca_zt30::optical_zoom().request(value,monotonic_ms())?0:-1; };
+    assert(command(b,0x16)==0);expect_local(0x16,{30,0});
+    for(auto invalid : {std::vector<uint8_t>{30,1},{31,0},{180,0}})
+        assert(command(b,0x0f,invalid.data(),invalid.size())<0 && empty(fds[1]));
     const uint8_t zoom_target[2]={3,5};
     assert(command(b,0x0f,zoom_target,2)==0);expect_local(0x0f,{1});assert(empty(fds[1]));
     b->attitude_request_ms=b->zoom_query_ms=monotonic_ms();ca_backend_periodic(b);
     {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[9]==0x6b && v[10]==4 && v[11]==1);}
+    assert(empty(fds[1]));
+    // An unchanged direction must be refreshed to sustain physical motion.
+    ca_zt30::optical_zoom().sent(1,monotonic_ms()-80);
+    b->attitude_request_ms=b->zoom_query_ms=monotonic_ms();ca_backend_periodic(b);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[10]==4 && v[11]==1);}
     assert(empty(fds[1]));
     assert(ca_backend_prepare_photo(b)==0);
     {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[10]==4 && v[11]==0);}
@@ -303,6 +311,23 @@ int main() {
         assert(wire[pos+1]==8 && wire[pos+10]==4 && wire[pos+11]==(pos?0:1));
         assert(ca_crc16(wire+pos,12)==(wire[pos+12]|(uint16_t(wire[pos+13])<<8)));
     }
+    // A partial refresh of an already running motor has the same stop
+    // obligation as a partial start, and cannot silently keep the move alive.
+    assert(ca_zt30::optical_zoom().request(10,monotonic_ms()));
+    ca_zt30::optical_zoom().sent(1,monotonic_ms()-80);
+    short_prefix=0;write_blocked=true;
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(ca_zt30::optical_zoom().current()==1 && u->tx_offset==5);
+    write_blocked=false;
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(!ca_zt30::optical_zoom().active() && !u->tx_length);
+    count=read(pipefds[0],wire,sizeof(wire));assert(count==28);
+    for(size_t pos:{size_t(0),size_t(14)}) {
+        assert(wire[pos+10]==4 && wire[pos+11]==(pos?0:1));
+        assert(ca_crc16(wire+pos,12)==(wire[pos+12]|(uint16_t(wire[pos+13])<<8)));
+    }
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(read(pipefds[0],wire,sizeof(wire))<0 && errno==EAGAIN);
     short_fd=-1;ca_backend_close(u);close(pipefds[0]);
     // Exercise real UART open/flock/reopen; configured upright is still untrusted.
     char device[128];assert(openpty(&master,&slave,device,nullptr,nullptr)==0);close(slave);

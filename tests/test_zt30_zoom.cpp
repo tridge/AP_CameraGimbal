@@ -22,16 +22,18 @@ int main() {
     OpticalZoom motor;
     assert(!motor.request(NAN,0) && !motor.request(.9f,0) && !motor.request(30.1f,0));
     assert(motor.request(2,0) && motor.wanted(NAN,45000)==0 && !motor.active());
-    assert(motor.request(2,1000));
+    assert(motor.request(1.2f,1000));
     assert(motor.wanted(NAN,1000)==0 && motor.active());
     assert(motor.wanted(1,1000)==1);motor.sent(1,1000);
-    assert(motor.wanted(1.2f,1119)==1);
-    assert(motor.wanted(1.3f,1120)==0);
+    assert(!motor.refresh_due(1079) && motor.refresh_due(1080));
+    motor.sent(1,1080);assert(!motor.refresh_due(1159));
+    assert(motor.wanted(1.1f,1119)==1);
+    assert(motor.wanted(1.1f,1120)==0);
     // A failed stop is retried before another pulse can be started.
-    assert(motor.wanted(1.5f,1400)==0 && motor.current()==1);
-    motor.sent(0,1400);assert(motor.wanted(1.5f,1539)==0);
-    assert(motor.wanted(1.6f,1540)==1);motor.sent(1,1540);
-    assert(motor.wanted(2.2f,1550)==0);motor.sent(0,1550);assert(!motor.active());
+    assert(motor.wanted(1.1f,1400)==0 && motor.current()==1);
+    motor.sent(0,1400);assert(motor.wanted(1.1f,1539)==0);
+    assert(motor.wanted(1.1f,1540)==1);motor.sent(1,1540);
+    assert(motor.wanted(1.3f,1550)==0);motor.sent(0,1550);assert(!motor.active());
     assert(motor.request(1,2000) && motor.wanted(2,2000)==-1);motor.sent(-1,2000);
     assert(motor.wanted(NAN,2001)==0);motor.sent(0,2001);assert(!motor.active());
     assert(motor.request(30,3000) && motor.wanted(1,3000)==1);motor.sent(1,3000);
@@ -58,29 +60,35 @@ int main() {
     assert(motor.request(3,62203) && motor.wanted(1.9f,62203)==0);
     motor.sent(0,62203);assert(motor.wanted(1.9f,62342)==0);
     assert(motor.wanted(1.9f,62343)==1);
-    // A reversal from 60x commanded / 15x optical / 2x digital must reduce
-    // the crop, rather than driving the lens inward toward almost 30x.
-    float optical,crop_factor;
-    zoom_targets(29.8f,15,2,optical,crop_factor);
-    assert(optical==15 && crop_factor<2 && fabsf(optical*crop_factor-29.8f)<.001f);
-    motor.reset();assert(motor.request(30,70000));
-    assert(motor.wanted(15,70000)==1);motor.sent(1,70000);
-    assert(motor.request(optical,70001) && motor.wanted(15,70001)==0);
-    motor.sent(0,70001);
-    assert(!motor.active());
-    // Reversing back inward retains the current crop and increases optical
-    // zoom, so the image does not jump outward when the lens is below 30x.
-    zoom_targets(30.2f,15,2,optical,crop_factor);
-    assert(optical>15 && crop_factor==2 && fabsf(optical*crop_factor-30.2f)<.001f);
-    for(float observed : {1.f,5.f,15.f,30.f})for(float digital : {1.f,2.f,6.f})
-        for(float combined : {1.f,5.f,15.f,30.f,60.f,180.f}) {
-            zoom_targets(combined,observed,digital,optical,crop_factor);
-            assert(optical>=1 && optical<=30 && crop_factor>=1 && crop_factor<=6);
-            assert(fabsf(optical*crop_factor-combined)<.001f);
-            if(combined<observed*digital)assert(optical<=observed && crop_factor<=digital);
-            if(combined>observed*digital)assert(optical>=observed && crop_factor>=digital);
+    // Large sweeps have no recurring stop/start gaps, in either direction.
+    for(int direction : {1,-1}) {
+        motor.reset();
+        const float start=direction==1 ? 1:30, target=direction==1 ? 30:1;
+        assert(motor.request(target,70000));
+        assert(motor.wanted(start,70000)==direction);motor.sent(direction,70000);
+        for(uint64_t elapsed=20;elapsed<=5000;elapsed+=20) {
+            const float observed=start+direction*float(elapsed)/250;
+            assert(motor.wanted(observed,70000+elapsed)==direction);
         }
-    zoom_targets(60,NAN,1,optical,crop_factor);assert(optical==30 && crop_factor==2);
+        // Stop as soon as the target is reached, even during a long run.
+        assert(motor.wanted(target,75020)==0);motor.sent(0,75020);
+        assert(!motor.active());
+    }
+    motor.reset();assert(motor.request(30,80000));
+    assert(motor.wanted(1,80000)==1);motor.sent(1,80000);
+    assert(motor.wanted(26.9f,81000)==1);
+    assert(motor.wanted(29.2f,81119)==1);
+    assert(motor.wanted(29.3f,81120)==0);motor.sent(0,81120);
+    assert(motor.wanted(29.4f,81259)==0);
+    assert(motor.wanted(29.4f,81260)==1);motor.sent(1,81260);
+    motor.cancel();assert(motor.wanted(29.5f,81261)==0);motor.sent(0,81261);
+    assert(!motor.active());
+    // A whole 1x -> 2x move must not be treated as a precision adjustment.
+    motor.reset();assert(motor.request(2,90000));
+    assert(motor.wanted(1,90000)==1);motor.sent(1,90000);
+    assert(motor.wanted(1.4f,91000)==1);
+    assert(motor.wanted(1.9f,91119)==1);
+    assert(motor.wanted(1.9f,91120)==0);motor.sent(0,91120);
     Rect crop{};
     for(float factor : {1.f,1.1f,1.5f,2.f,3.f,6.f}) {
         assert(zoom_crop(factor,crop));

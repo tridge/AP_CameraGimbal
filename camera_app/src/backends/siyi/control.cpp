@@ -985,9 +985,9 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         if(!backend->zoom_get || !isfinite(backend->zoom_get(backend->zoom_opaque))) { errno=EAGAIN;return -1; }
         emit_zoom_value(backend,packet.opcode);return 0;
     case 0x0f:
-        if(packet.payload_length!=2 || packet.payload[0]<1 || packet.payload[0]>180 ||
-           packet.payload[1]>9 || (packet.payload[0]==180 && packet.payload[1])) { errno=EINVAL;return -1; }
-        break; // Media queues optical control and applies the digital crop.
+        if(packet.payload_length!=2 || packet.payload[0]<1 || packet.payload[1]>9 ||
+           packet.payload[0]+packet.payload[1]*.1f>APCAM_ZOOM_MAX) { errno=EINVAL;return -1; }
+        break; // Media queues optical control.
     case 0x16:
         if(packet.payload_length) { errno=EINVAL;return -1; }
         break;
@@ -1272,7 +1272,7 @@ void ca_backend_periodic(struct ca_backend *backend)
     {
         auto &zoom=ca_zt30::optical_zoom();
         const int wanted=zoom.wanted(ca_zt30::zoom_feedback().get(now),now);
-        if(wanted!=zoom.current()) {
+        if(wanted!=zoom.current() || (wanted && zoom.refresh_due(now))) {
             const uint8_t direction=uint8_t(int8_t(wanted));
             if(send_link(backend,A8_LINK_FLAG_PLAIN,0x04,&direction,1)==0)zoom.sent(wanted,now);
             else if(wanted) {
