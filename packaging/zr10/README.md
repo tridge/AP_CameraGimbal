@@ -28,9 +28,8 @@ root filesystem and `/config` SDK modules remain in place. Our `demo.sh` loads
 those modules and the retained GC4663 sensor driver, then starts AP.
 
 `ZR10_CROSS_COMPILE` and `ZR10_WEB_PASSWORD` override the compiler and initial
-web password. The default web login is **admin / ardupilot**. Lower-level
-`make zr10_firmware` and `make zr10_package` produce the flash image and an
-optional SD application archive respectively; `ZR10_FIRMWARE_OUT` and
+web password. The default web login is **admin / ardupilot**. `make zr10`
+writes the flash image and an optional SD application archive under `build/`; `ZR10_FIRMWARE_OUT` and
 `ZR10_PACKAGE_OUT` override those output paths.
 
 ## Installation and updates
@@ -90,6 +89,6 @@ encoder or memory limits. Target properties, including FOV and mounting
 transforms, are defined in `include/apcam/target_zr10.h`.
 
 Run `make -C camera_app zr10-test`, `make -C web zr10-test` and
-`make zr10_sitl-test` for software checks. The release hardware checks for
+`make sitl-test CAMERA=zr10` for software checks. The release hardware checks for
 normal/inverted gimbal control, cold boot, SD firmware installation and
 sustained recording remain outstanding.

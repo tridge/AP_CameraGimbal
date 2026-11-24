@@ -224,7 +224,7 @@ remain in force. Explicit MAVLink and SDK rate commands retain their original
 conversion. PIDP/PIDY Output records the filtered continuous rate request;
 GCMD records the actual zero/minimum-speed wire commands.
 
-The calibrated MCU-model regression (`make sitl-rate-default-test`) starts with
+The calibrated MCU-model regression (`make -f tools/dev.mk sitl-rate-default-test`) starts with
 a 3-degree pointing error and tests 0.5 deg/s motion, direction reversal and
 stale feedback. This is simulation qualification against the measured steady
 rate curve and response lag, not a new physical short-pulse or flight test.

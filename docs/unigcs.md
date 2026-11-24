@@ -94,7 +94,7 @@ establish that the camera control session is connected.
 
 ## Running and testing
 
-Build with `make sitl`, `make a8_sitl` or `make zr10_sitl`, then launch the
+Build with `make sitl`, `make sitl CAMERA=a8` or `make sitl CAMERA=zr10`, then launch the
 selected model as the first SITL instance.
 UniGCS must discover the **SITL host's LAN address**, not the physical stock
 camera at 192.168.144.25. Allow UDP 37258, TCP 37256 and TCP 8554 through the
@@ -110,8 +110,7 @@ persistence and coexistence with the public SDK. It starts its own simulated
 MCU and camera on temporary ports and does not access the physical camera.
 Use `--backend a8` with `build/a8-sitl/camera-app`, or `--backend zr10` with
 `build/zr10-sitl/camera-app`, for the other SIYI cameras. These tests also run
-in CI and under the corresponding `sitl-test`, `a8_sitl-test` and
-`zr10_sitl-test` make targets.
+in CI and under `make sitl-test` with `CAMERA=mt11`, `a8` or `zr10`.
 Add `--video-codec h264` or `--video-codec h265` to include live video tests.
 These validate decoder parameters in SDP before PLAY, RTSP aliases, replies
 on two local addresses, FFmpeg decoding, and initial and periodic RTCP sender

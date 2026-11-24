@@ -62,8 +62,8 @@ make dependencies
 make sitl-test
 make sitl-run
 # Or exercise the A8 backend in both mounting orientations:
-make a8_sitl-test
-make a8_sitl-run
+make sitl-test CAMERA=a8
+make sitl-run CAMERA=a8
 ```
 
 The submodule provides the MAVLink message definitions and pymavlink; builds
@@ -85,7 +85,7 @@ B090 MPP tree and minimp4. Their locations can be supplied with
 `CROSS_COMPILE`, `SS928_MPP_ROOT` and `MINIMP4_ROOT`:
 
 ```sh
-make CAMERA_BACKEND=mt11 \
+make mt11 \
     SS928_MPP_ROOT=/path/to/ss928-mpp \
     MINIMP4_ROOT=/path/to/minimp4
 ```
@@ -102,19 +102,25 @@ Build the hardware installation packages with:
 ```sh
 python3 tools/install_build_environment.py
 make -j10 release
-# Or build just the camera being tested:
-make -j10 release RELEASE_TARGETS=A8
+# Or build just the camera being tested, into build/:
+make -j10 a8
 ```
 
 Builds support parallel compilation, including multiple camera targets in one
-invocation, for example `make -j10 sitl a8_sitl zr10_sitl z1mini_sitl`.
+invocation, for example `make -j10 sitl CAMERA=all`.
 Shared generated inputs are prepared before the camera builds start. Recursive
 builds, including the thermal codecs, share the same job limit; CI uses eight
 jobs. Release packages are published one camera at a time, with parallel
 compilation inside each build. Run `make clean` separately before a clean build;
-`make -j10 clean all` would delete files while they are being compiled.
-Both `make clean` and `make sitl-clean` preserve downloaded dependencies and
-toolchains.
+`make -j10 clean mt11` would delete files while they are being compiled.
+Both `make clean` and `make -f tools/dev.mk sitl-clean` preserve downloaded
+dependencies and toolchains.
+
+`make help` lists the top-level targets: one per camera (`a8`, `mt11`, `zr10`,
+`zt30`, `z1mini`) writing the same package as `make release` into `build/`,
+plus `release`, `sitl`, `sitl-run`, `sitl-test`, `dependencies` and `clean`.
+Tests, hardware probes and other developer targets are in `tools/dev.mk` and
+run as `make -f tools/dev.mk <target>`.
 
 Output defaults to short progress messages such as `Compiling main.cpp` and
 `Linking camera-app`. Compiler diagnostics and test output remain visible. Add
@@ -132,7 +138,7 @@ AP web updates. Build it with `make release RELEASE_TARGETS=ZT30`. SD installs
 require a **FAT32** card; exFAT cannot install firmware. SD installs
 replace the customer filesystem; web updates stage only the embedded application
 bundle and preserve settings. Older web versions need one bridge update built
-with `make zt30_package`. The retained runtime libraries are pinned under
+with `make zt30`. The retained runtime libraries are pinned under
 `packaging/zt30/platform`; they are checked during the build and web update,
 and are not replaced. See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md)
 for compatibility and installation details.
@@ -157,7 +163,7 @@ reverse-engineering notes.
 Create a version tag of the form `vX.y` or `vX.y.z`, then run:
 
 ```sh
-make mt11_package
+make mt11
 ```
 
 New packages default both the web and root passwords to `ardupilot`. Override

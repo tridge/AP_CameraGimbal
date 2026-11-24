@@ -107,7 +107,7 @@ Supervised targets keep the web UI available after camera failure and wait for
 an explicit restart. A retained vendor ISP in the older Z1-Mini media backend is
 a media dependency, not an alternate camera application.
 
-Run `make targets-test` for compiler/export consistency, profile defaults,
+Run `make -f tools/dev.mk targets-test` for compiler/export consistency, profile defaults,
 transform vectors and lens calibration. Existing camera/web tests and the SITL
 smoke tests cover protocol and UI behaviour. The camera test target also
 exercises the A8 supervisor with isolated paths and mocked hardware, including
