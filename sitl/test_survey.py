@@ -227,7 +227,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
             assert len({r['capture_monotonic_ms'] for r in records}) == len(records), 'duplicate frames'
             if count:
                 assert len(records)==count, (len(records),count)
-            if not terrain_dropout and not count and not navigation and aim=='rows':                
+            if not terrain_dropout and not count and not navigation and aim=='rows':
                 cycles=sorted({r['cycle'] for r in records})
                 assert cycles == list(range(cycles[0],cycles[-1]+1)), ('skipped ground rows',cycles)
                 views={}
