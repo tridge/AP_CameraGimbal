@@ -403,7 +403,9 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
             // where the aircraft will be at the middle of the burst. A gimbal
             // slower than the allowance captures late, as in rows mode.
             const double agl=pose.alt-pose.ground;
-            const double burst_s=(cfg.burst-1)*cfg.burst_ms*.001;
+            // Frames are spaced by the burst interval or the requested capture
+            // interval, whichever is longer.
+            const double burst_s=(cfg.burst-1)*fmax(cfg.burst_ms,v.interval_ms)*.001;
             const double window_s=deadline>now?(deadline-now)*.001-burst_s-.15:0;
             const double first_s=fmax(0,fmin(v.grid.budget[v.slot]-cfg.dwell_ms*.001-burst_s+cfg.settle_ms*.001,window_s));
             v.hold_ms=now+uint64_t(first_s*1000);
@@ -444,7 +446,7 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     // An ahead target was placed for a planned capture time; an earlier
     // first frame would land further ahead than intended.
     if(!v.burst && now<v.hold_ms) { if(settled) v.state="holding for capture point"; return; }
-    uint64_t burst_reserve=(cfg.burst-v.burst-1)*cfg.burst_ms+150;
+    uint64_t burst_reserve=uint64_t((cfg.burst-v.burst-1)*fmax(cfg.burst_ms,v.interval_ms))+150;
     if(!settled && now+burst_reserve<deadline) return;
     ca_metadata m; ca_metadata_snapshot(&m); double corners[4][2];
     if(!ca_survey_footprint(m,v.request.target_alt,v.request.hfov,v.request.aspect,corners)) return;

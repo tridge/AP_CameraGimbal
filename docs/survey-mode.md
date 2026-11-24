@@ -57,7 +57,11 @@ Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
   slower than the allowance captures late, so the view falls slightly short.
   Targets are not rounded to rows, so views do not revisit common ground; `row` in
   capture metadata is the nearest row, for reference only. Each target stays fixed
-  for its burst, and the gimbal holds it while the aircraft moves.
+  for its burst, and the gimbal holds it while the aircraft moves. At low altitude
+  the left and right views are close abeam and can need more yaw rate than the
+  gimbal has (100 deg/s on the MT11, 60 on the ZR10); those views are captured
+  late, behind the planned point. Flying higher spreads these views wider and
+  avoids this.
 
 Both remains the default for existing configurations. The reduced patterns budget
 only their selected views, giving shorter sweeps and closer ground rows. Saving a
