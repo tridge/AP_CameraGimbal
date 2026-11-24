@@ -43,7 +43,7 @@ static const struct ca_camera_parameter parameters[] = {
     {"CAM_ZOOM", APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",
      CA_CAMERA_ZOOM, 9, 1, 1, APCAM_TARGET==APCAM_TARGET_ZT30?1:APCAM_ZOOM_CONTROL_MAX, NULL, 0, -1},
 #if APCAM_HAVE_ZOOM_LENS
-    {"CAM_OPT_ZOOM", APCAM_TARGET==APCAM_TARGET_ZT30?"Zoom camera optical and digital zoom (x)":"Optical zoom (x)", CA_CAMERA_OPTICAL_ZOOM, 9,
+    {"CAM_OPT_ZOOM", "Optical zoom (x)", CA_CAMERA_OPTICAL_ZOOM, 9,
      1, 1, APCAM_TARGET==APCAM_TARGET_ZT30?APCAM_ZOOM_CONTROL_MAX:APCAM_ZOOM_LENS_OPTICAL_MAX, NULL, 0, -1},
 #endif
 #endif
