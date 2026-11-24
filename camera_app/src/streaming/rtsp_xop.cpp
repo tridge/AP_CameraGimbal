@@ -485,6 +485,11 @@ extern "C" void ca_rtsp_close(struct ca_rtsp *rtsp)
     {
         std::lock_guard<std::mutex> lock(rtsp->mutex);
         if (rtsp->server) {
+            // Drain connections while this thread still owns the server and
+            // its event loop is alive. Otherwise OnClose's temporary reference
+            // can become the last owner: destruction on the event thread then
+            // deadlocks in Stop(), while this thread waits for the loop to join.
+            rtsp->server->Stop();
             for (const ca_rtsp::stream &stream : rtsp->streams) {
                 rtsp->server->RemoveSession(stream.session_id);
                 if(stream.misb_session) rtsp->server->RemoveSession(stream.misb_session);

@@ -77,7 +77,8 @@ jobs:
 
   exposure:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Cold package installation alone has taken 20 minutes on hosted runners.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
