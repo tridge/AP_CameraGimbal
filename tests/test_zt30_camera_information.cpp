@@ -42,6 +42,31 @@ int main() {
     assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
     feedback=NAN;update_zoom(&server,server.zoom_updated_ms+100);
     assert(server.zoom_rate==0 && stops==2);
+    // Reverse directly while the integrated target is ahead of measured lens
+    // feedback. The next target must move away from that measured position,
+    // rather than waiting for the old target to catch up with the lens.
+    feedback=commanded=5;
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
+    update_zoom(&server,server.zoom_updated_ms+2000);
+    assert(commanded==9);
+    feedback=5.2f;
+    assert(set_zoom(&server,1,-1)==MAV_RESULT_ACCEPTED);
+    assert(server.zoom_target==feedback && stops==3);
+    now=server.zoom_updated_ms;
+    update_zoom(&server,now+100);
+    assert(fabsf(commanded-5.0f)<.001f);
+    // Repeated messages in the same direction preserve accumulated progress.
+    feedback=5.1f;
+    assert(set_zoom(&server,1,-.5f)==MAV_RESULT_ACCEPTED);
+    assert(server.zoom_updated_ms==now+100 && stops==3);
+    update_zoom(&server,now+200);
+    assert(fabsf(commanded-4.9f)<.001f);
+    // The negative-to-positive reversal must rebase in the same way.
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
+    assert(server.zoom_target==feedback && stops==4);
+    update_zoom(&server,server.zoom_updated_ms+100);
+    assert(fabsf(commanded-5.3f)<.001f);
+    assert(set_zoom(&server,1,0)==MAV_RESULT_ACCEPTED && stops==5);
     feedback=1;
     uint32_t initial_flags=0;
     for(bool ready : {false,true,false}) {

@@ -61,6 +61,19 @@ private:
 };
 inline OpticalZoom &optical_zoom() { static OpticalZoom value;return value; }
 
+// Optical feedback can lag while a digital crop is already applied. Preserve
+// the direction of combined zoom: reduce digital magnification before moving
+// the lens outward, and retain it while driving the lens inward.
+inline void zoom_targets(float combined,float observed,float digital,float &optical,float &crop) {
+    optical=std::min(combined,30.0f);crop=std::max(1.0f,combined/30);
+    if(!std::isfinite(observed))return; // Absolute requests may queue before feedback.
+    if(combined<observed*digital) {
+        optical=std::min(combined,observed);crop=combined/optical;
+    } else {
+        optical=std::min(30.0f,combined/digital);crop=std::max(digital,combined/30);
+    }
+}
+
 inline bool zoom_crop(float factor,Rect &crop) {
     if(!std::isfinite(factor) || factor<1 || factor>6)return false;
     // Keep the 16:9 window and NV12 alignment, including at 6x (640x360).
@@ -79,6 +92,9 @@ public:
         if(!zoom_crop(factor,crop)) { errno=EINVAL;return -1; }
         if(!ports || (ports&~31U)) { errno=EINVAL;return -1; }
         if(!api.scl_get_port || !api.scl_set_port) { errno=ENOTSUP;return -1; }
+        // Port configuration belongs to this media context. Cache only a
+        // fully verified transaction; a changed port mask must be checked too.
+        if(ports==verified_ports && !std::memcmp(&crop,&verified_crop,sizeof(crop)))return 0;
         for(unsigned p=0;p<5;p++)if(ports&(1U<<p)) {
             if(api.scl_get_port(0,0,p,&before[p])) { errno=EIO;return -1; }
             after[p]=before[p];after[p].crop=crop;
@@ -93,14 +109,18 @@ public:
                     const int rc=api.scl_set_port(0,0,q,&before[q]);
                     if(rc || api.scl_get_port(0,0,q,&actual) || std::memcmp(&before[q],&actual,sizeof(actual)))restored=false;
                 }
+                if(!restored)verified_ports=0;
                 errno=restored?EIO:EOWNERDEAD;return -1;
             }
         }
+        verified_crop=crop;verified_ports=ports;
         ratio=3840.0f/crop.width;return 0;
     }
     float get() const { return ratio; }
 private:
     Api &api;
     float ratio=1;
+    Rect verified_crop{};
+    unsigned verified_ports=0;
 };
 }

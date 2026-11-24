@@ -1681,7 +1681,12 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
             float zoom = selected_zoom(server);
             enum ca_media_lens lens = ca_media_lens(server->media);
             if (!isfinite(zoom)) return MAV_RESULT_FAILED;
-            if (server->zoom_rate == 0.0f || lens != server->zoom_lens ||
+            const bool reversed = (server->zoom_rate > 0.0f && value < 0.0f) ||
+                                  (server->zoom_rate < 0.0f && value > 0.0f);
+            // The lens may lag far behind the integrated target. Stop its
+            // pending move and start the opposite rate from measured zoom.
+            if (reversed) ca_media_cancel_zoom(server->media);
+            if (server->zoom_rate == 0.0f || reversed || lens != server->zoom_lens ||
                 selected_zoom_command(server) != server->zoom_commanded) {
                 server->zoom_target = zoom;
                 server->zoom_commanded = selected_zoom_command(server);
