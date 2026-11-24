@@ -10,6 +10,13 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('vpn_resources',ROOT/'tools/build_vpn_resources.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+notices=ROOT/'web/webroot/licenses/vpn'
+for source,name in [(ROOT/'packaging/vpn'/n,n) for n in ('LICENSE-GPL-2.0.txt','LICENSE-MPL.txt','LICENSE-ZeroTier.txt')] + [
+    (ROOT/'packaging/vpn/licenses'/n,n.split('/')[0]+'-LICENSE.txt') for n in
+    ('http-parser/LICENSE-MIT','libnatpmp/LICENSE','miniupnpc/LICENSE','nlohmann/LICENSE.MIT')]:
+    assert (notices/name).read_bytes()==source.read_bytes(),name
+sources=(notices/'SOURCES.txt').read_text()
+assert '1.16.2' in sources and 'linux-4.9.227.tar.xz' in sources and 'linux-4.19.90.tar.xz' in sources
 for target,machine in [('mt11',183),('zt30',40)]:
     manifest,data=m.resources(ROOT/'packaging/vpn'/target)
     assert manifest['kernel_size']>0 and len(manifest['kernel_sha256'])==64
