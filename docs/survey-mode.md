@@ -264,12 +264,12 @@ geometry, not a quality or sharpness guarantee.
 make -j8 sitl
 make -C camera_app -j8 test
 make -C web -j8 test
-make camera-definition-test
+make -f tools/dev.mk camera-definition-test
 python3 sitl/test_survey_controls.py
 python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 25 --duration 110 --output /tmp/survey25
 python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 18 --duration 100 --terrain-dropout --output /tmp/survey18
 python3 tests/test_survey_plane.py --arduplane /path/to/ardupilot/build/sitl/bin/arduplane --output /tmp/survey-plane
-make -j8
+make -j8 mt11
 ```
 
 The Plane test requires a rebuilt ArduPlane SITL binary, selected with
@@ -309,7 +309,7 @@ flight before tuning burst size, overlap and settle thresholds.
 The installable test image is built with:
 
 ```
-make -j8 mt11_package MT11_PACKAGE_OUT=build/MT11_FW_ArduPilot_survey_test.bin
+make -j8 mt11 MT11_PACKAGE_OUT=build/MT11_FW_ArduPilot_survey_test.bin
 ```
 
 This is a working-tree test build, not a published release. The matching

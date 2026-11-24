@@ -1156,7 +1156,7 @@ fallback is retired.
 From the repository root, build an update image with:
 
 ```sh
-make mt11_package
+make mt11
 ```
 
 The default output is
@@ -1184,7 +1184,7 @@ Both the web and root accounts default to `ardupilot`, so no password arguments
 are required. For camera-specific credentials, use:
 
 ```sh
-make mt11_package \
+make mt11 \
     MT11_WEB_PASSWORD='a-camera-specific-password' \
     MT11_ROOT_PASSWORD='a-camera-specific-root-password'
 ```
@@ -1246,7 +1246,7 @@ the exported files; `camera select` alone does not change the FTP module's targe
 When connecting through an autopilot, forwarding must be enabled on its camera
 link (`MAVn_OPTIONS` must not have the `NO_FORWARD` bit set).
 
-`make camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
+`make -f tools/dev.mk camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
 for inspection or loading into a GCS. `make release` also generates these files.
 The exporter and firmware use the same C metadata in
 `src/protocol/camera_definition.cpp`, with resolution/codec options from the
@@ -1329,7 +1329,7 @@ custom` opens the settings dialog; the CLI commands exercise the same controls.
 `camera definition build/camera-definitions/mt11.xml` can load a generated local
 copy instead of downloading it.
 
-Run `make camera-definition-test` for XML capability and FTP protocol checks.
+Run `make -f tools/dev.mk camera-definition-test` for XML capability and FTP protocol checks.
 After building the four SITL targets, `python3 sitl/test_camera_definition.py`
 checks downloads, get/list/set, live state and persistent settings using both
 pymavlink and the installed MAVProxy CLI. It uses isolated ports and runtime
@@ -1374,7 +1374,7 @@ SITL uses the same C geometry as hardware and caches its sparse overlay pixels.
 Separate RGB/thermal recording encoders run only while recording, so stream
 overlays can be selected independently without changing the live image.
 The hardware/SITL raster comparison is `tests/test_overlay.py`; live encoded
-video checks are included in `make sitl-image-controls-test`.
+video checks are included in `make -f tools/dev.mk sitl-image-controls-test`.
 
 ### MAVLink control BIN logging
 

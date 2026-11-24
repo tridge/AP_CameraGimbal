@@ -14,15 +14,15 @@ Build and test either camera from the repository root:
 ```sh
 make sitl
 make sitl-test
-make a8_sitl
-make a8_sitl-test
-make zr10_sitl
-make zr10_sitl-test
-make sitl-live-tracking-test
-make sitl-rate-default-test
+make sitl CAMERA=a8
+make sitl-test CAMERA=a8
+make sitl CAMERA=zr10
+make sitl-test CAMERA=zr10
+make -f tools/dev.mk sitl-live-tracking-test
+make -f tools/dev.mk sitl-rate-default-test
 ```
 
-`make sitl-mavlink-test` also exercises circling ROI tracking with sparse
+`make -f tools/dev.mk sitl-mavlink-test` also exercises circling ROI tracking with sparse
 position data and injected 0–100 ms delay/reordering, in angle and rate modes.
 `make -C camera_app tests/test_telemetry_time tests/test_targeting` builds the
 deterministic clock/history and analytic LOS-rate tests; run both executables
@@ -54,7 +54,7 @@ settings require restart. The Parameters page reports the app's acknowledgement
 of the saved configuration, including errors and deferred changes. External
 editors should replace the INI atomically, as the web UI does.
 
-Both `sitl-test` and `a8_sitl-test` run the complete camera/backend/web stack
+`sitl-test` runs the complete camera/backend/web stack
 once upright and once inverted. The A8 cases begin at a physical yaw of -38
 degrees. Every case commands a positive/right yaw rate and requires the web UI
 to report both yaw and yaw rate increasing, including the MT11 conversion from
@@ -64,7 +64,7 @@ Start all three processes in the foreground with:
 
 ```sh
 make sitl-run
-make a8_sitl-run
+make sitl-run CAMERA=a8
 ```
 
 Alternatively, use the PyQt desktop launcher from the repository root:
@@ -157,7 +157,7 @@ Debian/Ubuntu). Terrain mode automatically uses `build/terrain-venv/bin/python`
 when present, or the `CAMERA_GIMBAL_SITL_PYTHON` override. The port and MAVLink
 environment overrides described below still apply as slot-1 base ports, with
 the same offsets for later slots (MAVLink port 0 stays disabled). A8 launched
-from the GUI enables MAVLink; standalone `make a8_sitl-run` retains its existing
+from the GUI enables MAVLink; standalone `make sitl-run CAMERA=a8` retains its existing
 disabled default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for
 both build and launch, with numbered sibling directories for additional slots.
 Terrain imagery download threads default to 16 per simulator (64 for four
@@ -198,7 +198,7 @@ The writable camera filesystem and logs are under `build/sitl/runtime` for
 MT11 and `build/a8-sitl/runtime` for A8. The web UI can change its simulated
 `camera.ini`, password and media tree without
 touching host `/app`, `/mnt`, `/run` or `/dev`. Rebuilding preserves these
-runtime settings; `make sitl-clean` resets the complete simulated filesystem.
+runtime settings; `make -f tools/dev.mk sitl-clean` resets the complete simulated filesystem.
 Firmware uploads remain inside its simulated microSD tree and reboot requests
 are explicitly ignored.
 
@@ -247,7 +247,7 @@ build/terrain-venv/bin/pip install -r sitl/requirements-terrain.txt
 
 CAMERA_GIMBAL_SITL_VIDEO=terrain \
 CAMERA_GIMBAL_SITL_PYTHON="$PWD/build/terrain-venv/bin/python" make sitl-run
-# Use make a8_sitl-run for A8; explicitly enable its MAVLink port as above.
+# Use make sitl-run CAMERA=a8 for A8; explicitly enable its MAVLink port as above.
 ```
 
 The renderer uses map3d's terrain decoder, mesh rendering, imagery fetching
@@ -340,8 +340,8 @@ progressively and cannot be guaranteed complete before imagery downloads.
 Optional tests (not part of the ordinary offline SITL tests):
 
 ```sh
-make sitl-terrain-test SITL_TERRAIN_PYTHON="$PWD/build/terrain-venv/bin/python"
-make a8_sitl-terrain-test SITL_TERRAIN_PYTHON="$PWD/build/terrain-venv/bin/python"
+make -f tools/dev.mk sitl-terrain-test SITL_TERRAIN_PYTHON="$PWD/build/terrain-venv/bin/python"
+make -f tools/dev.mk a8_sitl-terrain-test SITL_TERRAIN_PYTHON="$PWD/build/terrain-venv/bin/python"
 build/terrain-venv/bin/python sitl/test_terrain_video.py --network \
     --seconds 35 --output /tmp/terrain-video-check
 ```
@@ -383,7 +383,7 @@ For example:
 
 ```sh
 MT11_SITL_ORIENTATION=inverted MT11_SITL_WEB_PORT=8081 make sitl-run
-A8_SITL_ORIENTATION=inverted A8_SITL_WEB_PORT=8081 make a8_sitl-run
+A8_SITL_ORIENTATION=inverted A8_SITL_WEB_PORT=8081 make sitl-run CAMERA=a8
 ```
 
 `gimbal_sim.py` can also be launched independently with `--backend mt11` or
@@ -395,8 +395,8 @@ Test MAVLink system-ID selection and the numeric parameter service with the
 actual MAVProxy CLI:
 
 ```sh
-make sitl-mavlink-test
-make a8_sitl-mavlink-test
+make -f tools/dev.mk sitl-mavlink-test
+make -f tools/dev.mk a8_sitl-mavlink-test
 ```
 
 These require `pymavlink`, `MAVProxy` (`mavproxy.py` on PATH), and `pexpect`.
@@ -418,7 +418,7 @@ checks component 105 and rejection of requests to the old camera ID. To test
 MAVProxy camera definitions and extended controls with Camera 6:
 
 ```sh
-make camera-definitions sitl
+make -f tools/dev.mk camera-definitions sitl
 python3 sitl/test_camera_definition.py --targets mt11 --component 105
 ```
 
@@ -430,16 +430,16 @@ and configured system IDs, already-armed startup, unrelated systems/components,
 repeated heartbeats, rearming, and finalized MP4 recordings:
 
 ```sh
-make sitl-armed-recording-test
-make a8_sitl-armed-recording-test
+make -f tools/dev.mk sitl-armed-recording-test
+make -f tools/dev.mk a8_sitl-armed-recording-test
 ```
 
 Video telemetry tests use the real camera application, gimbal model, RTP
 packetizer and MP4 muxer with generated H.264/H.265 fixtures:
 
 ```sh
-make sitl-video-telemetry-test
-make a8_sitl-video-telemetry-test
+make -f tools/dev.mk sitl-video-telemetry-test
+make -f tools/dev.mk a8_sitl-video-telemetry-test
 ```
 
 They require `pymavlink` and an FFmpeg build with libx264/libx265. The tests
@@ -460,7 +460,7 @@ differs from recording. H.265 fixtures and H.265 RGB streams can be recorded
 through this encoder as H.264, with the same current image adjustments.
 Hardware continues to use its dedicated H.264 recording channels.
 
-`make recording-recovery-test` runs the real MP4 writer and Files HTTP endpoint
+`make -f tools/dev.mk recording-recovery-test` runs the real MP4 writer and Files HTTP endpoint
 in an isolated runtime. It downloads before close, checks growing immutable
 prefixes and fragment write locking, kills the recorder with SIGKILL, and tests
 truncation inside the final MP4 boxes. FFmpeg verifies decoded frames and their
@@ -478,8 +478,8 @@ built SupportProxy checkout (by default the sibling `../SupportProxy`), its
 Python key-database dependencies, `pymavlink`, and FFmpeg with libx264/libx265.
 
 ```sh
-make sitl-supportproxy-test SUPPORTPROXY_ROOT=/path/to/SupportProxy
-make a8_sitl-supportproxy-test SUPPORTPROXY_ROOT=/path/to/SupportProxy
+make -f tools/dev.mk sitl-supportproxy-test SUPPORTPROXY_ROOT=/path/to/SupportProxy
+make -f tools/dev.mk a8_sitl-supportproxy-test SUPPORTPROXY_ROOT=/path/to/SupportProxy
 ```
 
 The MT11 suite checks signed bidirectional MAVLink, local TCP and UDP links,
@@ -513,14 +513,14 @@ web restarts and launcher stop/start. **Clear parameters on launch** is unchecke
 by default. Selecting it restores that camera's template on the next launch,
 backs up the previous settings to `camera.ini.reset.bak`, and keeps recordings,
 photos and web credentials. Command-line equivalent:
-`CAMERA_GIMBAL_SITL_RESET_PARAMETERS=1 make sitl-run` (or `make a8_sitl-run`).
+`CAMERA_GIMBAL_SITL_RESET_PARAMETERS=1 make sitl-run` (or `make sitl-run CAMERA=a8`).
 
-`make sitl-buffering-test` verifies frame cadence with injected 140 ms renderer
+`make -f tools/dev.mk sitl-buffering-test` verifies frame cadence with injected 140 ms renderer
 stalls and verifies that stopping a full render queue cleans up promptly.
 
 ## Shared camera properties
 
-The launcher and MCU simulators read the compiler export of the [target headers](../include/apcam/README.md). MT11, A8, ZR10 and Z1-Mini have their own lens and protocol properties. Build Z1-Mini with `make z1mini_sitl` and start it with `make z1mini_sitl-run`, or select it in the PyQt launcher. Live and recording resolutions are independent, including 1080p live plus 4K recording on Z1-Mini.
+The launcher and MCU simulators read the compiler export of the [target headers](../include/apcam/README.md). MT11, A8, ZR10 and Z1-Mini have their own lens and protocol properties. Build Z1-Mini with `make sitl CAMERA=z1mini` and start it with `make sitl-run CAMERA=z1mini`, or select it in the PyQt launcher. Live and recording resolutions are independent, including 1080p live plus 4K recording on Z1-Mini.
 
 ## Camera definition controls in SITL
 
@@ -560,7 +560,7 @@ Run pixel-level tests of all four cameras (including MAVLink updates, thermal
 palette/source changes, autofocus, still captures and recording) with:
 
 ```sh
-make sitl-image-controls-test
+make -f tools/dev.mk sitl-image-controls-test
 ```
 
 ## Network capture tests
@@ -575,7 +575,7 @@ These tests isolate generated loopback traffic from the host network:
 
 ```sh
 make -C camera_app network-capture-test
-make a8_sitl
+make sitl CAMERA=a8
 make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
 sudo unshare -n python3 sitl/test_network_capture.py
 ```
@@ -621,7 +621,7 @@ python3 sitl/test_support_proxy.py --proxy ../SupportProxy --raw-thermal --recon
 ```
 
 `--mavproxy` names a MAVProxy checkout with the raw thermal reader (default
-`../MAVProxy`); `make sitl-supportproxy-test` passes `MAVPROXY_REPO` when set.
+`../MAVProxy`); `make -f tools/dev.mk sitl-supportproxy-test` passes `MAVPROXY_REPO` when set.
 
 This checks stream 3 discovery over the proxy, all native sample bits against
 the SITL pattern, capture-time position metadata, and recovery after restarting

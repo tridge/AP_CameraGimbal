@@ -11,7 +11,7 @@ The camera application generates its MAVLink C bindings from that submodule
 at build time with `mavgen.py` under the ignored `camera_app/build/mavlink`
 tree, so only MIT-licensed generated code is linked into the binaries.
 
-`make dependencies` and `make mt11_tools` fetch these pinned public build
+`make dependencies` and `make -f tools/dev.mk mt11_tools` fetch these pinned public build
 inputs:
 
 | Dependency | Revision | License | Source |

@@ -1,7 +1,7 @@
 # Tools
 
 - `build_camera_definitions.py` exports each target's built-in camera definition
-  XML using the host compiler. `make camera-definitions` writes these to
+  XML using the host compiler. `make -f tools/dev.mk camera-definitions` writes these to
   `build/camera-definitions/`; the firmware serves the same XML over MAVFTP.
 
 - `install_build_environment.py` installs x86_64 Debian/Ubuntu hardware-build
@@ -24,12 +24,12 @@
   `/app/bin` in MT11 packages. See [refresh instructions](../packaging/mt11/tools/README.md).
 - `build_mt11_package.sh` creates an MT11 application update from the supported
   in-repository kernel, rootfs and update descriptor. It is normally invoked
-  through `make mt11_package`; web and root passwords default to `ardupilot`
+  through `make mt11`; web and root passwords default to `ardupilot`
   and can be overridden.
 - `repack-root-password.sh` rebuilds the MT11 root filesystem with a supplied
   SHA-512 crypt verifier, `MT11_ROOT_PASSWORD`, or an interactively entered
   password. The package builder invokes it with the configured project value.
-- `build_a8_package.sh` creates the SIYI A8 mini SD update (`make a8_package`);
+- `build_a8_package.sh` creates the SIYI A8 mini SD update (`make a8`);
   its first argument is the checked-in platform directory. See `packaging/a8/README.md`.
 - `build_zr10_firmware.sh` combines the checked-in ZR10 platform directory with
   the AP application archive, UUID helper and startup scripts to make an SD image.

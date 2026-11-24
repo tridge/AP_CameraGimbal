@@ -27,11 +27,10 @@ checksums, and stages only the embedded application through the existing slot
 and trial/rollback path. It preserves settings, stable launchers and platform
 files. No UBIFS extraction or partition write is performed by the web updater.
 
-Older installed web versions only understand `.apbundle`. Build the bridge
-bundle with `make zt30_package` and upload `build/ZT30_AP_*.apbundle` once to
-install the web support for combined images. `ZT30_PACKAGE_OUT` overrides the
-bridge path; `ZT30_FIRMWARE_OUT` overrides the combined output from
-`make zt30_firmware`. Initial SD installation also includes the stable launchers,
+Older installed web versions only understand `.apbundle`. `make zt30` writes
+both files under `build/`: upload the bridge bundle `build/ZT30_AP_*.apbundle`
+once to install the web support for combined images. `ZT30_PACKAGE_OUT`
+overrides the bridge path and `ZT30_FIRMWARE_OUT` the combined output. Initial SD installation also includes the stable launchers,
 slot helper and recovery SSH tools, built from pinned source.
 After a fresh SD install, log in to the web UI and add your public SSH key on
 Users before using recovery SSH (`root`, port2222). Password SSH is disabled;

@@ -65,5 +65,5 @@ and shutdown join the polling thread before closing its media implementation.
 
 A8 uses `/mnt/mmc/logs` on the microSD card. SITL uses its runtime `mnt/logs`
 directory. `CAMERA_APP_LOG_ROOT` can override the
-location for isolated tests. Run `make sitl-live-tracking-test` to check DataFlash
+location for isolated tests. Run `make -f tools/dev.mk sitl-live-tracking-test` to check DataFlash
 decoding, parameter history, capture events, logging policy, and live settings.

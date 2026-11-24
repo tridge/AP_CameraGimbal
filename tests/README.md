@@ -41,7 +41,7 @@ To additionally load and exercise the in-development MAVProxy generic camera
 module against the MT11 and both ArduPilot `NET_P1` transports, run:
 
 ```sh
-make mavproxy-camera-test \
+make -f tools/dev.mk mavproxy-camera-test \
     MAVPROXY_REPO=$HOME/project/UAV/MAVProxy.wt/mavcamera
 ```
 

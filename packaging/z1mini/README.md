@@ -20,9 +20,8 @@ camera SDK libraries are not redistributed. Common build dependencies provide
 the pinned XOP RTSP and minimp4 sources.
 
 The output folder contains the `.gcu` application overlay, installation/update
-instructions, build information and checksums. `make z1mini_package` is an
-alias for `make z1mini_native_package`, which builds the self-contained
-native-capture release package. `make z1mini_retained_isp_package` is for
+instructions, build information and checksums. `make z1mini` builds the
+self-contained native-capture release package under `build/`. `make -f tools/dev.mk z1mini_retained_isp_package` is for
 development only; set `Z1MINI_RETAINED_ISP_PACKAGE_OUT` to choose its output.
 Retained-ISP packages cannot be uploaded through the web installer.
 
@@ -55,7 +54,7 @@ SD-card boot installation is not implemented for this target. The retained-ISP
 package depends on the vendor `ipc/` files. The XFRobot updater also replaces
 the complete GCU tree, so the retained-ISP package is only for development on
 a camera where the vendor ISP has been installed separately; it is not a
-deployable release package. `make z1mini_package` therefore builds the
+deployable release package. `make z1mini` therefore builds the
 self-contained native package. The web upload refuses retained-ISP packages
 because that update would remove the vendor ISP files.
 
@@ -104,7 +103,7 @@ Use `tools/video_telemetry.py` to extract the metadata.
 
 ## Validation
 
-Run `make z1mini-test` for software checks. Native 4K recording alongside 1080p
+Run `make -f tools/dev.mk z1mini-test` for software checks. Native 4K recording alongside 1080p
 live video, installation and a normal reboot have passed earlier hardware
 tests. Sustained SD operation, cold boot, thermal recovery and projection
 calibration remain to be verified for release.
