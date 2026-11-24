@@ -50,6 +50,13 @@ int main(int argc,char **argv) {
         while(true) pause();
     }
     assert(argc==2);root=argv[1];
+    // Each additional qualified build is an exact pin, never a version-prefix
+    // bypass. The same module may serve multiple measured compatible kernels.
+    const char *hashes[]={"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
+    APC_VPN::Resources pinned{};pinned.kernel_hashes=hashes;pinned.kernel_hash_count=2;
+    assert(pinned.matches_kernel(hashes[0]) && pinned.matches_kernel(hashes[1]));
+    assert(!pinned.matches_kernel(std::string(64,'c')) && !pinned.matches_kernel(std::string(63,'a')));
     ca_vpn_config parsed{};
     assert(APC_VPN::parse("[network]\nvpn_enabled=false\n",parsed) && !parsed.enabled);
     assert(!APC_VPN::parse("[network]\nvpn_enabled=true\n",parsed));
