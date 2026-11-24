@@ -27,8 +27,14 @@ public:
     struct Resources {
         const unsigned char *client; size_t client_size;
         const unsigned char *module; size_t module_size;
-        const char *kernel_device, *kernel_hash;
+        const char *kernel_device;
+        const char *const *kernel_hashes; size_t kernel_hash_count;
         uint64_t kernel_offset, kernel_size;
+        bool matches_kernel(const std::string &hash) const {
+            for (size_t i=0;i<kernel_hash_count;i++)
+                if (hash==kernel_hashes[i]) return true;
+            return false;
+        }
     };
 private:
     std::string base, run, runtime;
@@ -191,7 +197,7 @@ protected:
                 hash.update(data,size_t(n)); remaining-=uint64_t(n);
             }
             close(fd);
-            if (remaining || hash.finish()!=resources->kernel_hash) {
+            if (remaining || !resources->matches_kernel(hash.finish())) {
                 error="VPN kernel differs from the qualified TUN module"; return false;
             }
             pid_t owner=getpid(),pid=fork();

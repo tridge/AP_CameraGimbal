@@ -48,7 +48,8 @@ the extracted tools and the client's normal memory.
 
 ## Qualified kernels
 
-The ZT30 module targets Linux 4.9.227 #112 (ARMv7 Thumb2); the MT11 module targets
+The ZT30 module targets qualified Linux 4.9.227 #112 and #139 builds
+(ARMv7 Thumb2); the MT11 module targets
 Linux 4.19.90 #1, 13 June 2025 (ARM64). A manifest pins the measured kernel region
 by SHA-256. Before loading a missing driver, the worker checks that region and
 refuses incompatible kernels, showing an error in the Network tab. It never
@@ -59,6 +60,17 @@ The MT11 check hashes the Linux Image inside the vendor wrapper, excluding
 unused flash padding. It matches `packaging/mt11/base/kernel` as well as the
 captured camera. The ZT30 check covers its captured kernel partition. These
 modules are not advertised for other vendor kernel builds.
+
+The remote ZT30 #139 kernel was qualified on 24 November 2026. Its uncompressed
+kernel differs from #112 only in 90 bytes of version/date strings and GNU build
+IDs. All executable code and 38,229 built-in symbol names, types and addresses
+are identical. The stock FAT module also differs only in its build ID. The
+unchanged TUN module passed the private-namespace TUN/TAP, packet, ownership,
+multiple-queue and async tests on #139, with the camera process and boot unchanged.
+See `zt30/kernel-139-qualification.json` for hashes, exact metadata ranges and
+qualification results. `compatible_kernel_sha256` lists additional independently
+qualified exact hashes for the same module; it never permits an arbitrary kernel
+with the same version number.
 
 Both are built from pinned upstream sources with reconstructed configurations,
 measured ABI assertions and explicit target export allowlists. The compatibility

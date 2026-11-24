@@ -33,4 +33,15 @@ with tempfile.TemporaryDirectory(prefix='vpn-resources-') as directory:
     except ValueError:pass
     else:raise AssertionError('corrupt client accepted')
     assert header.read_bytes()==before
+    # Reject malformed/mistyped compatibility pins before publishing a header.
+    p=source/'mt11/manifest.json';original=json.loads((ROOT/'packaging/vpn/mt11/manifest.json').read_text())
+    for extra in ('*',['4.9.227'],['A'*64],[original['kernel_sha256']],['0'*64]*8):
+        manifest=dict(original,compatible_kernel_sha256=extra);p.write_text(json.dumps(manifest))
+        try:m.build(source,header)
+        except ValueError:pass
+        else:raise AssertionError('invalid kernel allowlist accepted: '+repr(extra))
+        assert header.read_bytes()==before
+    manifest=dict(original,compatible_kernel_sha256=['0'*64]);p.write_text(json.dumps(manifest))
+    m.build(source,header)
+    assert '"'+original['kernel_sha256']+'","'+'0'*64+'"' in header.read_text()
 print('PASS pinned VPN resources, target architecture and rejected-corruption rollback')

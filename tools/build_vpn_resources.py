@@ -5,12 +5,23 @@ import hashlib
 import json
 import lzma
 import os
+import re
 import tempfile
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
+def kernel_hashes(manifest):
+    additional=manifest.get('compatible_kernel_sha256',[])
+    if not isinstance(additional,list):
+        raise ValueError('Compatible VPN kernels must be a list of exact SHA-256 pins')
+    pins=[manifest['kernel_sha256']]+additional
+    if not 1<=len(pins)<=8 or any(not isinstance(p,str) or not re.fullmatch('[0-9a-f]{64}',p) for p in pins) or len(set(pins))!=len(pins):
+        raise ValueError('Invalid or duplicate VPN kernel SHA-256 pin')
+    return pins
+
 def resources(directory):
     manifest=json.loads((directory/'manifest.json').read_text())
+    kernel_hashes(manifest)
     result={}
     for name in ('zerotier-one','tun.ko'):
         # The pins are reviewed in the repository, never supplied by the camera.
@@ -35,7 +46,8 @@ def build(source,output):
         pieces.append(f'static const char vpn_kernel_device[] = {json.dumps(manifest["kernel_device"])};\n')
         pieces.append(f'static const unsigned long long vpn_kernel_offset = {manifest["kernel_offset"]}ULL;\n')
         pieces.append(f'static const unsigned long long vpn_kernel_size = {manifest["kernel_size"]}ULL;\n')
-        pieces.append(f'static const char vpn_kernel_hash[] = {json.dumps(manifest["kernel_sha256"])};\n')
+        pieces.append('static const char *const vpn_kernel_hashes[] = {'+
+                      ','.join(json.dumps(pin) for pin in kernel_hashes(manifest))+'};\n')
     pieces.append('#endif\n')
     content=''.join(pieces)
     output.parent.mkdir(parents=True,exist_ok=True)

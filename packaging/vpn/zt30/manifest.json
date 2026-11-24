@@ -13,5 +13,8 @@
     }
   },
   "kernel_offset": 0,
-  "kernel_size": 5242880
+  "kernel_size": 5242880,
+  "compatible_kernel_sha256": [
+    "30bf80ad279166b8cdbe7517ae5d9fd4c5bc6f1ce122441b92884fc40d9209f6"
+  ]
 }

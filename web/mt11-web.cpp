@@ -1973,7 +1973,8 @@ static void ensure_vpn_worker()
     if (!worker) {
         close(listen_fd); listen_fd=-1;
         static const APC_VPN::Resources resources={vpn_client,sizeof(vpn_client),vpn_tun,sizeof(vpn_tun),
-            vpn_kernel_device,vpn_kernel_hash,vpn_kernel_offset,vpn_kernel_size};
+            vpn_kernel_device,vpn_kernel_hashes,sizeof(vpn_kernel_hashes)/sizeof(vpn_kernel_hashes[0]),
+            vpn_kernel_offset,vpn_kernel_size};
         APC_VPN service(RUNTIME_DIR,VPN_DIRECTORY,read_vpn_config,&resources);
         // Inherit the held lock atomically; polling cannot spawn a second owner.
         service.supervise(parent,lock);

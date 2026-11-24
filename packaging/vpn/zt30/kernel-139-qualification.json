@@ -1,0 +1,50 @@
+{
+  "qualified_on": "2026-11-24",
+  "reference_kernel": "Linux 4.9.227 #112 SMP PREEMPT Wed Jan 24 14:57:36 CST 2024",
+  "candidate_kernel": "Linux 4.9.227 #139 SMP PREEMPT Mon Jan 8 10:57:56 CST 2024",
+  "partition": "/dev/mtd6",
+  "kernel_offset": 0,
+  "kernel_size": 5242880,
+  "reference_sha256": "78bad1dd95d859e153d5d951bd4bd277909db3b482f8df21a7aa140b500ed179",
+  "candidate_sha256": "30bf80ad279166b8cdbe7517ae5d9fd4c5bc6f1ce122441b92884fc40d9209f6",
+  "uncompressed_bytes": 4300800,
+  "reference_uncompressed_sha256": "915c8affc6fa783037ec80e2f2b5c06b759216edbaab45c0f9ad327152ea7c22",
+  "candidate_uncompressed_sha256": "5458a23d45856fc85069265879ea4aeb6cfec0ba1e092fc9b823d07a246c2162",
+  "different_bytes": 90,
+  "metadata_regions": [
+    {
+      "offset": 2498629,
+      "bytes": 107,
+      "purpose": "linux_banner version/date"
+    },
+    {
+      "offset": 3633612,
+      "bytes": 20,
+      "purpose": "kernel GNU build ID"
+    },
+    {
+      "offset": 3926444,
+      "bytes": 20,
+      "purpose": "embedded vDSO GNU build ID"
+    },
+    {
+      "offset": 4120100,
+      "bytes": 65,
+      "purpose": "init_uts_ns version/date"
+    }
+  ],
+  "equal_outside_metadata_sha256": "12e8ee2aaeec447202d84d041047099d481f3512c26ff7e7eda9f7dfec7854fe",
+  "kernel_symbols": "38229 built-in symbol names, types and addresses identical",
+  "stock_fat_module": "all ELF sections identical except .note.gnu.build-id",
+  "module_sha256": "6bd7622310229bca31789b69f1b3a1ec150d077be798d2b16f4e5aeb9d01ad76",
+  "hardware_tests": [
+    "ordinary insmod, no force flags",
+    "private network namespace",
+    "TUN and TAP: 300 ICMP round trips each at 32/1400/2700-byte payloads",
+    "TAP ARP reply",
+    "owner allow/deny, multiple queues, TUNGETIFF, fasync",
+    "unchanged camera PID 440 and boot ID",
+    "kernel taint unchanged; no new fault or warning"
+  ],
+  "evidence_directory": "/data/codex/zt30-vpn-139"
+}
