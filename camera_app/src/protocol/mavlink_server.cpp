@@ -147,7 +147,7 @@ struct ca_mavlink_server {
 #endif
     float zoom_rate;
     float zoom_target; /* Integrate requests without discarding sub-step motion. */
-    float zoom_observed;
+    float zoom_commanded;
     enum ca_media_lens zoom_lens;
     uint64_t zoom_updated_ms;
     float focus_percent;
@@ -769,6 +769,12 @@ static float selected_zoom(const struct ca_mavlink_server *server)
 {
     if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) return 1;
     return ca_media_lens_zoom(server->media, ca_media_lens(server->media));
+}
+
+static float selected_zoom_command(const struct ca_mavlink_server *server)
+{
+    if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) return 1;
+    return ca_media_lens_zoom_command(server->media, ca_media_lens(server->media));
 }
 
 static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
@@ -1676,12 +1682,14 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
             enum ca_media_lens lens = ca_media_lens(server->media);
             if (!isfinite(zoom)) return MAV_RESULT_FAILED;
             if (server->zoom_rate == 0.0f || lens != server->zoom_lens ||
-                zoom != server->zoom_observed) {
-                server->zoom_target = server->zoom_observed = zoom;
+                selected_zoom_command(server) != server->zoom_commanded) {
+                server->zoom_target = zoom;
+                server->zoom_commanded = selected_zoom_command(server);
                 server->zoom_lens = lens;
                 server->zoom_updated_ms = monotonic_ms();
             }
         }
+        if (value == 0.0f) ca_media_cancel_zoom(server->media);
         /* Repeated rate messages must not reset fractional progress. */
         server->zoom_rate = value;
         return MAV_RESULT_ACCEPTED;
@@ -3526,6 +3534,30 @@ int ca_mavlink_server_handle(struct ca_mavlink_server *server)
     return 0;
 }
 
+static void update_zoom(struct ca_mavlink_server *server, uint64_t now)
+{
+    if (server->zoom_rate != 0.0f) {
+        float observed = selected_zoom(server);
+        if (!isfinite(observed) || ca_media_lens(server->media) != server->zoom_lens ||
+            selected_zoom_command(server) != server->zoom_commanded) {
+            /* A vendor command or pipeline change took control of this lens. */
+            if (!isfinite(observed)) ca_media_cancel_zoom(server->media);
+            server->zoom_rate = 0;
+        } else if (now > server->zoom_updated_ms) {
+            float elapsed = (float)(now - server->zoom_updated_ms) / 1000.0f;
+            server->zoom_updated_ms = now;
+            server->zoom_target += server->zoom_rate * 2.0f * elapsed;
+            if (server->zoom_target <= 1.0f) { server->zoom_target = 1.0f; server->zoom_rate = 0; }
+            if (server->zoom_target >= selected_zoom_max(server)) {
+                server->zoom_target = selected_zoom_max(server);
+                server->zoom_rate = 0;
+            }
+            if (set_selected_zoom(server, server->zoom_target) < 0) server->zoom_rate = 0;
+            server->zoom_commanded = selected_zoom_command(server);
+        }
+    }
+}
+
 void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
 {
     if (server == NULL) return;
@@ -3582,25 +3614,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     ca_metadata_record_sample(now);
     update_survey(server, now);
     update_target_location(server, now);
-    if (server->zoom_rate != 0.0f) {
-        float observed = selected_zoom(server);
-        if (!isfinite(observed) || ca_media_lens(server->media) != server->zoom_lens ||
-            observed != server->zoom_observed) {
-            /* A vendor command or pipeline change took control of this lens. */
-            server->zoom_rate = 0;
-        } else if (now > server->zoom_updated_ms) {
-            float elapsed = (float)(now - server->zoom_updated_ms) / 1000.0f;
-            server->zoom_updated_ms = now;
-            server->zoom_target += server->zoom_rate * 2.0f * elapsed;
-            if (server->zoom_target <= 1.0f) { server->zoom_target = 1.0f; server->zoom_rate = 0; }
-            if (server->zoom_target >= selected_zoom_max(server)) {
-                server->zoom_target = selected_zoom_max(server);
-                server->zoom_rate = 0;
-            }
-            if (set_selected_zoom(server, server->zoom_target) < 0) server->zoom_rate = 0;
-            server->zoom_observed = selected_zoom(server);
-        }
-    }
+    update_zoom(server, now);
     if (server->captures_remaining != 0 && now >= server->next_capture_ms) {
         (void)capture_one(server, server->next_image_index++);
         if (server->captures_remaining > 0) server->captures_remaining--;

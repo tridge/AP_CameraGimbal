@@ -2,6 +2,7 @@
 '''HTTP upload orchestration with real validation and injected lifecycle callbacks.
 No ARM candidate executes on the host; hardware testing covers real services.
 '''
+import urllib.parse
 import base64,copy,fcntl,http.client,json,os,re,shutil,socket,struct,subprocess,sys,tempfile,time,threading
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
@@ -78,7 +79,7 @@ int main(int argc,char **argv) {
         'REPLACEMENT_CONFIG_BACKUP_PATH':app/'camera.ini.bak','USER_LOCK_PATH':run/'users.lock',
         'APP_REQUEST_PATH':run/'request','APP_STARTED_PATH':run/'started','APP_REQUEST_LOCK_PATH':run/'request.lock',
         'REPLACEMENT_CAMERA_PATH':app/'camera-app','WEB_PATH':app/'zt30-web','WEBROOT_PATH':old_dir/'webroot',
-        'ZT30_RUNTIME_ROOT':runtime,'SESSION_PATH':run/'sessions','AUTHORIZED_KEYS_PATH':app/'auth/key',
+        'ZT30_RUNTIME_ROOT':runtime,'SESSION_PATH':run/'sessions','AUTHORIZED_KEYS_PATH':app/'auth/authorized_keys','RUNTIME_AUTHORIZED_KEYS_PATH':app/'auth/authorized_keys','RUNTIME_AUTHORIZED_KEYS_DIR':app/'auth',
         'REPLACEMENT_LOG_PATH':run/'camera.log','REPLACEMENT_LOG_OLD_PATH':run/'camera.old'}
  binary=base/'host'
  subprocess.run(['c++','-std=gnu++17','-O2','-Wall','-Wextra','-Werror','-Wno-missing-field-initializers',
@@ -125,6 +126,7 @@ int main(int argc,char **argv) {
   assert (app/'camera.ini').read_bytes()==config
   assert (app/'web.pass').read_bytes()==b'test-password\n'
   assert (app/'auth/key').read_bytes()==identity
+  if (app/'auth/authorized_keys').exists():assert (app/'auth/authorized_keys').read_text()==key+'\n'
  def upload(data,csrf,**extra):
   h={'Content-Type':'application/octet-stream','X-CSRF-Token':csrf,'X-Firmware-Name':'ZT30_AP_http.apbundle'};h.update(extra)
   return request('/upgrade',data,h)
@@ -146,6 +148,23 @@ int main(int argc,char **argv) {
    response.read();c.close()
   assert b'id=firmware-upload' in page and b'id=bundle-selected' in page,page
   csrf=re.search(rb'name=csrf value="([0-9a-f]+)"',page)[1].decode()
+  assert b'accept=.apbundle,.bin' in page
+  status,script=request('/upgrade.js');assert status==200 and b'117440512' in script and b'33554432' not in script
+  # Fresh SD images have no operator key; authenticated Users provisioning
+  # must activate SSH immediately and survive application updates.
+  status,users=request('/users');assert status==200 and b'/users/keys/add' in users
+  key='ssh-ed25519 '+base64.b64encode(b'ZT30-operator-public-key-fixture').decode()+' operator@test'
+  def key_form(path,fields,token=csrf):
+   return request(path,urllib.parse.urlencode(dict(csrf=token,**fields)),{'Content-Type':'application/x-www-form-urlencoded'})
+  status,rejected=key_form('/users/keys/add',{'public_key':key},'bad')
+  assert b'reload' in rejected.lower() and not (app/'auth/authorized_keys').exists(),(status,rejected)
+  assert key_form('/users/keys/add',{'public_key':key})[0]==200
+  keys=app/'auth/authorized_keys';assert keys.read_text()==key+'\n' and keys.stat().st_mode&0o777==0o600
+  assert key_form('/users/keys/remove',{'public_key':key,'confirm':'yes'})[0]==400
+  second='ssh-ed25519 '+base64.b64encode(b'ZT30-second-operator-public-key').decode()+' second@test'
+  assert key_form('/users/keys/add',{'public_key':second})[0]==200
+  assert key_form('/users/keys/remove',{'public_key':second,'confirm':'yes'})[0]==200
+  assert keys.read_text()==key+'\n'
   payload,id=bundle()
   assert request('/upgrade',payload,authenticated=False)[0]==401
   assert upload(payload,'bad')[0]==403

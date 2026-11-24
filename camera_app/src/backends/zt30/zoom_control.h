@@ -10,29 +10,37 @@ namespace ca_zt30 {
 // telemetry, target crossing, timeout, cancellation or application shutdown.
 class OpticalZoom {
 public:
-    void reset() { std::lock_guard<std::mutex> g(lock);target=NAN;wire=previous=0;deadline=pulse_end=cooldown=0; }
+    void reset() { std::lock_guard<std::mutex> g(lock);target=last_observed=NAN;wire=previous=blocked=0;deadline=pulse_end=cooldown=progress=0; }
     bool request(float value,uint64_t now) {
         if(!std::isfinite(value) || value<1 || value>30)return false;
         std::lock_guard<std::mutex> g(lock);
-        target=value;deadline=now+45000;progress=now;last_observed=NAN;previous=0;return true;
+        if(blocked && last_observed==blocked_observed && (value-last_observed)*blocked>0)return false;
+        // Repeated absolute/rate requests must not renew a stalled motor's
+        // progress timer or lifetime. Reversing direction starts a new move.
+        if(!std::isfinite(target) || (std::isfinite(last_observed) && (value-last_observed)*(target-last_observed)<0)) {
+            deadline=now+45000;progress=now;previous=0;
+        }
+        target=value;return true;
     }
     void cancel() { std::lock_guard<std::mutex> g(lock);target=NAN; }
     int current() const { std::lock_guard<std::mutex> g(lock);return wire; }
     bool active() const { std::lock_guard<std::mutex> g(lock);return std::isfinite(target) || wire; }
     int wanted(float observed,uint64_t now) {
         std::lock_guard<std::mutex> g(lock);
-        if(now>=deadline)target=NAN;
         if(!std::isfinite(observed)) {
-            if(wire)target=NAN;
+            if(wire || now>=deadline)target=NAN;
             return 0; // A queued request waits for fresh initial telemetry.
         }
         if(!std::isfinite(last_observed) || observed!=last_observed) {
-            last_observed=observed;progress=now;
-        } else if(now-progress>=2000)target=NAN;
+            last_observed=observed;progress=now;blocked=0;
+        }
+        if(std::isfinite(target) && (now>=deadline || now-progress>=2000)) {
+            blocked=target>observed?1:-1;blocked_observed=observed;target=NAN;
+        }
         const float error=target-observed;
         const float tolerance=target==1 || target==30 ? .01f:.05f;
         if(std::isfinite(target) && (std::fabs(error)<=tolerance || (previous && error*previous<0)))target=NAN;
-        if(wire)return std::isfinite(target) && now<pulse_end ? wire:0;
+        if(wire)return std::isfinite(target) && error*wire>0 && now<pulse_end ? wire:0;
         if(!std::isfinite(target) || now<cooldown)return 0;
         pulse_end=now+120;
         previous=error>0?1:-1;return previous;
@@ -46,6 +54,8 @@ private:
     float target=NAN;
     float last_observed=NAN;
     int wire=0,previous=0;
+    int blocked=0;
+    float blocked_observed=NAN;
     uint64_t deadline=0,pulse_end=0,cooldown=0;
     uint64_t progress=0;
 };

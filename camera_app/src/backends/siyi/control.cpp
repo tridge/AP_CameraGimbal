@@ -1389,6 +1389,24 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
     return result;
 }
 
+#ifdef CAMERA_APP_ZT30_DEV
+int ca_backend_prepare_photo(struct ca_backend *backend)
+{
+    if (!backend) { errno=EINVAL;return -1; }
+    auto &zoom=ca_zt30::optical_zoom();
+    zoom.cancel();
+    // Send an explicit stop even with no pending app pulse: the MCU may have
+    // retained motion after a transport failure. A failed stop aborts capture.
+    const uint8_t stop=0;
+    const int lens=send_link(backend,A8_LINK_FLAG_PLAIN,0x04,&stop,1);
+    const int lens_error=errno;
+    if (!lens) zoom.sent(0,monotonic_ms());
+    const int gimbal=ca_backend_set_gimbal_rates(backend,0,0);
+    if (lens<0) { errno=lens_error;return -1; }
+    return gimbal;
+}
+#endif
+
 static int8_t rate_byte(float radians_per_second, float full_scale)
 {
     float units = radians_per_second * (180.0f / PI_F) / (full_scale / 100.0f);

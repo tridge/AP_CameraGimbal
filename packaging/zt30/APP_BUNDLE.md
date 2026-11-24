@@ -19,7 +19,8 @@ script loads only the UBIFS span, checks its CRC before writing, and updates onl
 `ubi0:customer`. It does not save environment or update other partitions.
 SD installation replaces customer data, including existing AP settings and SSH
 identities. The retained `/config` SDK, tuning and modules must already match.
-This path requires physical loader/cold-boot/recovery qualification.
+The FAT32 microSD install and subsequent cold boot have been tested on a ZT30.
+The card must be FAT32, not exFAT. Interrupted-flash recovery has not been tested.
 
 The AP web updater accepts that same file, validates both image and bundle
 checksums, and stages only the embedded application through the existing slot
@@ -32,6 +33,10 @@ install the web support for combined images. `ZT30_PACKAGE_OUT` overrides the
 bridge path; `ZT30_FIRMWARE_OUT` overrides the combined output from
 `make zt30_firmware`. Initial SD installation also includes the stable launchers,
 slot helper and recovery SSH tools, built from pinned source.
+After a fresh SD install, log in to the web UI and add your public SSH key on
+Users before using recovery SSH (`root`, port2222). Password SSH is disabled;
+no operator key is included in release images. Application updates preserve
+these keys and the camera's SSH host identity.
 
 For a different retained runtime, set `ZT30_RUNTIME_ROOT` to a captured root
 containing `/config/lib` and `/lib`, with a `SHA256SUMS` manifest at its root.
@@ -82,7 +87,8 @@ bundle with the web uploader. Subsequent application bundles use the web UI.
 
 Select `SIYI_ZT30_UpgradeSD.bin` (or a legacy `ZT30_AP_*.apbundle`) on Status.
 Authentication and CSRF protection use the
-same policy as other camera installers. One upload is allowed, at most32MiB
+same policy as other camera installers. One upload is allowed, at most112MiB
+for the combined SD image (the embedded application bundle is at most32MiB)
 and120seconds, into tmpfs. Restart and slot-writer locks protect the transaction.
 The persistent starting trial precedes activation. A new app must have the
 selected executable identity and two complete live RGB fragments; thermal is

@@ -26,6 +26,8 @@ public:
     float zoom() const;
     int set_lens_zoom(enum ca_media_lens lens, float zoom);
     float lens_zoom(enum ca_media_lens lens) const;
+    float lens_zoom_command(enum ca_media_lens lens) const;
+    void cancel_zoom() { if (_backend) _backend->cancel_zoom(); }
     float hfov(bool thermal) const;
     unsigned frame_rate(bool thermal) const;
     int set_lens(enum ca_media_lens lens);

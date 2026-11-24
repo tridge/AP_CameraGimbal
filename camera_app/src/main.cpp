@@ -548,7 +548,7 @@ int APC_CameraApp::run(int argc, char **argv)
     // One-shot photos can wait for hardware/storage. Stop the sole UART
     // owner first, so no nonzero rate depends on a blocked main-loop timer.
     ca_media_set_photo_prepare(_media,[](void *opaque) {
-        return ca_backend_set_gimbal_rates(static_cast<ca_backend*>(opaque),0,0);
+        return ca_backend_prepare_photo(static_cast<ca_backend*>(opaque));
     },_backend);
 #endif
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI

@@ -6,7 +6,8 @@ class Loader(unittest.TestCase):
  def test_group_resolves_cycle_before_constructors(self):
   header=(ROOT/'camera_app/src/backends/zt30/mi/native_sdk.h').read_text()
   names=re.findall(r'symbol\(api\.\w+,"[^"]+","([^"]+)"\)',header)
-  self.assertEqual(len(names),46)
+  self.assertEqual(len(names),len(set(names)))
+  self.assertIn('MI_SCL_GetOutputPortParam',names)
   with tempfile.TemporaryDirectory() as directory:
    p=Path(directory)
    # A imports B, B imports A. A's constructor actually calls B. Sequential

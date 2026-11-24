@@ -82,6 +82,9 @@
 #ifndef FIRMWARE_SUFFIX
 #define FIRMWARE_SUFFIX ".bin"
 #endif
+#ifndef FIRMWARE_ACCEPT
+#define FIRMWARE_ACCEPT FIRMWARE_SUFFIX
+#endif
 /* Targets keeping media on the root filesystem set this to 0. */
 #ifndef WEB_MEDIA_IS_MOUNT
 #define WEB_MEDIA_IS_MOUNT 1
@@ -5089,7 +5092,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
 #endif
 #if WEB_HAVE_FIRMWARE_UPLOAD
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
-                      "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
+                      "<input id=firmware type=file accept=" FIRMWARE_ACCEPT " hidden>"
                       "<button id=select-firmware type=button>%s</button>"
                       "<progress id=firmware-progress value=0 max=100 hidden></progress>"
                       "<output id=firmware-status class=upload-status></output></form>"
@@ -6361,9 +6364,13 @@ static const char *upgrade_script = "upgrade.js";
 static void send_upgrade_script(int fd)
 {
     char bad_name[256];
+#ifdef ZT30_WEB_NATIVE
+    char max_size[32];
+    snprintf(max_size,sizeof(max_size),"%llu",(unsigned long long)apcam_zt30::firmware_limit);
+#endif
     const struct js_string items[] = {
 #ifdef ZT30_WEB_NATIVE
-        {"applicationUpdate", "true"}, {"maxSize", "33554432"}, {"appFailed", T(S_APP_UPDATE_FAILED)},
+        {"applicationUpdate", "true"}, {"maxSize", max_size}, {"appFailed", T(S_APP_UPDATE_FAILED)},
         {"confirmRollback", T(S_APP_ROLLBACK)},
 #endif
         {"mediaRoot", UPGRADE_WRITE_ROOT}, {"reboots", WEB_UPGRADE_REBOOTS_JS},

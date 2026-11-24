@@ -12,11 +12,37 @@ bool ca_backend_has_gimbal(const ca_backend*) { return false; }
 void ca_support_mavlink_send(ca_support_mavlink*,const mavlink_message_t *message) { reply=*message; }
 void ca_log(const char*,...) {}
 
+static float feedback=1,commanded=1;
+static unsigned stops=0;
+static enum ca_media_lens selected=CA_MEDIA_LENS_ZOOM;
+float ca_media_lens_zoom(const ca_media*,enum ca_media_lens) { return feedback; }
+float ca_media_lens_zoom_command(const ca_media*,enum ca_media_lens) { return commanded; }
+enum ca_media_lens ca_media_lens(const ca_media*) { return selected; }
+bool ca_media_thermal_main(const ca_media*) { return false; }
+int ca_media_set_lens_zoom(ca_media*,enum ca_media_lens,float value) { commanded=value;return 0; }
+void ca_media_cancel_zoom(ca_media*) { ++stops;commanded=feedback; }
+int ca_backend_set_zoom_rate(ca_backend*,float) { assert(false);return -1; }
+
 int main() {
     ca_mavlink_server server{};
     server.system_id=42;server.camera_component_id=100;server.gimbal_component_id=154;
     server.settings.main_resolution=CA_VIDEO_720P;
     const route destination{.kind=ROUTE_PROXY};
+    // Measured feedback may lag each accepted command. Repeated MAVLink rate
+    // messages must preserve fractional progress until stop or another owner.
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
+    auto now=server.zoom_updated_ms;
+    update_zoom(&server,now+200);assert(server.zoom_rate==1 && fabsf(commanded-1.4f)<.001f);
+    feedback=1.1f;
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED && server.zoom_updated_ms==now+200);
+    update_zoom(&server,now+400);assert(server.zoom_rate==1 && fabsf(commanded-1.8f)<.001f);
+    commanded=3;update_zoom(&server,now+500);assert(server.zoom_rate==0 && !stops);
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
+    assert(set_zoom(&server,1,0)==MAV_RESULT_ACCEPTED && server.zoom_rate==0 && stops==1);
+    assert(set_zoom(&server,1,1)==MAV_RESULT_ACCEPTED);
+    feedback=NAN;update_zoom(&server,server.zoom_updated_ms+100);
+    assert(server.zoom_rate==0 && stops==2);
+    feedback=1;
     uint32_t initial_flags=0;
     for(bool ready : {false,true,false}) {
         photo_ready=ready;
