@@ -100,6 +100,7 @@ struct Context {
     std::string record_root;
     std::atomic<unsigned> thermal_hfov_cd{0};
     std::atomic<float> zoom_command{NAN};
+    uint64_t next_zoom_log_ms=0;
     bool external_main=false,external_sub=false;
     std::mutex route_lock;bool thermal_primary=false,waiting_key[2]{true,true};
     PacketMemory memory{pointer_slot,copy_packet};
@@ -370,10 +371,13 @@ public:
         if(selected!=CA_MEDIA_LENS_ZOOM || !std::isfinite(value) || value<1 || value>180) { errno=EINVAL;return -1; }
         // Reject a stalled combined request before changing the digital crop;
         // partial success would silently leave the requested zoom unmet.
-        if(!optical_zoom().request(std::min(value,30.0f),monotonic_ns()/1000000)) { errno=EBUSY;return -1; }
+        const uint64_t now_ms=monotonic_ns()/1000000;
+        float optical,crop;
+        zoom_targets(value,zoom_feedback().get(now_ms),context->digital_zoom.get(),optical,crop);
+        if(!optical_zoom().request(optical,now_ms)) { errno=EBUSY;return -1; }
         unsigned ports=2U|8U|(context->photo_opened?1U:0U)|
             (context->external_main?4U:0U)|(context->external_sub?16U:0U);
-        if(context->digital_zoom.set(std::max(1.0f,value/30),ports)) {
+        if(context->digital_zoom.set(crop,ports)) {
             optical_zoom().cancel();
             ca_log("ZT30 digital zoom crop failed errno=%d",errno);
             if(errno==EOWNERDEAD)_exit(28);
@@ -381,7 +385,10 @@ public:
         }
         zoom_feedback().digital(context->digital_zoom.get());
         context->zoom_command=value;
-        ca_log("ZT30 zoom target %.1fx optical %.1fx digital %.3fx",value,std::min(value,30.0f),context->digital_zoom.get());
+        if(now_ms>=context->next_zoom_log_ms) {
+            context->next_zoom_log_ms=now_ms+1000;
+            ca_log("ZT30 zoom target %.1fx optical %.1fx digital %.3fx",value,optical,context->digital_zoom.get());
+        }
         return 0;
     }
     float lens_zoom(enum ca_media_lens value) const override {

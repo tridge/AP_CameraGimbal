@@ -4,7 +4,7 @@
 #include <limits>
 using namespace ca_zt30;
 static SclPort applied[5]{};
-static unsigned writes=0;
+static unsigned writes=0,reads=0;
 static bool bad_readback=false,fail_restore=false;
 static int fail_port=-1;
 static int set_crop(uint32_t device,uint32_t channel,uint32_t port,SclPort *crop) {
@@ -14,7 +14,7 @@ static int set_crop(uint32_t device,uint32_t channel,uint32_t port,SclPort *crop
     applied[port]=*crop;return 0;
 }
 static int get_crop(uint32_t device,uint32_t channel,uint32_t port,SclPort *crop) {
-    assert(!device && !channel);*crop=applied[port];
+    assert(!device && !channel);++reads;*crop=applied[port];
     if(bad_readback && writes==1)crop->crop.width=0;
     return 0;
 }
@@ -58,6 +58,29 @@ int main() {
     assert(motor.request(3,62203) && motor.wanted(1.9f,62203)==0);
     motor.sent(0,62203);assert(motor.wanted(1.9f,62342)==0);
     assert(motor.wanted(1.9f,62343)==1);
+    // A reversal from 60x commanded / 15x optical / 2x digital must reduce
+    // the crop, rather than driving the lens inward toward almost 30x.
+    float optical,crop_factor;
+    zoom_targets(29.8f,15,2,optical,crop_factor);
+    assert(optical==15 && crop_factor<2 && fabsf(optical*crop_factor-29.8f)<.001f);
+    motor.reset();assert(motor.request(30,70000));
+    assert(motor.wanted(15,70000)==1);motor.sent(1,70000);
+    assert(motor.request(optical,70001) && motor.wanted(15,70001)==0);
+    motor.sent(0,70001);
+    assert(!motor.active());
+    // Reversing back inward retains the current crop and increases optical
+    // zoom, so the image does not jump outward when the lens is below 30x.
+    zoom_targets(30.2f,15,2,optical,crop_factor);
+    assert(optical>15 && crop_factor==2 && fabsf(optical*crop_factor-30.2f)<.001f);
+    for(float observed : {1.f,5.f,15.f,30.f})for(float digital : {1.f,2.f,6.f})
+        for(float combined : {1.f,5.f,15.f,30.f,60.f,180.f}) {
+            zoom_targets(combined,observed,digital,optical,crop_factor);
+            assert(optical>=1 && optical<=30 && crop_factor>=1 && crop_factor<=6);
+            assert(fabsf(optical*crop_factor-combined)<.001f);
+            if(combined<observed*digital)assert(optical<=observed && crop_factor<=digital);
+            if(combined>observed*digital)assert(optical>=observed && crop_factor>=digital);
+        }
+    zoom_targets(60,NAN,1,optical,crop_factor);assert(optical==30 && crop_factor==2);
     Rect crop{};
     for(float factor : {1.f,1.1f,1.5f,2.f,3.f,6.f}) {
         assert(zoom_crop(factor,crop));
@@ -68,11 +91,24 @@ int main() {
     assert(!zoom_crop(NAN,crop) && !zoom_crop(.5f,crop) && !zoom_crop(6.1f,crop));
     Api api{};api.scl_set_port=set_crop;api.scl_get_port=get_crop;DigitalZoom digital(api);
     for(unsigned p=0;p<5;p++) { applied[p].output={uint16_t(1280+p*32),720};applied[p].pixel_format=11; }
+    // The first full-frame request still verifies the hardware's crop state.
+    assert(digital.set(1)==0 && writes==3 && reads==6);
     assert(digital.set(2)==0 && digital.get()==2 && applied[0].crop.width==1920 && applied[0].crop.height==1080);
     for(unsigned p=0;p<5;p++)assert(applied[p].output.width==1280+p*32 && applied[p].pixel_format==11 &&
         applied[p].crop.width==((0x0b&(1U<<p))?1920:0));
+    const unsigned first_writes=writes,first_reads=reads;
+    // Identical and quantized-equivalent crops do no SDK work on any port.
+    assert(digital.set(2)==0 && digital.set(1.999f)==0 && digital.get()==2);
+    assert(writes==first_writes && reads==first_reads);
+    // A new output port still needs configuration, even at the same ratio.
+    assert(digital.set(2,0x0f)==0 && applied[2].crop.width==1920);
+    assert(writes>first_writes && reads>first_reads);
+    assert(digital.set(2)==0);
     SclPort original[5];memcpy(original,applied,sizeof(original));fail_port=3;
     assert(digital.set(6)<0 && errno==EIO && !memcmp(original,applied,sizeof(original)) && digital.get()==2);
+    // A rolled-back transaction preserves the previous verified crop cache.
+    const unsigned failed_writes=writes,failed_reads=reads;
+    assert(digital.set(2)==0 && writes==failed_writes && reads==failed_reads);
     SclPort before[5];memcpy(before,applied,sizeof(before));writes=0;bad_readback=true;
     assert(digital.set(3)<0 && errno==EIO && !memcmp(before,applied,sizeof(before)) && digital.get()==2);
     writes=0;fail_restore=true;
