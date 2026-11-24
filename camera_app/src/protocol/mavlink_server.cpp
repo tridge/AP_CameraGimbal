@@ -3352,6 +3352,7 @@ static uint8_t survey_capture_start(ca_mavlink_server *s,int32_t count,float int
     if(result!=MAV_RESULT_ACCEPTED) return result;
     s->survey->remaining=count?count:-1;
     s->survey->interval_ms=unsigned(fminf(interval*1000,UINT32_MAX));
+    s->survey->interval_warned=false;
     return MAV_RESULT_ACCEPTED;
 }
 

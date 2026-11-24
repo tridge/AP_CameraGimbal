@@ -106,6 +106,7 @@ bool ca_survey_grid::init(const ca_survey_pose &p, const ca_survey_config &c,
     if(c.pattern==CA_SURVEY_LEFT_RIGHT) { slots[0]=5; slots[1]=3; }
     if(c.pattern==CA_SURVEY_FORE_AFT) { slots[0]=1; slots[1]=7; }
     if(c.pattern==CA_SURVEY_FORE_ONLY) { slots[0]=9; slots[1]=10; slots[2]=11; }
+    if(c.pattern==CA_SURVEY_FORE_WIDE) { slots[0]=0; slots[1]=1; slots[2]=2; }
     origin=p; course=atan2(p.ve,p.vn); start_ms=now;
     const double width=2*height*tan(hfov*rad/2), length=width/aspect;
     const double overlap=c.overlap*.01;
@@ -144,6 +145,24 @@ void ca_survey_grid::target(int64_t cycle, unsigned slot, int32_t &lat,
     row=cycle+view_row(slot,fore_rows,aft_rows);
     column=view_column(slot);
     const double x=row*spacing,y=column*cross_spacing;
+    const float north=x*cos(course)-y*sin(course), east=x*sin(course)+y*cos(course);
+    lat=origin.lat; lon=origin.lon; float alt=origin.ground;
+    (void)ca_targeting_predict_position(&lat,&lon,&alt,north,east,0,1);
+}
+
+// Aim relative to where the aircraft will be at capture instead of a shared
+// ground row. lead_m is the expected along-track travel before capture. From
+// there, fore views look fore_m ahead, rear views aft_m behind, down views
+// straight below, and forward pitch views 3x/2x/1x fore_m ahead.
+void ca_survey_grid::target_ahead(const ca_survey_pose &p, double lead_m, double fore_m,
+                                  double aft_m, unsigned slot, int32_t &lat, int32_t &lon,
+                                  int64_t &row, int &column) const
+{
+    slot=slots[slot];
+    column=view_column(slot);
+    const int step=view_row(slot,1,1); // +1 fore, 0 down, -1 rear; 3/2/1 forward pitch
+    const double x=along(p)+lead_m+(step>0?step*fore_m:step*aft_m), y=column*cross_spacing;
+    row=int64_t(floor(x/spacing+.5)); // nearest row, for metadata only
     const float north=x*cos(course)-y*sin(course), east=x*sin(course)+y*cos(course);
     lat=origin.lat; lon=origin.lon; float alt=origin.ground;
     (void)ca_targeting_predict_position(&lat,&lon,&alt,north,east,0,1);

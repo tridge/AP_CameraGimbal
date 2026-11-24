@@ -114,6 +114,7 @@ static const struct ca_camera_parameter parameters[] = {
 #if APCAM_HAVE_PHOTO && (APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV))
     CONFIG("SURV_LENS", "Survey camera"),
     CONFIG("SURV_PATTERN", "Survey pattern"),
+    CONFIG("SURV_AIM", "Survey aiming"),
     CONFIG("SURV_OVERLAP", "Overlap (%)"),
     CONFIG("SURV_FORE", "Forward distance (% AGL)"),
     CONFIG("SURV_AFT", "Rear distance (% AGL)"),

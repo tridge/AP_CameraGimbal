@@ -34,8 +34,8 @@ CHECKS = r"""
     switchTo('survey');
     const pattern = field('survey_pattern');
     assert(pattern.value === 'both', 'default survey pattern');
-    assert([...pattern.options].map(o => o.value).join(',') === 'both,left_right,fore_aft,fore_only', 'survey pattern choices');
-    for (const value of ['left_right','fore_aft','fore_only','both']) {
+    assert([...pattern.options].map(o => o.value).join(',') === 'both,left_right,fore_aft,fore_only,fore_wide', 'survey pattern choices');
+    for (const value of ['left_right','fore_aft','fore_only','fore_wide','both']) {
       pattern.value = value;
       pattern.dispatchEvent(new Event('change', {bubbles: true}));
       assert(document.getElementById('survey-pattern-grid').hidden === (value !== 'both'), 'pattern grid visibility');

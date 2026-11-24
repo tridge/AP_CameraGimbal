@@ -651,8 +651,13 @@ static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {
 
 static const struct option survey_patterns[] = {
     {"both", S_SURV_BOTH}, {"left_right", S_SURV_LEFT_RIGHT}, {"fore_aft", S_SURV_FORE_AFT},
-    {"fore_only", S_SURV_FORE_ONLY},
+    {"fore_only", S_SURV_FORE_ONLY}, {"fore_wide", S_SURV_FORE_WIDE},
 };
+
+static const struct option survey_aims[] = {
+    {"rows", S_SURV_AIM_ROWS}, {"ahead", S_SURV_AIM_AHEAD},
+};
+
 static const struct option survey_lenses[] = {
 #if WEB_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
     {"thermal", S_SURV_THERMAL},
@@ -813,6 +818,8 @@ static const struct parameter replacement_parameters[] = {
 #endif
     {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
      PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
+    {"survey_aim", "survey", "aim", S_SURV_AIM, S_SURV_AIM_HELP,
+     PARAM_ENUM, 0, 0, 0, survey_aims, sizeof(survey_aims)/sizeof(survey_aims[0])},
     {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
      PARAM_ENUM, 0, 0, 0, survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0])},
     {"survey_overlap", "survey", "overlap", S_SURV_OVERLAP, S_SURV_OVERLAP_HELP, PARAM_INTEGER, 0, 90, 1, NULL, 0},
@@ -892,7 +899,7 @@ static const char *replacement_defaults[] = {
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
     "",
 #endif
-    "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
+    "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
 
 

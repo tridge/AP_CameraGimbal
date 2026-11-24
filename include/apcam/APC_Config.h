@@ -173,7 +173,11 @@ private:
 
     inline static constexpr ca_config_option survey_patterns[] = {
         {"both", CA_SURVEY_BOTH}, {"left_right", CA_SURVEY_LEFT_RIGHT}, {"fore_aft", CA_SURVEY_FORE_AFT},
-        {"fore_only", CA_SURVEY_FORE_ONLY},
+        {"fore_only", CA_SURVEY_FORE_ONLY}, {"fore_wide", CA_SURVEY_FORE_WIDE},
+    };
+
+    inline static constexpr ca_config_option survey_aims[] = {
+        {"rows", CA_SURVEY_AIM_ROWS}, {"ahead", CA_SURVEY_AIM_AHEAD},
     };
 
     inline static constexpr ca_config_option survey_lenses[] = {
@@ -195,6 +199,8 @@ private:
 #endif
         {"survey", "pattern", Kind::Enum, offsetof(ca_config, survey.pattern), sizeof(unsigned),
          survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0]), 0, 0, "SURV_PATTERN"},
+        {"survey", "aim", Kind::Enum, offsetof(ca_config, survey.aim), sizeof(unsigned),
+         survey_aims, sizeof(survey_aims)/sizeof(survey_aims[0]), 0, 0, "SURV_AIM"},
         {"survey", "lens", Kind::Enum, offsetof(ca_config, survey.lens), sizeof(unsigned),
          survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0]), 0, 0, "SURV_LENS"},
         {"survey", "overlap", Kind::Uint, offsetof(ca_config, survey.overlap), sizeof(unsigned), NULL, 0, 0, 90, "SURV_OVERLAP"},
