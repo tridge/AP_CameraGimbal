@@ -14,7 +14,7 @@ PUBLIC_TARGETS := help $(CAMERA_TARGETS) rpi_libcam_caddx release dependencies c
 # Check before any recipes run, including parallel release builds. Host tests,
 # SITL, source downloads and clean targets do not need hardware toolchains.
 HARDWARE_BUILD_GOALS := release $(CAMERA_TARGETS) _mt11-binaries _zr10_dependencies \
-	_z1mini-binaries z1mini_retained_isp_package packaging/mt11/thermal_socket
+	_z1mini-binaries z1mini_retained_isp_package
 ifneq ($(filter $(HARDWARE_BUILD_GOALS),$(MAKECMDGOALS)),)
 ifeq ($(wildcard build/environment.mk),)
 $(error Build environment is not configured in this checkout. Run 'python3 tools/install_build_environment.py' first)
@@ -251,13 +251,7 @@ _sitl-test-a8: _sitl-a8
 		$(A8_SITL_BUILD)/a8-web sitl/gimbal_sim.py \
 		$(abspath $(A8_SITL_BUILD)/runtime) --backend a8 --orientation inverted
 
-packaging/mt11/thermal_socket: packaging/mt11/thermal_socket.cpp
-	$(call progress,Linking $@)
-	$(CROSS_COMPILE)g++ -static -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
-		-o $@ $<
-
-mt11: _mt11-binaries packaging/mt11/thermal_socket \
-	packaging/mt11/mt11-timesync.sh packaging/mt11/app_init.sh \
+mt11: _mt11-binaries packaging/mt11/mt11-timesync.sh packaging/mt11/app_init.sh \
 	packaging/mt11/app_selection.sh packaging/mt11/start-dropbear.sh \
 	_mt11_tools
 	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$$' || { \
@@ -270,7 +264,7 @@ mt11: _mt11-binaries packaging/mt11/thermal_socket \
 		'$(MT11_KERNEL)' '$(MT11_ROOTFS)' '$(MT11_UPDATE_CONFIG)' \
 		'$(MT11_PACKAGE_OUT)' \
 		camera_app/camera-app web/mt11-web \
-		packaging/mt11/thermal_socket packaging/mt11/mt11-timesync.sh \
+		packaging/mt11/mt11-timesync.sh \
 		packaging/mt11/app_init.sh packaging/mt11/app_selection.sh \
 		camera_app/camera.ini \
 		'$(MT11_RSYNC)' '$(MT11_STRACE)' '$(MT11_TCPDUMP)' \
@@ -307,7 +301,6 @@ build/a8-uuid: packaging/a8/a8-uuid.cpp Makefile
 clean:
 	$(MAKE) -C camera_app clean
 	$(MAKE) -C web clean
-	rm -f packaging/mt11/thermal_socket
 	rm -f '$(MT11_PACKAGE_OUT)' '$(A8_PACKAGE_OUT)' '$(A8_PACKAGE_OUT).sha256'
 	rm -rf $(SITL_BUILD) $(A8_SITL_BUILD) $(ZR10_SITL_BUILD) $(Z1MINI_SITL_BUILD)
 

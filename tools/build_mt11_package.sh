@@ -3,11 +3,11 @@ set -eu
 
 usage()
 {
-    echo "Usage: $0 KERNEL ROOTFS CONFIG OUTPUT CAMERA_APP WEB_APP THERMAL_SOCKET TIMESYNC APP_INIT APP_SELECTION CAMERA_INI RSYNC STRACE TCPDUMP LTRACE DROPBEAR DROPBEARKEY DROPBEAR_START" >&2
+    echo "Usage: $0 KERNEL ROOTFS CONFIG OUTPUT CAMERA_APP WEB_APP TIMESYNC APP_INIT APP_SELECTION CAMERA_INI RSYNC STRACE TCPDUMP LTRACE DROPBEAR DROPBEARKEY DROPBEAR_START" >&2
     exit 2
 }
 
-[ "$#" -eq 18 ] || usage
+[ "$#" -eq 17 ] || usage
 
 kernel=$1
 rootfs=$2
@@ -15,19 +15,18 @@ config=$3
 output=$4
 camera_app=$5
 web_app=$6
-thermal_socket=$7
-timesync=$8
-app_init=$9
+timesync=$7
+app_init=$8
+app_selection=$9
 shift 9
-app_selection=$1
-camera_ini=$2
-rsync_bin=$3
-strace_bin=$4
-tcpdump_bin=$5
-ltrace_bin=$6
-dropbear_bin=$7
-dropbearkey_bin=$8
-dropbear_start=$9
+camera_ini=$1
+rsync_bin=$2
+strace_bin=$3
+tcpdump_bin=$4
+ltrace_bin=$5
+dropbear_bin=$6
+dropbearkey_bin=$7
+dropbear_start=$8
 
 # These hashes identify the reviewed platform images stored in the repository.
 # Replacing either image requires a complete review and hardware test.
@@ -70,7 +69,7 @@ for command in awk grep install mktemp sed sha256sum tar unzip wc zip; do
         exit 1
     }
 done
-for input in "$kernel" "$rootfs" "$config" "$camera_app" "$web_app" "$thermal_socket" \
+for input in "$kernel" "$rootfs" "$config" "$camera_app" "$web_app" \
              "$timesync" "$app_init" "$app_selection" "$camera_ini" \
              "$rsync_bin" "$strace_bin" "$tcpdump_bin" "$ltrace_bin" \
              "$dropbear_bin" "$dropbearkey_bin" "$dropbear_start" \
@@ -150,7 +149,6 @@ repacked_rootfs=$(sha256sum "$system/rootfs" | awk '{print $1}')
 install -m 0755 "$camera_app" "$overlay/bin/camera-app"
 install -m 0755 "$web_app" "$overlay/bin/mt11-web"
 cp -R "$script_dir/../web/webroot" "$overlay/webroot"
-install -m 0755 "$thermal_socket" "$overlay/bin/thermal_socket"
 install -m 0755 "$timesync" "$overlay/bin/mt11-timesync.sh"
 install -m 0755 "$rsync_bin" "$overlay/bin/rsync"
 install -m 0755 "$strace_bin" "$overlay/bin/strace"

@@ -57,8 +57,6 @@ SITL_DEFINES := -DWEBROOT_PATH='"$(CURDIR)/webroot"' -DMT11_WEB_TEST -DMT11_WEB_
 	-DVENDOR_CAMERA_PATH='"$(SITL_ROOT)/app/siyi_camera_app"' \
 	-DREPLACEMENT_CAMERA_PATH='"$(SITL_BIN_ROOT)/$(SITL_CAMERA_BINARY)"' \
 	-DWEB_PATH='"$(SITL_BIN_ROOT)/$(SITL_WEB_BINARY)"' \
-	-DTHERMAL_SOCKET_PATH='"$(SITL_ROOT)/app/bin/thermal_socket"' \
-	-DTHERMAL_SOCKET_LOG_PATH='"$(SITL_ROOT)/run/thermal_socket.log"' \
 	-DAPP_SELECTION_PATH='"$(SITL_ROOT)/app/app_selection.txt"' \
 	-DAPP_LOG_PATH='"$(SITL_ROOT)/run/siyi_camera_app.log"' \
 	-DAPP_LOG_OLD_PATH='"$(SITL_ROOT)/run/siyi_camera_app.log.1"' \

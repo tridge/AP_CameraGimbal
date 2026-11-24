@@ -1136,20 +1136,14 @@ leave the new init script without its companion.
 
 Use the web UI action buttons to switch owners. The switch is deliberately
 exclusive because the two applications cannot share UDP/TCP 37260, UART3 or the
-raw-thermal TCP port. The web supervisor stops the external `thermal_socket`
-for the ArduPilot camera app and starts it for the vendor app. A failed ArduPilot
-camera app start is rolled back to the vendor application and helper. Successful switches
+raw-thermal TCP port. A failed ArduPilot
+camera app start is rolled back to the vendor application. Successful switches
 are written atomically to `/app/app_selection.txt`, so reboot starts the last
 selected app. Missing or invalid selection defaults to vendor, while an
 unavailable selected executable causes `app_selection.sh` to use and remember
 the available alternative. Once the ArduPilot camera app owns the hardware, the web
 UI's Restart action performs a graceful media teardown and starts the newly
 installed binary.
-
-The external `thermal_socket` is only a transitional compatibility service for
-the vendor application. It is not needed by `camera-app` and should be removed
-from the startup and firmware package once migration is complete and vendor-app
-fallback is retired.
 
 ## Build an MT11 SD-card update
 
@@ -1165,10 +1159,9 @@ The default output is
 six characters of the current commit hash. For example, latest reachable tag `v1.0` with
 `HEAD` at `49f5727...` produces `build/MT11_FW_ArduPilot_v1.0_49f572.bin`.
 The builder validates the reviewed kernel and rootfs inputs included under
-`packaging/mt11/base`, builds both static applications and the vendor-mode
-raw-thermal helper, and creates an `/app` overlay containing:
+`packaging/mt11/base`, builds both static applications, and creates an `/app` overlay containing:
 
-- `/app/bin/camera-app`, `/app/bin/mt11-web`, `/app/bin/thermal_socket`,
+- `/app/bin/camera-app`, `/app/bin/mt11-web`,
   `/app/bin/mt11-timesync.sh`, and static `rsync`, `strace`, `ltrace` and
   `tcpdump` support utilities;
 - static `/app/bin/dropbear` and `/app/bin/dropbearkey`, plus the
