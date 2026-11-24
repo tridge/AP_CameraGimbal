@@ -50,12 +50,14 @@ Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
 
 - **Fixed ground rows** (`0`, `rows`, default): targets lie on rows fixed at the
   start of the leg, so successive sweeps revisit the same ground from different views.
-- **Ahead of aircraft** (`1`, `ahead`): each view is placed at its forward or rear
-  distance from where the aircraft is expected to be at capture: its position when
-  the view starts, plus the travel during the view's slew allowance, settling time
-  and half the burst. Targets are not rounded to rows, so views do not revisit
-  common ground; `row` in capture metadata is the nearest row, for reference only.
-  Each target stays fixed for its burst, and the gimbal holds it while the aircraft moves.
+- **Ahead of aircraft** (`1`, `ahead`): each view plans its first frame for after
+  its slew allowance and settling time, and places the target at its forward or rear
+  distance from where the aircraft will be at the middle of the burst. The first
+  frame is held until the planned time even if the gimbal settles sooner; a gimbal
+  slower than the allowance captures late, so the view falls slightly short.
+  Targets are not rounded to rows, so views do not revisit common ground; `row` in
+  capture metadata is the nearest row, for reference only. Each target stays fixed
+  for its burst, and the gimbal holds it while the aircraft moves.
 
 Both remains the default for existing configurations. The reduced patterns budget
 only their selected views, giving shorter sweeps and closer ground rows. Saving a

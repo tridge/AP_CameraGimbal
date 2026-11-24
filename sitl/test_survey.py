@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 M = mavutil.mavlink
 
 
-def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal", count=0, xml_mode=False, terrain_root=None, terrain_variation=False, replay=None, pattern="both", gentle_turn=False, no_stream=False, navigation=False):
+def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal", count=0, xml_mode=False, terrain_root=None, terrain_variation=False, replay=None, pattern="both", gentle_turn=False, no_stream=False, navigation=False, aim="rows"):
     sys.path.insert(0,str(mavproxy))
     spec=importlib.util.spec_from_file_location("survey_coverage_under_test",
         mavproxy/'MAVProxy/modules/mavproxy_camera/survey.py')
@@ -36,7 +36,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
     track_times = [p['t'] for p in track] if track else []
     if track:
         cfg.write_text('[mavlink]\nsystem_id=42\n[survey]\nburst=2\nburst_ms=100\ndwell_ms=400\nsettle_ms=100\nfore_pct=25\naft_pct=25\n')
-    with cfg.open('a') as f: f.write(f'pattern={pattern}\n')
+    with cfg.open('a') as f: f.write(f'pattern={pattern}\naim={aim}\n')
     gp, cp, raw = port(), port(), port()
     env = dict(os.environ, CAMERA_APP_CONFIG=str(cfg), CAMERA_APP_BACKEND='mt11',
                CAMERA_APP_SITL_PHOTO=str(ROOT/'camera_app/tests/photo.jpg'),
@@ -227,7 +227,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
             assert len({r['capture_monotonic_ms'] for r in records}) == len(records), 'duplicate frames'
             if count:
                 assert len(records)==count, (len(records),count)
-            if not terrain_dropout and not count and not navigation:
+            if not terrain_dropout and not count and not navigation and aim=='rows':                
                 cycles=sorted({r['cycle'] for r in records})
                 assert cycles == list(range(cycles[0],cycles[-1]+1)), ('skipped ground rows',cycles)
                 views={}
@@ -248,7 +248,21 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
             assert {r['slot'] for r in records} == allowed, ('unexpected views',pattern)
             assert all(r['positions']==len(allowed) and 0<=r['position']<len(allowed) for r in records)
             assert all(r['pattern']=={'both':0,'left_right':1,'fore_aft':2,'fore_only':3,'fore_wide':4}[pattern] for r in records)
-            if pattern=='fore_only':
+            if aim=='ahead' and not replay and not gentle_turn and not navigation:
+                # Straight north: each frame's target must sit its configured
+                # distance ahead of (or behind) the aircraft at capture.
+                fore=aft=.5
+                errors_m=[]
+                for r in records:
+                    agl=r['alt_amsl_m']-r['ground_amsl_m']
+                    s=r['slot']
+                    expect=(12-s)*fore*agl if s>=9 else fore*agl if s<3 else 0 if s<6 else -aft*agl
+                    errors_m.append(abs((r['target'][0]-r['lat'])*111319.5-expect))
+                errors_m.sort()
+                median=errors_m[len(errors_m)//2]
+                print(f'Ahead aiming: median along-track error {median:.1f}m, worst {errors_m[-1]:.1f}m')
+                assert median<max(5,.1*agl), ('ahead target not at configured distance at capture',median)
+            if pattern=='fore_only' and aim=='rows':
                 assert all(r['row']>r['cycle'] and r['column']==0 for r in records), 'invalid forward grid'
                 if not replay and not gentle_turn and not navigation:
                     assert all(r['target'][0]>r['lat'] and abs(r['target'][1]-r['lon'])<1e-6 for r in records), 'target passed behind aircraft'
@@ -302,7 +316,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     assert record['image_index'] in frames, ('survey frame missing from stream', record['image_index'])
                     assert hashlib.sha256(pixels).hexdigest() == frames[record['image_index']]
             validation = 'SD capture without a stream client' if no_stream else 'identical stream/SD pixels'
-            print(f'PASS {speed} m/s {lens} {pattern}: {len(records)} unique survey frames; stop, count, terrain subscription; ' + (validation if lens=='thermal' else 'selected-lens JPEGs'))
+            print(f'PASS {speed} m/s {lens} {pattern} aim={aim}: {len(records)} unique survey frames; stop, count, terrain subscription; ' + (validation if lens=='thermal' else 'selected-lens JPEGs'))
         finally:
             finished.set()
             if link:
@@ -325,6 +339,7 @@ if __name__ == '__main__':
     parser.add_argument('--terrain-variation', action='store_true')
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--pattern', choices=('both','left_right','fore_aft','fore_only','fore_wide'), default='both')
+    parser.add_argument('--aim', choices=('rows','ahead'), default='rows')
     parser.add_argument('--gentle-turn', action='store_true', help='regress grid drift after a gentle 5.4-degree turn')
     parser.add_argument('--no-stream', action='store_true', help='verify SD capture with no thermal stream consumer')
     parser.add_argument('--navigation', action='store_true', help='exercise waypoint-path telemetry and fallbacks for 95 seconds')
@@ -333,4 +348,4 @@ if __name__ == '__main__':
         parser.error('--gentle-turn requires fore_only/fore_aft and no replay/uploaded terrain')
     if args.navigation and (args.pattern!='fore_only' or args.duration<95 or args.count or args.gentle_turn or args.replay or args.terrain_root or args.terrain_dropout):
         parser.error('--navigation requires fore_only, duration >=95 and no count/turn/replay/terrain overrides')
-    run(args.output, args.speed, args.duration, args.mavproxy, args.terrain_dropout, args.lens, args.count, args.xml_mode, args.terrain_root, args.terrain_variation, args.replay, args.pattern, args.gentle_turn, args.no_stream, args.navigation)
+    run(args.output, args.speed, args.duration, args.mavproxy, args.terrain_dropout, args.lens, args.count, args.xml_mode, args.terrain_root, args.terrain_variation, args.replay, args.pattern, args.gentle_turn, args.no_stream, args.navigation, args.aim)

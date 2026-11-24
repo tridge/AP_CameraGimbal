@@ -16,6 +16,7 @@ struct survey_runtime {
     uint64_t vtol_ms=0;
     uint32_t leg=0, captured=0, skipped=0, unsettled=0;
     int64_t cycle=0;
+    uint64_t hold_ms=0; // ahead aiming: earliest first frame of the current view
     unsigned slot=0, burst=0;
     int32_t remaining=-1;
     unsigned interval_ms=0;
@@ -394,19 +395,23 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         auto &r=v.request;
         r.session=v.session; r.generation=v.generation; r.leg=v.leg; r.cycle=v.cycle; r.slot=v.grid.slots[v.slot];
         r.pattern=cfg.pattern; r.position=v.slot; r.positions=v.grid.slot_count;
+        v.hold_ms=0;
         if(cfg.aim==CA_SURVEY_AIM_AHEAD) {
-            // The target stays fixed for the burst, so lead it by the travel
-            // expected before capture: this view's slew allowance plus settling,
-            // centred on the burst, but never beyond this view's deadline.
+            // The target stays fixed for the burst. Plan the first frame for
+            // after this view's slew allowance and settling, leaving room for the
+            // burst before the deadline, and hold it until then. Place the target
+            // where the aircraft will be at the middle of the burst. A gimbal
+            // slower than the allowance captures late, as in rows mode.
             const double agl=pose.alt-pose.ground;
             const double burst_s=(cfg.burst-1)*cfg.burst_ms*.001;
-            double lead_s=v.grid.budget[v.slot]-cfg.dwell_ms*.001-burst_s/2+cfg.settle_ms*.001;
-            lead_s=fmax(0,fmin(lead_s,deadline>now?(deadline-now)*.001:0));
+            const double window_s=deadline>now?(deadline-now)*.001-burst_s-.15:0;
+            const double first_s=fmax(0,fmin(v.grid.budget[v.slot]-cfg.dwell_ms*.001-burst_s+cfg.settle_ms*.001,window_s));
+            v.hold_ms=now+uint64_t(first_s*1000);
             const double along_speed=fmax(0,path_pose.vn*cos(v.grid.course)+path_pose.ve*sin(v.grid.course));
-            v.grid.target_ahead(path_pose,along_speed*lead_s,cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,
+            v.grid.target_ahead(path_pose,along_speed*(first_s+burst_s/2),cfg.fore_pct*.01*agl,cfg.aft_pct*.01*agl,
                                 v.slot,r.target_lat,r.target_lon,r.row,r.column);
         } else
-	v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
+            v.grid.target(v.cycle,v.slot,r.target_lat,r.target_lon,r.row,r.column);
         r.target_alt=pose.ground; r.lens=cfg.lens;
         auto terrain=ca_terrain_height(r.target_lat,r.target_lon,r.target_alt);
         r.target_terrain_uploaded=terrain==CA_TERRAIN_READY;
@@ -436,6 +441,9 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     bool settled=v.steady_ms && now-v.steady_ms>=cfg.settle_ms;
     v.state=settled?"capturing settled view":"settling";
     if(v.pending || v.burst>=cfg.burst || now<v.next_image_ms) return;
+    // An ahead target was placed for a planned capture time; an earlier
+    // first frame would land further ahead than intended.
+    if(!v.burst && now<v.hold_ms) { if(settled) v.state="holding for capture point"; return; }
     uint64_t burst_reserve=(cfg.burst-v.burst-1)*cfg.burst_ms+150;
     if(!settled && now+burst_reserve<deadline) return;
     ca_metadata m; ca_metadata_snapshot(&m); double corners[4][2];
