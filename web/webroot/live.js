@@ -67,6 +67,7 @@
   }); start();
   let lease = '', held = null, renewing = false, leaving = false;
   let zoomEditing = false, zoomPending = false, zoomWanted = null, zoomGeneration = 0;
+  const asyncZoom = script.dataset.zoomAsync === '1';
   zoomValue.textContent = '—';
   const controls = [...document.querySelectorAll('[data-direction]'), document.getElementById('live-center'), rate, zoom];
   const refreshControls = () => { controls.forEach(control => { control.disabled = !lease; }); };
@@ -86,6 +87,7 @@
     } finally { window.clearTimeout(timeout); }
   };
   const dropControl = () => {
+    zoomWanted = null;
     const previous = lease; lease = ''; held = null; enable.checked = false; refreshControls();
     if (previous) fetch('/live/control', {method: 'POST', keepalive: true,
       body: new URLSearchParams({csrf: script.dataset.csrf, action: 'release', lease: previous})}).catch(() => {});
@@ -100,6 +102,7 @@
         if (leaving) dropControl();
         else controlStatus.textContent = L.manualEnabled;
       } else {
+        zoomWanted = null;
         const previous = lease; lease = ''; held = null; refreshControls();
         if (previous) await controlRequest('release', previous);
         controlStatus.textContent = L.manualDisabled;
@@ -125,7 +128,7 @@
       controlStatus.textContent = message || L.commandSent;
       // Refresh before the 180 ms manual pulse and 150 ms native watchdog.
       // Keep requests serialized; a slow or throttled browser stops safely.
-      await new Promise(resolve => window.setTimeout(resolve, 50));
+      await new Promise(resolve => window.setTimeout(resolve, action === 'zoom' ? 100 : 50));
       return lease === previous;
     } catch (error) {
       // A rejected zoom/command is not a lost lease. Stop any held direction;
@@ -152,8 +155,9 @@
   zoom.addEventListener('input', () => {
     ++zoomGeneration;
     zoomValue.textContent = Number(zoom.value).toFixed(1) + 'x';
+    if (asyncZoom) submitZoom();
   });
-  zoom.addEventListener('change', async () => {
+  const submitZoom = async () => {
     ++zoomGeneration;
     zoomWanted = Number(zoom.value).toFixed(1);
     if (zoomPending) return;
@@ -170,7 +174,10 @@
       ++zoomGeneration;
       zoomPending = false;
     }
-  });
+  };
+  // A committed change repeats the final input event. Synchronous cameras
+  // wait for that commit; asynchronous cameras already received the target.
+  zoom.addEventListener('change', () => { if (!asyncZoom) submitZoom(); });
   let attitudePending = false;
   const attitudeUnavailable = message => {
     attitudeRoll.textContent = attitudePitch.textContent = attitudeYaw.textContent = '—';

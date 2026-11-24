@@ -5,12 +5,12 @@
 #include <cerrno>
 #include <cstring>
 namespace ca_zt30 {
-// Requests cross from media controls to the sole MCU UART owner. Lens motor
-// pulses are bounded, separated by feedback settling, and stopped on stale
-// telemetry, target crossing, timeout, cancellation or application shutdown.
+// Requests cross from media controls to the sole MCU UART owner. Run the lens
+// continuously during a long move; pulse near the target to let feedback
+// settle. Stop on stale telemetry, crossing, timeout, cancellation or shutdown.
 class OpticalZoom {
 public:
-    void reset() { std::lock_guard<std::mutex> g(lock);target=last_observed=NAN;wire=previous=blocked=0;deadline=pulse_end=cooldown=progress=0; }
+    void reset() { std::lock_guard<std::mutex> g(lock);target=last_observed=NAN;wire=previous=blocked=0;deadline=pulse_end=cooldown=progress=last_sent=0; }
     bool request(float value,uint64_t now) {
         if(!std::isfinite(value) || value<1 || value>30)return false;
         std::lock_guard<std::mutex> g(lock);
@@ -24,6 +24,9 @@ public:
     }
     void cancel() { std::lock_guard<std::mutex> g(lock);target=NAN; }
     int current() const { std::lock_guard<std::mutex> g(lock);return wire; }
+    // The module stops a single direction command after a short move. Refresh
+    // it while driving, rather than alternating explicit stop/start pulses.
+    bool refresh_due(uint64_t now) const { std::lock_guard<std::mutex> g(lock);return wire && now-last_sent>=80; }
     bool active() const { std::lock_guard<std::mutex> g(lock);return std::isfinite(target) || wire; }
     int wanted(float observed,uint64_t now) {
         std::lock_guard<std::mutex> g(lock);
@@ -40,14 +43,21 @@ public:
         const float error=target-observed;
         const float tolerance=target==1 || target==30 ? .01f:.05f;
         if(std::isfinite(target) && (std::fabs(error)<=tolerance || (previous && error*previous<0)))target=NAN;
-        if(wire)return std::isfinite(target) && error*wire>0 && now<pulse_end ? wire:0;
+        if(wire) {
+            if(!std::isfinite(target) || error*wire<=0)return 0;
+            // Pausing every 120 ms makes a long optical sweep unnecessarily
+            // slow and visibly jerky. Scale the approach distance with zoom:
+            // a fixed 1x margin makes the entire 1x -> 2x move pulse slowly.
+            if(std::fabs(error)>std::max(.1f,target*.1f))pulse_end=now+120;
+            return now<pulse_end ? wire:0;
+        }
         if(!std::isfinite(target) || now<cooldown)return 0;
         pulse_end=now+120;
         previous=error>0?1:-1;return previous;
     }
     void sent(int value,uint64_t now) {
         std::lock_guard<std::mutex> g(lock);
-        wire=value;if(!wire)cooldown=now+140;
+        wire=value;last_sent=now;if(!wire)cooldown=now+140;
     }
 private:
     mutable std::mutex lock;
@@ -57,22 +67,9 @@ private:
     int blocked=0;
     float blocked_observed=NAN;
     uint64_t deadline=0,pulse_end=0,cooldown=0;
-    uint64_t progress=0;
+    uint64_t progress=0,last_sent=0;
 };
 inline OpticalZoom &optical_zoom() { static OpticalZoom value;return value; }
-
-// Optical feedback can lag while a digital crop is already applied. Preserve
-// the direction of combined zoom: reduce digital magnification before moving
-// the lens outward, and retain it while driving the lens inward.
-inline void zoom_targets(float combined,float observed,float digital,float &optical,float &crop) {
-    optical=std::min(combined,30.0f);crop=std::max(1.0f,combined/30);
-    if(!std::isfinite(observed))return; // Absolute requests may queue before feedback.
-    if(combined<observed*digital) {
-        optical=std::min(combined,observed);crop=combined/optical;
-    } else {
-        optical=std::min(30.0f,combined/digital);crop=std::max(digital,combined/30);
-    }
-}
 
 inline bool zoom_crop(float factor,Rect &crop) {
     if(!std::isfinite(factor) || factor<1 || factor>6)return false;

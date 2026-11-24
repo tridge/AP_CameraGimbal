@@ -368,16 +368,13 @@ public:
     int set_zoom(float value) override { return set_lens_zoom(CA_MEDIA_LENS_ZOOM,value); }
     int set_lens_zoom(enum ca_media_lens selected,float value) override {
         if(selected==CA_MEDIA_LENS_WIDE && value==1)return 0;
-        if(selected!=CA_MEDIA_LENS_ZOOM || !std::isfinite(value) || value<1 || value>180) { errno=EINVAL;return -1; }
-        // Reject a stalled combined request before changing the digital crop;
-        // partial success would silently leave the requested zoom unmet.
+        if(selected!=CA_MEDIA_LENS_ZOOM || !std::isfinite(value) || value<1 || value>APCAM_ZOOM_MAX) { errno=EINVAL;return -1; }
         const uint64_t now_ms=monotonic_ns()/1000000;
-        float optical,crop;
-        zoom_targets(value,zoom_feedback().get(now_ms),context->digital_zoom.get(),optical,crop);
-        if(!optical_zoom().request(optical,now_ms)) { errno=EBUSY;return -1; }
+        if(!optical_zoom().request(value,now_ms)) { errno=EBUSY;return -1; }
         unsigned ports=2U|8U|(context->photo_opened?1U:0U)|
             (context->external_main?4U:0U)|(context->external_sub?16U:0U);
-        if(context->digital_zoom.set(crop,ports)) {
+        // Always use the full sensor: the public ZT30 range is optical only.
+        if(context->digital_zoom.set(1,ports)) {
             optical_zoom().cancel();
             ca_log("ZT30 digital zoom crop failed errno=%d",errno);
             if(errno==EOWNERDEAD)_exit(28);
@@ -387,7 +384,7 @@ public:
         context->zoom_command=value;
         if(now_ms>=context->next_zoom_log_ms) {
             context->next_zoom_log_ms=now_ms+1000;
-            ca_log("ZT30 zoom target %.1fx optical %.1fx digital %.3fx",value,optical,context->digital_zoom.get());
+            ca_log("ZT30 optical zoom target %.1fx",value);
         }
         return 0;
     }

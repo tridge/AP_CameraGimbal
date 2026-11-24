@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 
-def browser_check(page, script, setup, checks, name):
+def browser_check(page, script, setup, checks, name, script_attributes=''):
     browser = shutil.which('google-chrome') or shutil.which('chromium')
     if not browser:
         print('SKIP live/language browser regression: Chrome not installed')
@@ -26,7 +26,7 @@ def browser_check(page, script, setup, checks, name):
           try { CHECKS; out.textContent='PASS NAME'; }
           catch(error) { out.textContent='FAIL NAME: '+error.stack; }
         })();</script>'''.replace('CHECKS', checks).replace('NAME', name)
-        document = document.replace('</body>', '<script>'+setup+'</script><script data-csrf="test">'+
+        document = document.replace('</body>', '<script>'+setup+'</script><script data-csrf="test" '+script_attributes+'>'+
                                     script.decode()+'</script>'+result+'</body>')
         fixture = root/'test.html'; fixture.write_text(document)
         if os.environ.get('WEB_BROWSER_EVIDENCE'):
@@ -109,6 +109,32 @@ assert(sessionStorage.getItem('camera.live.rate')==='23','manual rate preference
 """
 
 
+LIVE_ASYNC_CHECKS = r"""
+const zoom=document.getElementById('live-zoom'), enable=document.getElementById('manual-enable');
+enable.checked=true;enable.dispatchEvent(new Event('change'));
+await wait(()=>!enable.disabled && !zoom.disabled);
+zoom.dispatchEvent(new Event('pointerdown'));
+const input=n=>{zoom.value=n;zoom.dispatchEvent(new Event('input'));};
+input(9);
+await wait(()=>fixture.calls.some(c=>c[0]==='zoom'));
+assert(fixture.calls.find(c=>c[0]==='zoom')[1]==='9.0','drag did not submit without release');
+input(7);input(5);zoom.dispatchEvent(new Event('change'));
+await wait(()=>fixture.zoom===5);await sleep(300);
+zoom.dispatchEvent(new Event('change'));await sleep(200);
+assert(fixture.calls.filter(c=>c[0]==='zoom').map(c=>c[1]).join(',')==='9.0,5.0','drag requests did not coalesce or release repeated the command');
+// Feedback or a cancelled move can leave the lens short of the last target.
+// A new gesture to that same target must still send a new command.
+fixture.zoom=4.9;input(5);
+await wait(()=>fixture.calls.filter(c=>c[0]==='zoom').length===3);
+await wait(()=>fixture.zoom===5);
+assert(fixture.calls.filter(c=>c[0]==='zoom')[2][1]==='5.0','same target could not be retried');
+assert(enable.checked,'dragging lost the manual lease');
+window.dispatchEvent(new Event('pointerup'));
+enable.checked=false;enable.dispatchEvent(new Event('change'));
+await wait(()=>zoom.disabled);
+"""
+
+
 LOGIN_CHECKS = r"""
 const select=document.getElementById('lang-login'), previous=select.value;
 const username=document.getElementById('username'), password=document.getElementById('password');
@@ -143,6 +169,9 @@ assert(nav.form.elements.namedItem('lang').value===other,'translated label chang
 
 def check_live_browser(page, script, language):
     browser_check(page, script, LIVE_SETUP, LIVE_CHECKS, 'live control '+language)
+    if language == 'en':
+        browser_check(page, script, LIVE_SETUP.replace('setTimeout(resolve,2000)', 'setTimeout(resolve,80)'),
+                      LIVE_ASYNC_CHECKS, 'asynchronous live zoom', 'data-zoom-async="1"')
 
 
 def check_language_browser(page, script, language):

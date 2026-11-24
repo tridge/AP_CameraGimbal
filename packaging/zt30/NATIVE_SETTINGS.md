@@ -22,16 +22,16 @@ Thermal palette and raw streaming/recording rates also apply live.
 ## Zoom
 
 The Live page's zoom slider is available after enabling manual controls. Select
-Zoom RGB to view the zoom lens. Values from 1× to 30× move the optical lens;
-values above 30× add up to 6× digital zoom, for 180× combined zoom. The displayed
-value follows measured lens feedback and the applied digital crop while the
-lens moves. A large optical change can take around 20 seconds.
+Zoom RGB to view the zoom lens. The range is 1×–30×, using optical zoom only.
+Dragging the slider updates the target while the lens moves; the displayed
+value follows measured lens feedback.
 
-Digital zoom crops the zoom sensor's browser, RTSP, recording and JPEG outputs.
-The wide sensor and raw thermal plane retain their original view. Lens motion
-uses bounded pulses with explicit stops and stops on stale feedback, lack of
-progress, timeout or shutdown. Bench tests cover 1×, 30×, 60× and 180×, including
-returning to 1×. Focus actuation and autofocus after zoom remain unqualified.
+Large optical moves run continuously with direction commands refreshed every
+80 ms, with short pulses and settling near the target. The approach distance
+scales with zoom so low-end moves also run smoothly. Motion stops on stale
+feedback, lack of progress, target crossing,
+timeout or shutdown. The wide sensor and raw thermal plane retain their
+original view. Focus actuation and autofocus after zoom remain unqualified.
 
 ## Field of view
 
