@@ -32,7 +32,7 @@ case "$backend" in
         orientation=${ZT30_SITL_ORIENTATION:-upright}
         video1="$build/rgb.h264"
         video2="$build/thermal.h264"
-        build_hint="make zt30_sitl"
+        build_hint="make sitl CAMERA=zt30"
         ;;
     a8)
         build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/a8-sitl}
@@ -47,7 +47,7 @@ case "$backend" in
         orientation=${A8_SITL_ORIENTATION:-upright}
         video1="$build/main.h264"
         video2="$build/sub.h264"
-        build_hint="make a8_sitl"
+        build_hint="make sitl CAMERA=a8"
         ;;
     zr10)
         build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/zr10-sitl}
@@ -62,7 +62,7 @@ case "$backend" in
         orientation=${ZR10_SITL_ORIENTATION:-upright}
         video1="$build/main.h264"
         video2="$build/sub.h264"
-        build_hint="make zr10_sitl"
+        build_hint="make sitl CAMERA=zr10"
         ;;
     z1mini)
         build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/z1mini-sitl}
@@ -77,7 +77,7 @@ case "$backend" in
         orientation=${Z1MINI_SITL_ORIENTATION:-upright}
         video1="$build/main.h264"
         video2="$build/sub.h264"
-        build_hint="make z1mini_sitl"
+        build_hint="make sitl CAMERA=z1mini"
         ;;
     *)
         echo "unsupported SITL backend: $backend" >&2

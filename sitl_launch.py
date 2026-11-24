@@ -204,9 +204,8 @@ class SimulatorPanel(QtWidgets.QWidget):
         self.web_button.setEnabled(False)
         self.set_controls(False)
         backend = self.camera.currentData()
-        target = 'sitl' if backend == 'mt11' else backend + '_sitl'
         variable = 'SITL_BUILD' if backend == 'mt11' else backend.upper() + '_SITL_BUILD'
-        self.build_command = ['make', target, f'{variable}={build}']
+        self.build_command = ['make', 'sitl', f'CAMERA={backend}', f'{variable}={build}']
         try:
             port = int(self.env.get(f'{backend.upper()}_SITL_WEB_PORT', '8081'))
             if not 1 <= port <= 65535:

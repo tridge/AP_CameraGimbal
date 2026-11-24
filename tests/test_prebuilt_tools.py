@@ -69,7 +69,6 @@ class PrebuiltTools(unittest.TestCase):
         shutil.copyfile(ROOT / 'Makefile', repo / 'Makefile')
         (repo / 'tools').mkdir(exist_ok=True)
         shutil.copyfile(ROOT / 'tools/build.mk', repo / 'tools/build.mk')
-        shutil.copyfile(ROOT / 'tools/zt30_stream.mk', repo / 'tools/zt30_stream.mk')
         shutil.copyfile(ROOT / 'tools/prebuilt_mt11_tools.py', repo / 'tools/prebuilt_mt11_tools.py')
         shutil.copytree(tools.BUNDLE, repo / 'packaging/mt11/tools')
         commands = self.root / 'commands'
@@ -80,7 +79,7 @@ class PrebuiltTools(unittest.TestCase):
         for name in ('MAKEFLAGS', 'MFLAGS', 'MAKELEVEL', 'DEPS_ROOT', 'MT11_TOOLS_ROOT'):
             env.pop(name, None)
         env['PATH'] = str(commands)
-        subprocess.run(['make', '-j4', 'mt11_tools', 'MT11_VERSION=v1.0',
+        subprocess.run(['make', '-j4', '_mt11_tools', 'MT11_VERSION=v1.0',
                         'MT11_GIT_HASH=123456', 'ZR10_BUILD_HASH=123456',
                         'Z1MINI_BUILD_HASH=123456', 'CROSS_COMPILE=missing-compiler-'],
                        cwd=repo, env=env, check=True)

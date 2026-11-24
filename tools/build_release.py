@@ -11,14 +11,14 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-# These are packaging entry points and bootloader filenames; hardware
+# These are the per-camera make targets and bootloader filenames; hardware
 # capabilities remain in include/apcam/target_*.h.
 TARGETS = {
-    'A8': ('SIYI', 'a8_package', 'A8_PACKAGE_OUT', 'SIYI_4K_MINI_UpgradeSD.bin'),
-    'MT11': ('SIYI', 'mt11_package', 'MT11_PACKAGE_OUT', 'MT11_FW_ArduPilot_{version}_{short_revision}.bin'),
-    'ZR10': ('SIYI', 'zr10_firmware', 'ZR10_FIRMWARE_OUT', 'ZR10_UpgradeSD.bin'),
-    'ZT30': ('SIYI', 'zt30_firmware', 'ZT30_FIRMWARE_OUT', 'SIYI_ZT30_UpgradeSD.bin'),
-    'Z1-Mini': ('XFRobot', 'z1mini_native_package', 'Z1MINI_NATIVE_PACKAGE_OUT', 'Z1Mini_AP_native_{version}_{short_revision}.gcu'),
+    'A8': ('SIYI', 'a8', 'A8_PACKAGE_OUT', 'SIYI_4K_MINI_UpgradeSD.bin'),
+    'MT11': ('SIYI', 'mt11', 'MT11_PACKAGE_OUT', 'MT11_FW_ArduPilot_{version}_{short_revision}.bin'),
+    'ZR10': ('SIYI', 'zr10', 'ZR10_FIRMWARE_OUT', 'ZR10_UpgradeSD.bin'),
+    'ZT30': ('SIYI', 'zt30', 'ZT30_FIRMWARE_OUT', 'SIYI_ZT30_UpgradeSD.bin'),
+    'Z1-Mini': ('XFRobot', 'z1mini', 'Z1MINI_NATIVE_PACKAGE_OUT', 'Z1Mini_AP_native_{version}_{short_revision}.gcu'),
 }
 
 

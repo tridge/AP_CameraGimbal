@@ -40,7 +40,7 @@ else ifeq ($(ZT30_DEV_BUILD),1)
 TARGET := build/zt30-dev/camera-app
 else
 ifneq ($(filter all $(TARGET),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
-$(error ZT30 native backend is not qualified yet; use make zt30_sitl at the repository root)
+$(error ZT30 native backend is not qualified yet; use make sitl CAMERA=zt30 at the repository root)
 endif
 endif
 endif
