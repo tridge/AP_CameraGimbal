@@ -94,15 +94,51 @@ const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
 export class PoseTimeline {
   constructor() {
     this.samples = [];
+    // a live stream's later publisher epochs, which may repeat or rewind UTC
+    this.epochs = new Map();
+  }
+  /** The timeline of one publisher epoch; files have only this one. */
+  scope(epoch) {
+    if (!epoch) return this;
+    let timeline = this.epochs.get(epoch);
+    if (!timeline) this.epochs.set(epoch, (timeline = new PoseTimeline()));
+    return timeline;
   }
   rebuild(frames) {
-    this.samples = frames
-      .filter((f) => finite(f.telemetry?.utc_us))
-      .map((f) => ({ utc: f.telemetry.utc_us, record: f.telemetry }))
-      .sort((a, b) => a.utc - b.utc);
-    // Repeated labels are not invented subsecond exposure dates. Keep one pose
-    // per label, retaining the first sample rather than blending unrelated data.
-    this.samples = this.samples.filter((s, i, a) => !i || s.utc !== a[i - 1].utc);
+    this.samples = [];
+    this.epochs.clear();
+    const groups = new Map();
+    for (const f of frames) {
+      if (!finite(f.telemetry?.utc_us)) continue;
+      const epoch = f.epoch || 0;
+      if (!groups.has(epoch)) groups.set(epoch, []);
+      groups.get(epoch).push({ utc: f.telemetry.utc_us, record: f.telemetry });
+    }
+    for (const [epoch, samples] of groups) {
+      samples.sort((a, b) => a.utc - b.utc);
+      // Repeated labels are not invented subsecond exposure dates. Keep one pose
+      // per label, retaining the first sample rather than blending unrelated data.
+      this.scope(epoch).samples = samples.filter((s, i, a) => !i || s.utc !== a[i - 1].utc);
+    }
+  }
+  /** Adds later frames without a full rebuild; false if their UTC is not after what is held. */
+  extend(frames) {
+    const more = new Map();
+    for (const f of frames) {
+      const utc = f.telemetry?.utc_us,
+        timeline = this.scope(f.epoch);
+      if (!finite(utc)) continue;
+      if (!more.has(timeline)) more.set(timeline, []);
+      const added = more.get(timeline),
+        last = added.at(-1)?.utc ?? timeline.samples.at(-1)?.utc ?? -Infinity;
+      if (utc === last) continue;
+      if (utc < last) return false;
+      added.push({ utc, record: f.telemetry });
+    }
+    // new arrays, as cached projection fits are keyed on them
+    for (const [timeline, added] of more)
+      if (added.length) timeline.samples = timeline.samples.concat(added);
+    return true;
   }
   at(utc, original, unshifted = false) {
     if (unshifted) return original;

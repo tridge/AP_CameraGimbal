@@ -8,6 +8,7 @@ import { sourceKind, splatUnavailable, timingCorrected } from './domain/splat-re
 import { projectionPose } from './domain/projection-pose.js';
 import { videoInformation, metadataJSON } from './domain/video-info.js';
 import { LocalSource } from './media/local-source.js';
+import { LiveSource, parseLiveUrl } from './media/live-source.js';
 import {
   downloadFile,
   handOver,
@@ -51,6 +52,7 @@ const state = {
   source: null,
   file: null,
   sourceUrl: null,
+  live: null,
   decoder: null,
   frames: [],
   frame: null,
@@ -131,10 +133,13 @@ function refreshVideoInformation() {
 }
 function queueVideoInformation() {
   if (!$('video-info-dialog').open || videoInfoRefresh !== null) return;
-  videoInfoRefresh = setTimeout(() => {
-    videoInfoRefresh = null;
-    if (!state.closed && $('video-info-dialog').open) refreshVideoInformation();
-  }, 250);
+  videoInfoRefresh = setTimeout(
+    () => {
+      videoInfoRefresh = null;
+      if (!state.closed && $('video-info-dialog').open) refreshVideoInformation();
+    },
+    liveNow() ? 1000 : 250,
+  );
 }
 function terrainChanged() {
   if (terrainRefresh !== null) return;
@@ -248,6 +253,8 @@ function syncFrameNavigation() {
     : 'Frame —';
 }
 function fileKey() {
+  // a live recording grows and is renamed when it ends; its stream and start identify it
+  if (state.live) return `fire-review:live:${state.live.url}:${state.live.started}`;
   return reviewKey(state.file, state.sourceUrl);
 }
 function nameOf(record, key) {
@@ -282,7 +289,9 @@ function alignedRecord(frame = state.frame) {
   }
   const seconds = frame.pts - state.origin,
     utc = correctedUtc(seconds, record.utc_us, state.offset, state.anchors);
-  const result = poseTimeline.at(utc, record, state.offset === 0 && !state.anchors.length);
+  const result = poseTimeline
+    .scope(frame.epoch)
+    .at(utc, record, state.offset === 0 && !state.anchors.length);
   return result ? { ...result, hfov_deg: record.hfov_deg, hfov_source: record.hfov_source } : null;
 }
 function projectedRecord(record = alignedRecord()) {
@@ -290,16 +299,20 @@ function projectedRecord(record = alignedRecord()) {
     poseTimeline.rebuild(state.frames);
     state.dirtyPose = false;
   }
-  return projectionPose(record, poseTimeline, state.projectionYawSeconds);
+  return projectionPose(record, poseTimeline.scope(state.frame?.epoch), state.projectionYawSeconds);
 }
 function updateVideoTrack() {
   if (!map) return;
   if (splatPanel.active) return splatPanel.poseChanged();
-  const generation = state.generation;
-  $('map-track-hint').textContent = 'Updating video track…';
-  const pending = map.setVideoTrack(state.frames, (frame) => alignedRecord(frame));
+  const generation = state.generation,
+    live = liveNow();
+  // a live track is replaced about once a second; keep the old one clickable meanwhile
+  if (!live) $('map-track-hint').textContent = 'Updating video track…';
+  const pending = map.setVideoTrack(state.frames, (frame) => alignedRecord(frame), {
+    keepPicking: live,
+  });
   const controller = map.trackController;
-  pending
+  return pending
     .then((applied) => {
       if (!applied || generation !== state.generation || controller !== map.trackController) return;
       $('map-track-hint').textContent = map.trackLimited
@@ -367,7 +380,11 @@ function extent() {
 }
 function videoIndexSummary() {
   const format = state.source?.format?.toUpperCase() || 'VIDEO';
-  const percent = !state.indexed || state.indexFailed ? `${state.indexPercent}% · ` : '';
+  const percent = liveNow()
+    ? 'LIVE · '
+    : !state.indexed || state.indexFailed
+      ? `${state.indexPercent}% · `
+      : '';
   $('video-format').textContent =
     `${format} · ${percent}${state.frames.length.toLocaleString()} frames${state.indexFailed ? ' · incomplete' : ''}`;
   queueVideoInformation();
@@ -422,6 +439,8 @@ function saveReview() {
 function pause() {
   state.playEpoch++;
   state.playing = false;
+  if (state.live) state.live.following = false;
+  syncLive();
   $('play').textContent = 'Play';
   $('play').setAttribute('aria-label', 'Play video');
   thermalWorkbench.activity();
@@ -440,7 +459,150 @@ function pause() {
     }
   });
 }
-async function openVideo(file, sourceUrl = null) {
+// Live streams: state.live = {url, password, started, following, bytes, finalised}.
+// The recording is live until End live (or a terminal error) makes it an indexed file.
+const liveNow = () => !!state.live && !state.indexed;
+const liveTrack = { timer: null, busy: false, wanted: false, ended: 0, ms: 0 };
+// One track build at a time, no more often than each second or four times the last build.
+function queueLiveTrack() {
+  if (liveTrack.busy || liveTrack.timer !== null) {
+    liveTrack.wanted = true;
+    return;
+  }
+  const wait = Math.max(1000, 4 * liveTrack.ms) - (performance.now() - liveTrack.ended);
+  liveTrack.timer = setTimeout(
+    async () => {
+      liveTrack.timer = null;
+      liveTrack.busy = true;
+      liveTrack.wanted = false;
+      const started = performance.now();
+      try {
+        await updateVideoTrack();
+      } finally {
+        liveTrack.busy = false;
+        liveTrack.ended = performance.now();
+        liveTrack.ms = liveTrack.ended - started;
+        if (liveTrack.wanted && liveNow()) queueLiveTrack();
+      }
+    },
+    Math.max(0, wait),
+  );
+}
+function syncLive() {
+  const live = state.live,
+    source = live && state.source;
+  $('live-bar').hidden = !live;
+  if (!live || !source) return;
+  const now = liveNow(),
+    newest = state.frames.at(-1),
+    following = now && live.following && state.playing,
+    behind = newest && state.frame ? newest.pts - state.frame.pts : 0,
+    go = $('go-live');
+  go.hidden = !now;
+  go.classList.toggle('on-air', following && source.state === 'live');
+  go.textContent = following ? '● LIVE' : `Go live${behind >= 1 ? ' · −' + clock(behind) : ''}`;
+  go.title = following ? 'Showing the newest frame' : 'Jump to the newest frame';
+  $('live-end').hidden = !now;
+  $('live-save').disabled = !state.frames.length;
+  const parts = [];
+  if (!now) parts.push('Live ended');
+  else if (source.state === 'live') parts.push(`Live from ${live.url.host}`);
+  else
+    parts.push(
+      { connecting: 'Connecting', waiting: 'Waiting for the camera', reconnecting: 'Reconnecting' }[
+        source.state
+      ] || source.state,
+    );
+  if (now && source.detail) parts.push(source.detail);
+  parts.push(`${((live.bytes || 0) / 1e6).toFixed(1)} MB received`);
+  if (now && newest) {
+    const quiet = (Date.now() - newest.received) / 1000,
+      lag = (Date.now() - newest.telemetry?.utc_us / 1000) / 1000;
+    if (quiet > 3) parts.push(`no frame for ${Math.round(quiet)} s`);
+    // only meaningful if the camera's clock is set
+    else if (Math.abs(lag) < 3600) parts.push(`camera clock ${lag.toFixed(1)} s behind this one`);
+  }
+  if (source.persistent === false) parts.push('kept in memory (no browser file storage)');
+  $('live-status').textContent = parts.join(' · ');
+  if (now) status(parts.join(' · '));
+  videoIndexSummary();
+}
+setInterval(() => {
+  if (liveNow()) syncLive();
+}, 1000);
+function openLive(text, password = null) {
+  let parsed;
+  try {
+    parsed = parseLiveUrl(text, location.href);
+  } catch (e) {
+    error(e);
+    return;
+  }
+  cancelDownload('video');
+  const live = {
+    url: parsed.url,
+    password: password || null,
+    started: Date.now(),
+    following: true,
+    bytes: 0,
+    finalised: false,
+  };
+  // name and time are set from the source; size stays 0 while the recording grows
+  const promise = openVideo(
+    { name: 'live', size: 0, lastModified: 0, type: 'video/x-matroska' },
+    null,
+    live,
+  );
+  releaseOwned('video');
+  return promise.catch(error);
+}
+function goLive() {
+  if (!liveNow()) return;
+  state.live.following = true;
+  if (!state.playing) play();
+  syncLive();
+}
+// Stops receiving and turns what was recorded into an ordinary indexed recording.
+async function endLive() {
+  const live = state.live,
+    own = state.generation;
+  if (!live || live.finalised) return;
+  live.finalised = true;
+  live.following = false;
+  let file = null;
+  try {
+    file = await state.source.end();
+  } catch (e) {
+    if (own === state.generation) error(e);
+  }
+  if (own !== state.generation) return;
+  if (file && state.frames.length) state.file = file;
+  state.indexed = true;
+  $('index-progress').hidden = true;
+  updateVideoTrack();
+  $('seek').max = extent();
+  $('duration').textContent = clock(extent());
+  syncFrameNavigation();
+  syncSplatButton();
+  syncLive();
+  status(
+    `Live ended · ${state.frames.length.toLocaleString()} frames recorded · ${state.frames.length ? 'ready for review' : 'nothing was received'}`,
+  );
+}
+async function saveLive() {
+  try {
+    const file = state.file instanceof File ? state.file : await state.source.snapshot(),
+      url = URL.createObjectURL(file),
+      a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 600000);
+  } catch (e) {
+    error(e);
+  }
+}
+async function openVideo(file, sourceUrl = null, live = null) {
   if (!file) return;
   pause();
   projectionScheduler.reset();
@@ -449,11 +611,21 @@ async function openVideo(file, sourceUrl = null) {
   const own = state.generation;
   state.controller?.abort();
   state.decoder?.close();
-  state.source?.close();
+  const held = handoverHolds.get(state.file);
+  if (held?.live) {
+    // WebSplat is still copying the ended recording: keep its storage until it has
+    const old = state.source;
+    held.closeLive = () => old.close();
+  } else state.source?.close();
   state.decoder = null;
   state.source = null;
   state.file = file;
   state.sourceUrl = sourceUrl;
+  state.live = live;
+  clearTimeout(liveTrack.timer);
+  liveTrack.timer = null;
+  liveTrack.wanted = false;
+  poseTimeline.rebuild([]);
   state.origin = null;
   state.pendingReviewSave = false;
   $('anchors-button').disabled = true;
@@ -468,6 +640,8 @@ async function openVideo(file, sourceUrl = null) {
   state.image = null;
   videoViewport.reset();
   $('frame-input').value = '';
+  $('seek').value = 0;
+  $('elapsed').textContent = $('duration').textContent = clock(0);
   syncFrameNavigation();
   state.contrastUnits = null;
   state.contrastMode = 'auto';
@@ -482,7 +656,7 @@ async function openVideo(file, sourceUrl = null) {
   state.decoding = false;
   state.warnings = [];
   state.timeQuality = null;
-  state.dirtyPose = true;
+  state.dirtyPose = !live;
   $('palette').value = 'Original';
   $('stretch').value = 'auto';
   $('display-gamma').value = '2';
@@ -500,7 +674,9 @@ async function openVideo(file, sourceUrl = null) {
   $('source-name').textContent = file.name;
   $('video-info').disabled = false;
   queueVideoInformation();
-  $('video-format').textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · 0% · 0 frames`;
+  $('video-format').textContent = live
+    ? 'LIVE · 0 frames'
+    : `${(file.size / 1024 / 1024).toFixed(1)} MB · 0% · 0 frames`;
   clearErrors('log');
   for (const id of ['seek', 'previous', 'next', 'play', 'scan-peaks']) $(id).disabled = true;
   syncMarkFinding();
@@ -538,26 +714,36 @@ async function openVideo(file, sourceUrl = null) {
   $('rotation').value = String(state.rotation);
   $('offset').value = state.offset;
   renderFindings();
-  status(`Opening ${file.name} locally…`);
+  status(live ? `Connecting to ${live.url.host}…` : `Opening ${file.name} locally…`);
   let restoredOrigin = false;
-  $('index-progress').hidden = false;
+  $('index-progress').hidden = !!live;
   $('index-progress').value = 0;
-  state.source = new LocalSource(file, {
+  syncLive();
+  const handlers = {
+    onLive: () => {
+      if (own === state.generation) syncLive();
+    },
     onStatus: (text) => {
       if (own === state.generation) status(text);
     },
     onBatch: (batch) => {
       if (own !== state.generation) return;
       state.frames.push(...batch.frames);
-      state.frames.sort((a, b) => a.pts - b.pts || a.id - b.id);
-      if (state.frame)
-        state.number = Math.max(
-          0,
-          state.frames.findIndex((f) => f.id === state.frame.id),
-        );
-      if (state.requestedFrameId !== null)
-        state.requestedNumber = state.frames.findIndex((f) => f.id === state.requestedFrameId);
-      state.dirtyPose = true;
+      if (live) {
+        // live frames arrive in presentation order with id equal to index: nothing moves
+        live.bytes = batch.progress.bytes;
+        if (!state.dirtyPose && !poseTimeline.extend(batch.frames)) state.dirtyPose = true;
+      } else {
+        state.frames.sort((a, b) => a.pts - b.pts || a.id - b.id);
+        if (state.frame)
+          state.number = Math.max(
+            0,
+            state.frames.findIndex((f) => f.id === state.frame.id),
+          );
+        if (state.requestedFrameId !== null)
+          state.requestedNumber = state.frames.findIndex((f) => f.id === state.requestedFrameId);
+        state.dirtyPose = true;
+      }
       if (!state.decoder && state.frames.length) {
         const track = state.source.tracks.find((t) => t.id === state.frames[0].trackId);
         state.origin = finite(track?.presentationStart) ? 0 : state.frames[0].pts;
@@ -590,7 +776,7 @@ async function openVideo(file, sourceUrl = null) {
       for (const warning of batch.warnings || [])
         if (!state.warnings.includes(warning)) state.warnings.push(warning);
       inspectClockLabels(batch.frames);
-      progress(batch);
+      if (!live) progress(batch);
       $('seek').max = extent();
       $('duration').textContent = clock(extent());
       syncFrameNavigation();
@@ -613,8 +799,18 @@ async function openVideo(file, sourceUrl = null) {
             state.warnings.push(
               'Opening at the first decodable frame; earlier frames lack a keyframe',
             );
-          showFrame(first).catch(error);
+          showFrame(first, { follow: true })
+            .then(() => {
+              // a live stream starts playing at its newest frame
+              if (own === state.generation && live?.following && !state.playing) play();
+            })
+            .catch(error);
         }
+      }
+      if (live) {
+        queueLiveTrack();
+        syncLive();
+        return;
       }
       if (performance.now() - state.lastTrack > 1200) {
         state.lastTrack = performance.now();
@@ -645,7 +841,11 @@ async function openVideo(file, sourceUrl = null) {
       );
     },
     onError: (e) => {
-      if (own === state.generation) {
+      if (own === state.generation && live) {
+        // capture has stopped for good; what was received becomes an ordinary recording
+        error(e);
+        endLive();
+      } else if (own === state.generation) {
         $('index-progress').hidden = true;
         state.indexed = true;
         state.indexFailed = true;
@@ -657,10 +857,20 @@ async function openVideo(file, sourceUrl = null) {
         if (state.frames.length) status('Playable prefix retained; file indexing stopped.');
       }
     },
-  });
+  };
+  state.source = live
+    ? new LiveSource(live.url, { ...handlers, password: live.password })
+    : new LocalSource(file, handlers);
+  if (live) {
+    file.name = state.source.name;
+    file.lastModified = live.started = state.source.started;
+    $('source-name').textContent = file.name;
+  }
 }
-async function showFrame(number) {
+async function showFrame(number, { follow = false } = {}) {
   if (!state.decoder || !state.frames.length) return;
+  // any other frame request leaves the live edge
+  if (state.live && !follow) state.live.following = false;
   number = Math.max(0, Math.min(state.frames.length - 1, number));
   if (state.frames[number].decodable === false) {
     const next = state.frames.findIndex((frame, i) => i >= number && frame.decodable !== false);
@@ -722,10 +932,13 @@ function presentFrame() {
   state.pendingFrame = null;
   state.frame = frame;
   state.decoded = decoded;
-  state.number = Math.max(
-    0,
-    state.frames.findIndex((f) => f.id === frame.id),
-  );
+  state.number =
+    state.frames[frame.id] === frame
+      ? frame.id
+      : Math.max(
+          0,
+          state.frames.findIndex((f) => f.id === frame.id),
+        );
   // the request stays outstanding until its frame is shown, so stepping counts from it
   if (state.requestedFrameId === frame.id) state.requestedNumber = state.requestedFrameId = null;
   state.peaks = [];
@@ -758,6 +971,7 @@ function presentFrame() {
   syncSplatButton();
   updateTelemetry();
   renderPeaks();
+  syncLive();
 }
 // A superseded follow seek can leave a frame pending once its analysis ends.
 function presentUndrawnFrame() {
@@ -1197,6 +1411,9 @@ async function markFinding() {
     frameId: state.frame.id,
     frameNumber: state.number,
     originalPts: state.frame.pts,
+    ...(state.live
+      ? { liveEpoch: state.frame.epoch, sourceTimestampTicks: state.frame.sourceTimestampTicks }
+      : {}),
     videoSeconds: state.frame.pts - state.origin,
     recordedUtcUs: record?.utc_us ?? null,
     poseUtcUs:
@@ -1392,16 +1609,36 @@ async function play() {
         frame = state.frame;
         played = 0;
       }
+      if (liveNow() && state.live.following) {
+        // at the live edge: show the newest frame as soon as there is one
+        if (state.frames.length - 1 > (state.requestedNumber ?? state.number)) break;
+        await new Promise((r) => setTimeout(r, 20));
+        if (!state.playing || playEpoch !== state.playEpoch) break;
+        continue;
+      }
       const next = state.frames[state.number + 1],
         known = next && frame && next.pts > frame.pts,
         hold = known ? next.pts - frame.pts : frameDuration(frame),
         wait = ((hold - played) / speed) * 1000;
       if ((state.indexed || !frame || next) && wait <= 0) break;
+      if (liveNow() && !next && wait <= 0) {
+        // playback from an earlier point has caught up with the stream
+        state.live.following = true;
+        syncLive();
+        continue;
+      }
       await new Promise((r) => setTimeout(r, wait > 0 ? Math.min(wait, 50) : 50));
       if (!state.playing || playEpoch !== state.playEpoch) break;
     }
     if (!state.playing || own !== state.generation || playEpoch !== state.playEpoch) break;
     const current = state.requestedNumber ?? state.number;
+    if (liveNow() && state.live.following) {
+      last = performance.now();
+      played = 0;
+      if (current < state.frames.length - 1)
+        await showFrame(state.frames.length - 1, { follow: true });
+      continue;
+    }
     if (current >= state.frames.length - 1) {
       if (state.indexed) {
         pause();
@@ -1524,6 +1761,12 @@ function holdDownload(file) {
     hold.count++;
     return hold;
   }
+  if (file === state.file && state.live) {
+    // an ended live recording's storage lives as long as its source
+    hold = { live: true, count: 1 };
+    handoverHolds.set(file, hold);
+    return hold;
+  }
   if (file !== state.file || !state.sourceUrl || !owned.video.release) return null;
   hold = { release: owned.video.release, count: 1 };
   owned.video.release = null;
@@ -1533,6 +1776,7 @@ function holdDownload(file) {
 function releaseDownload(file, hold) {
   if (!hold || --hold.count > 0) return;
   handoverHolds.delete(file);
+  if (hold.live) return hold.closeLive?.();
   if (file === state.file && !owned.video.release) owned.video.release = hold.release;
   else hold.release();
 }
@@ -1668,6 +1912,35 @@ $('log-file').onchange = (e) => {
   if (file) releaseOwned('log');
 };
 $('play').onclick = play;
+$('go-live').onclick = goLive;
+$('live-end').onclick = () => {
+  pause();
+  endLive();
+};
+$('live-save').onclick = saveLive;
+$('live-close').onclick = () => $('live-dialog').close();
+$('open-live').onclick = () => {
+  if (state.live) $('live-url').value = state.live.url.href;
+  $('live-dialog').showModal();
+};
+$('live-form').onsubmit = (event) => {
+  event.preventDefault();
+  const text = $('live-url').value,
+    password = $('live-password').value;
+  $('live-password').value = '';
+  $('live-dialog').close();
+  let same = false;
+  try {
+    same = liveNow() && parseLiveUrl(text).url.href === state.live.url.href;
+  } catch {
+    /* reported by openLive */
+  }
+  // the same stream: keep what has been received and reconnect with this password
+  if (same) {
+    state.live.password = password || null;
+    state.source.setPassword(password);
+  } else openLive(text, password);
+};
 $('previous').onclick = () => {
   pause();
   showFrame((state.requestedNumber ?? state.number) - 1);
@@ -1987,6 +2260,8 @@ window.fireViewer = {
   splatPanel,
   videoViewport,
   openVideo,
+  openLive,
+  endLive,
   openUrl,
   showFrame,
   loadLog,
@@ -2000,5 +2275,10 @@ window.fireViewer = {
   },
 };
 const params = new URLSearchParams(location.search);
-if (params.get('url')) openUrl('video', params.get('url'));
+if (params.get('live')) {
+  // #pw= is never sent to this site; drop it from the address bar once read
+  const password = new URLSearchParams(location.hash.slice(1)).get('pw');
+  if (password) history.replaceState(null, '', location.pathname + location.search);
+  openLive(params.get('live'), password);
+} else if (params.get('url')) openUrl('video', params.get('url'));
 if (params.get('log')) openUrl('log', params.get('log'));

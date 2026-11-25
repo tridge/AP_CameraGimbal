@@ -1141,3 +1141,23 @@ dialog details {
 .splat-status:empty {
   display: none;
 }
+.live-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.live-bar span {
+  flex: 1;
+  min-width: 0;
+}
+.live-bar button {
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+.go-live.on-air {
+  color: #fff;
+  background: #c62828;
+  border-color: #c62828;
+}
