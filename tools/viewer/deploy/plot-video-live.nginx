@@ -1,0 +1,19 @@
+# Include inside ONLY the plot.ardupilot.org HTTPS server block.
+# The live-stream test build of the video viewer; same layout as plot-video.nginx.
+location = /video-live {
+    return 301 /video-live/$is_args$args;
+}
+location = /video-live/viewer-config.js {
+    alias /data/sites/logviewer/video-live/shared/viewer-config.js;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}
+location ^~ /video-live/ {
+    alias /data/sites/logviewer/video-live/current/;
+    index index.html;
+    autoindex off;
+    gzip_static on;
+    gzip_vary on;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}

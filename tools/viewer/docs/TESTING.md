@@ -197,3 +197,22 @@ VIEWER_TEMPERATURE_VIDEO to a local raw thermal archive to compare its full
 frame-maximum range with the displayed range and check that hot samples remain
 visible on overlapping passes. This opt-in does not require a flight log or
 generate decoded-frame references.
+
+## Live streams
+
+`tests/media-live.test.js` covers the demuxer at every chunk split, parity of a
+recorded stream with the same bytes opened as a file, reconnects, publisher
+restarts, the rewritten Cluster header and the store. `tests/browser/live.spec.js`
+runs the page against a small WebSocket server standing in for a SupportProxy
+video port, built from the thermal fixture's FFV1 frames with a moving position.
+
+To test against a real proxy, give a SupportProxy entry a video slot and publish
+a recorded raw thermal MKV to it:
+
+```sh
+python3 tools/replay_raw_thermal.py RECORDING.mkv http://PROXY:PORT/v1.mkv \
+    --pw PUBLISH_PASSWORD --loop
+```
+
+then open `?live=wss://PROXY:PORT/` (`ws://` from an `http://localhost` page).
+A local build needs the proxy host in the CSP `connect-src` of `index.html`.

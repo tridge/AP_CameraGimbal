@@ -84,3 +84,10 @@ https://plot.ardupilot.org/quantized/.
 Validate from a distinct origin with no /quantized/ route, including a real
 browser preflight and decoded terrain tile; HTTP header checks alone do not
 prove the viewer's CSP or URL validation accepts the shared service.
+
+## plot.ardupilot.org/video-live
+
+The live-stream build is installed beside `/video/` with the same layout under
+`/data/sites/logviewer/video-live/`, built with `VIEWER_BASE_PATH=/video-live/`
+and served by `deploy/plot-video-live.nginx`. Its CSP `connect-src` lists each
+SupportProxy host a page may open as `wss://HOST:*`.

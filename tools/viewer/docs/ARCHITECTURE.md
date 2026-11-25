@@ -42,11 +42,30 @@ it to a dedicated single-thread FFmpeg worker. Only one output frame is retained
 the full recording never enters WASM memory. Both return either original gray16
 samples or display RGBA with an explicit kind, dimensions and source frame ID.
 
-Future source adapters should supply the same append-only batch notifications,
-tracks, stable frames and cancellable packet reads. A live source additionally
-needs a bounded ring with availability bounds, stream epochs, rewind semantics
-and transport/telemetry latency provenance. Do not make live transport code part
-of the map or temperature renderer.
+`LiveSource` is the second adapter, for a raw thermal stream relayed by
+SupportProxy. The page owns the WebSocket, so the page's CSP governs it, and
+transfers each message to `live.worker.js`. There `MatroskaLiveDemuxer` frames
+the prefix and complete Clusters (a partial Cluster is dropped with its
+connection), `LiveRecorder` turns connections into one recording, and
+`LiveStore` holds its bytes in immutable 8 MiB segments (OPFS files written
+through a sync access handle, or memory) plus an in-memory tail. Cluster
+contents are parsed by the same code as files, so telemetry matches. Frame
+offsets are positions in the stored recording: a snapshot of the store is a
+normal APCG Matroska file with the same index. Frames arrive in presentation
+order with id equal to index, which the live batch path relies on to avoid
+sorting and searching a long index. Nothing is evicted; when storage runs out
+capture stops and what was received stays readable.
+
+A connection whose first Cluster repeats the last one held is the relay's join
+point and is dropped. It continues the same epoch if its Tracks are identical
+and its timestamp advanced by about the wall-clock time since the last frame;
+otherwise a new epoch starts, placed after the frames held by the wall-clock
+gap, with its Cluster Timestamp elements rewritten before parsing. Frames keep
+`epoch` and `sourceTimestampTicks`. Following the live edge is a mode of the
+single play loop, never a second presenter. End live keeps the `LiveSource` as
+the packet source and swaps `state.file` for a snapshot `File`; the session's
+storage lock is held by its worker until another source replaces it and no
+WebSplat hand-over still holds the file.
 
 ## Telemetry and clocks
 
