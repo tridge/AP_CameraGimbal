@@ -12,6 +12,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "camera_app/mounting_cache.h"
 #include "camera_app/binlog.h"
 #include "apcam/gimbal_transform.h"
 #include <math.h>
@@ -125,6 +126,8 @@ struct ca_backend {
     uint8_t mounting_direction;
     bool mounting_direction_known;
     bool mounting_direction_inferred;
+    bool mounting_direction_cached;   // from the last report, not this MCU session
+    bool mounting_unsupported;        // the reported direction could not be applied
     uint64_t mounting_query_ms;
 #ifdef CAMERA_APP_ZT30_DEV
     uint64_t attitude_request_ms;
@@ -443,10 +446,16 @@ static bool apply_mounting_direction(struct ca_backend *backend,
         backend->mounting_direction=inverted?2U:1U;
         if (backend->rate_stop_ms) backend->rate_stop_ms=monotonic_ms();
 #endif
+#ifdef CAMERA_APP_ZT30_DEV
+        // retried every second while unknown: say it once
+        if (backend->mounting_unsupported) return false;
+        backend->mounting_unsupported = true;
+#endif
         ca_log("gimbal-reported mounting direction could not be applied: %s",
                strerror(errno));
         return false;
     }
+    backend->mounting_unsupported = false;
     if (backend->mounting_direction != (inverted ? 2U : 1U)) {
         backend->angle_target.valid = false;
     }
@@ -472,11 +481,13 @@ static void update_attitude(struct ca_backend *backend, const uint8_t *values,
      * upright pitch is within the physical -90..+90 degree range, whereas an
      * inverted, level camera is represented near +/-180 degrees.  That makes
      * an out-of-range raw pitch an unambiguous inverted-mount indication. */
-    if (backend->orientation == CA_MOUNT_AUTO &&
-        !backend->mounting_direction_known &&
+    // a cached direction is the MCU's last report, not this session's
+    if (backend->orientation == CA_MOUNT_AUTO && !backend->mounting_unsupported &&
+        (!backend->mounting_direction_known || backend->mounting_direction_cached) &&
         (v[1] < -A8_INVERTED_PITCH_THRESHOLD ||
          v[1] > A8_INVERTED_PITCH_THRESHOLD)) {
         int16_t raw_pitch = v[1];
+        backend->mounting_direction_cached = false;
         if (apply_mounting_direction(backend, 2U)) {
             backend->mounting_direction_inferred = true;
             ca_log("inferred inverted mounting from raw gimbal pitch %.1f deg",
@@ -608,8 +619,31 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
     case A8_SUB_MOUNTING:
         /* A late reply to a startup query must not undo the unambiguous
          * attitude-based result that may already have corrected the image. */
+#ifdef CAMERA_APP_ZT30_DEV
+        if (payload_length == 1U) {
+#else
         if (payload_length == 1U && !backend->mounting_direction_inferred) {
+#endif
+#ifdef CAMERA_APP_ZT30_DEV
+            const char *cache = getenv("CAMERA_APP_ZT30_MOUNT_CACHE");
+            if (!cache || !*cache) cache = "/customer/camera-app/gimbal-mounting";
+            if (payload[0]) {
+                // a report from this MCU session replaces anything held
+                ca_mounting_cache_save(cache, payload[0]);
+                backend->mounting_direction_cached = false;
+                backend->mounting_unsupported = false;
+                apply_mounting_direction(backend, payload[0]);
+            } else if (!backend->mounting_direction_known && !backend->mounting_unsupported) {
+                // The MCU answers 0 while pitched away from level: use its last report.
+                const uint8_t direction = ca_mounting_cache_load(cache);
+                if (apply_mounting_direction(backend, direction)) {
+                    backend->mounting_direction_cached = true;
+                    ca_log("gimbal mounting direction not reported; using its last report (upright)");
+                }
+            }
+#else
             apply_mounting_direction(backend, payload[0]);
+#endif
         }
         break;
     case A8_SUB_MOTION_MODE:
@@ -1307,8 +1341,9 @@ void ca_backend_periodic(struct ca_backend *backend)
         (void)send_public_command(backend, 0x18U, NULL, 0U);
     }
 #endif
+    // a cached direction is still asked for, to get one from this session
     if (backend == NULL || backend->orientation != CA_MOUNT_AUTO ||
-        backend->mounting_direction_known) {
+        (backend->mounting_direction_known && !backend->mounting_direction_cached)) {
         return;
     }
     now = monotonic_ms();

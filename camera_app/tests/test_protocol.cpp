@@ -1,9 +1,13 @@
 #include "camera_app/private_uart.h"
 #include "camera_app/siyi.h"
+#include "camera_app/mounting_cache.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 struct captured {
     unsigned count;
@@ -137,5 +141,27 @@ int main(void)
     assert(ca_siyi_opcode_known(0x17));
     assert(!ca_siyi_opcode_known(0x7f));
     puts("PASS protocol framing and stream parser");
+    // the gimbal's reported mounting direction survives an app restart
+    char cache[] = "/tmp/camera-app-mounting-XXXXXX";
+    int cache_fd = mkstemp(cache);
+    assert(cache_fd >= 0 && close(cache_fd) == 0);
+    assert(ca_mounting_cache_load(cache) == 0);
+    ca_mounting_cache_save(cache, 0);
+    ca_mounting_cache_save(cache, 3);
+    assert(ca_mounting_cache_load(cache) == 0);
+    ca_mounting_cache_save(cache, 1);
+    assert(ca_mounting_cache_load(cache) == 1);
+    struct stat before, after;
+    assert(stat(cache, &before) == 0);
+    ca_mounting_cache_save(cache, 1); // unchanged: no write
+    assert(stat(cache, &after) == 0 && before.st_mtim.tv_nsec == after.st_mtim.tv_nsec &&
+           before.st_mtim.tv_sec == after.st_mtim.tv_sec);
+    ca_mounting_cache_save(cache, 2);
+    assert(ca_mounting_cache_load(cache) == 2);
+    char unfinished[64];
+    snprintf(unfinished, sizeof(unfinished), "%s.new", cache);
+    assert(access(unfinished, F_OK) < 0); // replaced by rename, nothing left behind
+    assert(unlink(cache) == 0 && ca_mounting_cache_load(cache) == 0);
+
     return 0;
 }

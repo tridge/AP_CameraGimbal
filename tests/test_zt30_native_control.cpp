@@ -67,6 +67,9 @@ static int command(ca_backend *b,uint8_t op,const uint8_t *p=nullptr,size_t n=0)
     assert(n);return ca_backend_handle_siyi(b,packet,n);
 }
 int main() {
+    // never the camera's own file
+    static char cache[]="/tmp/zt30-mounting-XXXXXX";
+    {int fd=mkstemp(cache);assert(fd>=0 && close(fd)==0 && setenv("CAMERA_APP_ZT30_MOUNT_CACHE",cache,1)==0);}
     ca_zt30::ZoomFeedback zoom;
     assert(!std::isfinite(zoom.get(1000)) && zoom.hfov(false,1000)==0);
     assert(std::fabs(zoom.hfov(true,1000)-84.5f)<.001f);
@@ -158,6 +161,46 @@ int main() {
     reply(b,fds[1],0x17,&one,1);attitude(b,fds[1]);assert(ca_backend_has_gimbal(b));
     uint8_t changed_mount=2;reply(b,fds[1],0x17,&changed_mount,1);
     assert(!ca_backend_has_gimbal(b));reply(b,fds[1],0x17,&one,1);assert(ca_backend_has_gimbal(b));
+    {
+        // The MCU answers the mounting query with 0 while the gimbal is pitched
+        // down. An app that starts then relies on the last report.
+        const uint8_t zero=0,up=1,down=2;
+        auto drain=[&]{ while(!empty(fds[1])) take(fds[1]); };
+        auto fresh=[&]{ auto *r=static_cast<ca_backend*>(calloc(1,sizeof(ca_backend)));assert(r);
+            r->uart_fd=fds[0];r->datagram_transport=true;r->emit=emit;r->inverted_set=mounting;r->orientation=CA_MOUNT_AUTO;return r; };
+        auto asks=[&](ca_backend *r){
+            drain();r->mounting_query_ms=0;ca_backend_periodic(r);
+            bool asked=false;
+            while(!empty(fds[1])) asked|=take(fds[1])[10]==0x17;
+            return asked;
+        };
+        assert(unlink(cache)==0);
+        auto *r=fresh();
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1]);
+        assert(!ca_backend_has_gimbal(r) && asks(r));                 // nothing was ever reported
+        reply(r,fds[1],0x17,&up,1);attitude(r,fds[1]);
+        assert(ca_backend_has_gimbal(r) && !r->mounting_direction_cached && !asks(r));
+        free(r);r=fresh();                                            // app restart
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1]);
+        assert(ca_backend_has_gimbal(r) && r->mounting_direction_cached);
+        assert(asks(r));                                              // still wants a report of its own
+        reply(r,fds[1],0x17,&up,1);
+        assert(ca_backend_has_gimbal(r) && !r->mounting_direction_cached && !asks(r));
+        free(r);r=fresh();
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1]);assert(ca_backend_has_gimbal(r));
+        attitude(r,fds[1],1750);                                      // attitude shows it inverted
+        assert(!ca_backend_has_gimbal(r) && !r->mounting_direction_cached);
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1],850);
+        assert(!ca_backend_has_gimbal(r));                            // a 0 cannot restore upright
+        reply(r,fds[1],0x17,&up,1);attitude(r,fds[1]);assert(ca_backend_has_gimbal(r));
+        reply(r,fds[1],0x17,&down,1);assert(!ca_backend_has_gimbal(r));
+        free(r);r=fresh();                                            // restart, last report inverted
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1]);
+        assert(!ca_backend_has_gimbal(r) && r->mounting_unsupported);
+        reply(r,fds[1],0x17,&zero,1);assert(!ca_backend_has_gimbal(r));
+        reply(r,fds[1],0x17,&up,1);attitude(r,fds[1]);assert(ca_backend_has_gimbal(r));
+        free(r);drain();
+    }
     b->zoom_get=[](void*) { return 2.5f; };
     assert(command(b,0x18)==0);expect_local(0x18,{2,5});
     const uint8_t raw_zoom[2]={2,5};uint8_t zoom_packet[32];
@@ -346,5 +389,6 @@ int main() {
     assert(opened->orientation==CA_MOUNT_AUTO && !ca_backend_has_gimbal(opened));
     assert(ca_backend_open(&second,&config)<0 && errno==EWOULDBLOCK);
     ca_backend_close(opened);assert(ca_backend_open(&opened,&config)==0);ca_backend_close(opened);close(master);
+    unlink(cache);
     puts("ZT30 native control: startup, unknown/inverted/stale feedback, motion limits/stop timer, rejected features, shutdown and stalled UART PASS");
 }
