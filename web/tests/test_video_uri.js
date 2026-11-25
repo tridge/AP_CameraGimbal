@@ -4,6 +4,8 @@ const src = fs.readFileSync(process.argv[2], 'utf8');
 const start = src.indexOf('const videoUri = text => {');
 const end = src.indexOf('// Keep in step with apcam_uart_device_override_valid()');
 const videoUri = eval('(' + src.slice(start + 'const videoUri = '.length, end).trim().replace(/;$/, '') + ')');
+const remoteStart = src.indexOf('const uploadRemote = ') + 'const uploadRemote = '.length;
+const uploadRemote = eval('(' + src.slice(remoteStart, src.indexOf('function validate', remoteStart)).trim().replace(/;$/, '') + ')');
 const valid = ["rtsp://10.0.0.5:8554/video1", "rtsps://pi.local/stream", "rtsp://pi-1.example.com",
   "rtsp://192.168.1.2:1/a/b.264", "rtsp://host:65535/", "rtsp://192.168.144.20:8554"];
 const invalid = ["", "10.0.0.5", "http://10.0.0.5/video1", "RTSP://10.0.0.5/video1", "rtsp://",
@@ -23,5 +25,11 @@ const linkValid = ["", "/dev/ttyAMA0", "/dev/serial0", "/dev/serial/by-id/usb-x_
 const linkInvalid = ["/dev/", "/dev/../etc/passwd", "/etc/passwd", "ttyAMA0", "/dev/tty AMA0", "udp://", "udp://192.168.144.15", "udp://192.168.144.15:", "udp://192.168.144.15:0", "udp://192.168.144.15:65536", "udp://192.168.144.15:123456", "udp://example.com:15002", "udp://300.1.1.1:5", "tcp://192.168.144.15", "tcp://example.com:15002", "tcp://192.168.144.15:80x", "http://192.168.144.15:80", "udp:/192.168.144.15:5"];
 for (const u of linkValid) if (!uartDeviceOverride(u)) { console.log('LINK SHOULD BE VALID:', u); bad++; }
 for (const u of linkInvalid.concat(['/dev/' + 'a'.repeat(155)])) if (uartDeviceOverride(u)) { console.log('LINK SHOULD BE INVALID:', JSON.stringify(u)); bad++; }
+// The upload remote rule must agree with apcam_upload_remote_valid().
+const remoteValid = ["", "gdrive:", "gdrive:AP_CameraGimbal", "my-drive.1:Camera Photos/2026", "a_b+c:x"];
+const remoteInvalid = ["gdrive", "-x:y", ":folder", "a b:c", 'gdrive:"x', "gdrive:a\\b", "gd/rive:x", "gdrive:café"];
+const remoteLongest = 'g:' + 'a'.repeat(159 - 2), remoteTooLong = remoteLongest + 'a';
+for (const r of remoteValid.concat([remoteLongest])) if (!uploadRemote(r)) { console.log('SHOULD BE VALID REMOTE:', r); bad++; }
+for (const r of remoteInvalid.concat([remoteTooLong])) if (uploadRemote(r)) { console.log('SHOULD BE INVALID REMOTE:', JSON.stringify(r)); bad++; }
 console.log(bad ? 'FAIL video URI page rule: ' + bad + ' mismatches' : 'PASS video URI page rule matches the C validator (' + (valid.length + invalid.length + 2) + ' cases)');
 process.exit(bad ? 1 : 0);

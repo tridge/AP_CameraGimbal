@@ -70,6 +70,9 @@
   function invalid(field, message) {
     if (field) field.setCustomValidity(message || L.invalid.replace('%s', field.closest('.field').querySelector('label').textContent));
   }
+  // Keep in step with apcam_upload_remote_valid() in include/apcam/network.h.
+  const uploadRemote = text => text === '' || (text.length < 160 &&
+    /^[A-Za-z0-9_.+][A-Za-z0-9_.+-]*:[\x20-\x7e]*$/.test(text) && !/["\\]/.test(text));
   function validate() {
     for (const field of fields) {
       field.setCustomValidity('');
@@ -133,6 +136,7 @@
         if (Number(value('proxy_video' + n + '_port')) && !value('proxy_video' + n + '_name')) invalid(get('proxy_video' + n + '_name'));
       }
     }
+    if (value('upload_remote') && !uploadRemote(value('upload_remote'))) invalid(get('upload_remote'));
     for (const field of fields) {
       const bad = !field.validity.valid && (attempted || touched.has(field));
       const error = document.getElementById(field.id + '-error');

@@ -19,7 +19,7 @@ CHECKS = r"""
     const assert = (ok, message) => { if (!ok) throw new Error(message); };
     const tabs = [...document.querySelectorAll('#parameter-tabs [role=tab]')];
     const panels = [...form.querySelectorAll('.parameter-panel')];
-    assert(tabs.length === 5 && panels.length === 5, 'five parameter tabs');
+    assert(tabs.length === 6 && panels.length === 6, 'six parameter tabs');
     const active = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true');
     const switchTo = name => document.getElementById('tab-' + name).click();
     assert(active().id === 'tab-system', 'default System tab');
@@ -74,7 +74,7 @@ CHECKS = r"""
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
     assert(active().id === 'tab-network' && document.activeElement === active(), 'arrow navigation');
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'End', bubbles: true}));
-    assert(active().id === 'tab-survey', 'End navigation');
+    assert(active().id === 'tab-upload', 'End navigation');
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'Home', bubbles: true}));
     assert(active().id === 'tab-system', 'Home navigation');
     let blocked;
@@ -86,7 +86,7 @@ CHECKS = r"""
     });
     function submit() {
       blocked = undefined;
-      form.requestSubmit(form.querySelector('button[value=save]'));
+      form.requestSubmit(form.querySelector('.actions button[value=save]'));
       assert(blocked !== undefined, 'submit handler did not run');
     }
     function reset() {

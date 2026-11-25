@@ -679,6 +679,14 @@ static const char *const UART_DEVICE_OVERRIDE_CHOICES[] = {
 static const struct option vpn_provider_options[] = {{"zerotier", S_OPT_ZEROTIER}};
 #endif
 
+#if APCAM_HAVE_UPLOAD
+static const struct option upload_what_options[] = {
+    {"photos", S_UPLOAD_PHOTOS}, {"recordings", S_UPLOAD_RECORDINGS}, {"both", S_UPLOAD_BOTH},
+};
+static const struct option upload_after_options[] = {
+    {"keep", S_UPLOAD_KEEP}, {"delete", S_UPLOAD_DELETE}, {"delete_when_low", S_UPLOAD_DELETE_LOW},
+};
+#endif
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -851,15 +859,33 @@ static const struct parameter replacement_parameters[] = {
     {"survey_terrain_tol", "survey", "terrain_tol", S_SURV_TERRAIN_TOL, S_SURV_TERRAIN_TOL_HELP, PARAM_INTEGER, 1, 100, 1, NULL, 0},
     {"survey_min_speed", "survey", "min_speed", S_SURV_MIN_SPEED, S_SURV_MIN_SPEED_HELP, PARAM_INTEGER, 1, 30, 1, NULL, 0},
     {"survey_turn_deg", "survey", "turn_deg", S_SURV_TURN_DEG, S_SURV_TURN_DEG_HELP, PARAM_INTEGER, 5, 45, 1, NULL, 0},
+#if APCAM_HAVE_UPLOAD
+    {"upload_enable", "upload", "enable", S_P_UPLOAD_ENABLE, S_H_UPLOAD_ENABLE,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"upload_remote", "upload", "remote", S_P_UPLOAD_REMOTE, S_H_UPLOAD_REMOTE,
+     PARAM_TEXT, 0, APCAM_UPLOAD_REMOTE_SIZE - 1, 1, NULL, 0},
+    {"upload_what", "upload", "what", S_P_UPLOAD_WHAT, S_H_UPLOAD_WHAT,
+     PARAM_ENUM, 0, 0, 0, upload_what_options, sizeof(upload_what_options)/sizeof(upload_what_options[0])},
+    {"upload_after", "upload", "after_upload", S_P_UPLOAD_AFTER, S_H_UPLOAD_AFTER,
+     PARAM_ENUM, 0, 0, 0, upload_after_options, sizeof(upload_after_options)/sizeof(upload_after_options[0])},
+    {"upload_low_space", "upload", "low_space_percent", S_P_UPLOAD_LOW_SPACE, S_H_UPLOAD_LOW_SPACE,
+     PARAM_INTEGER, 1, 90, 1, NULL, 0},
+    {"upload_bandwidth", "upload", "bandwidth_kib_s", S_P_UPLOAD_BANDWIDTH, S_H_UPLOAD_BANDWIDTH,
+     PARAM_INTEGER, 0, 1000000, 1, NULL, 0},
+    {"upload_scan", "upload", "scan_minutes", S_P_UPLOAD_SCAN, S_H_UPLOAD_SCAN,
+     PARAM_INTEGER, 1, 1440, 1, NULL, 0},
+#endif
 };
 
-enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_COUNT };
+enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_UPLOAD, TAB_COUNT };
+#define TAB_SHOWN (APCAM_HAVE_UPLOAD ? TAB_COUNT : TAB_UPLOAD) /* the upload tab is last */
 static const struct {
     const char *name;
     enum string_id label;
 } parameter_tabs[TAB_COUNT] = {
     {"system", S_PARAMS_SYSTEM}, {"network", S_PARAMS_NETWORK},
     {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY}, {"survey", S_PARAMS_SURVEY},
+    {"upload", S_PARAMS_UPLOAD},
 };
 
 static enum parameter_tab parameter_tab(const struct parameter *p)
@@ -872,6 +898,7 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
     if (!strcmp(p->section, "video") || !strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
         !strcmp(p->section, "thermal") || !strcmp(p->section, "overlay")) return TAB_VIDEO;
+    if (!strcmp(p->section, "upload")) return TAB_UPLOAD;
     return TAB_SYSTEM;
 }
 
@@ -919,6 +946,9 @@ static const char *replacement_defaults[] = {
     "",
 #endif
     "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
+#if APCAM_HAVE_UPLOAD
+    "false", "", "both", "keep", "20", "0", "5",
+#endif
 };
 
 
@@ -2242,6 +2272,8 @@ static bool valid_text_parameter(const struct parameter *parameter,
         }
         return true;
     }
+    if (!strcmp(parameter->section, "upload"))
+        return apcam_upload_remote_valid(text);
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)text[i];
         if (iscntrl(c) || isspace(c)) return false;
@@ -5374,6 +5406,9 @@ static bool network_capture_status(char *message, size_t capacity, bool *failed)
     return available;
 }
 
+/* Cloud upload page and credentials. */
+#include "APC_Upload.h"
+
 static char *render_parameter_page(const char *message, bool message_is_error,
                                    const APC_HTTPRequest *submitted, size_t *page_len)
 {
@@ -5407,17 +5442,23 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                      APCAM_THERMAL_STREAM_WIDTH, APCAM_THERMAL_STREAM_HEIGHT);
         page.append("</p>");
 #endif
+#if APCAM_HAVE_UPLOAD
+        append_upload_credentials_form(&page);
+#endif
         webroot.render(page, "parameters-form.html", {T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES)});
-        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+        for (unsigned tab = 0; tab < TAB_SHOWN; tab++) {
             page.appendf("<button type=button role=tab id=tab-%s aria-controls=parameters-%s "
                              "aria-selected=false tabindex=-1>%s</button>",
                        parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
         }
         page.append("</div>");
-        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+        for (unsigned tab = 0; tab < TAB_SHOWN; tab++) {
             page.appendf("<section class=\"card parameter-panel\" id=parameters-%s "
                              "aria-labelledby=tab-%s><h2>%s</h2><div class=fields>",
                        parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
+#if APCAM_HAVE_UPLOAD
+            if (tab == TAB_UPLOAD) append_upload_panel_top(&page);
+#endif
             for (size_t i = 0; i < sizeof(replacement_parameters) / sizeof(replacement_parameters[0]); i++) {
                 const struct parameter *parameter = &replacement_parameters[i];
                 if (parameter_shown(parameter) && parameter_tab(parameter) == tab)
@@ -5474,6 +5515,9 @@ static char *render_parameter_page(const char *message, bool message_is_error,
 #endif
                 page.appendf("%s <a id=network-link></a></p>", T(S_NETWORK_RECONNECT));
             }
+#if APCAM_HAVE_UPLOAD
+            if (tab == TAB_UPLOAD) append_upload_panel(&page);
+#endif
             page.append("</section>");
         }
         webroot.render(page, "parameters-actions.html", {T(S_PARAMS_SAVE_ALL), T(S_PARAMS_SAVE), T(S_PARAMS_SAVE_RESTART)});
@@ -6572,6 +6616,7 @@ static bool gcu_entry_name_ok(const char *name, size_t length)
     static const char *const allowed[] = {
         "gcu/ap/SHA256SUMS", "gcu/ap/manifest.json", "gcu/ap/service.sh",
         "gcu/ap/camera-app", "gcu/ap/z1mini-web", "gcu/ap/ax-capture",
+        "gcu/ap/apcam-upload", "gcu/ap/upload-ca.pem",
         "gcu/ap/camera.ini.default", "gcu/ap/web.pass.default", "gcu/ap/README.md",
         "gcu/ipc/run.sh", "gcu/ipc/camera_gcu.sh",
     };
@@ -6846,6 +6891,7 @@ static int install_gcu_package(const char *package, const struct gcu_package_ind
 {
     static const char *const executables[] = {
         "ap/service.sh", "ap/camera-app", "ap/z1mini-web", "ap/ax-capture",
+        "ap/apcam-upload",
         "ipc/run.sh", "ipc/camera_gcu.sh",
     };
     char stage[PATH_MAX];
@@ -8062,6 +8108,17 @@ static void handle_request(int fd, const char *peer)
                 send_redirect(fd, "/rebooting");
                 schedule_reboot();
             }
+#if APCAM_HAVE_UPLOAD
+        } else if (strcmp(request.path, "/upload-credentials") == 0) {
+            bool removed = false;
+            if (upload_credentials_update(&request, &removed, error, sizeof(error))) {
+                log_message("cloud upload credentials %s by %s", removed ? "removed" : "saved", peer);
+                send_parameter_page(fd, T(removed ? S_UPLOAD_CRED_REMOVED : S_UPLOAD_CRED_SAVED), false, NULL);
+            } else {
+                log_message("cloud upload credentials not saved for %s: %s", peer, error);
+                send_parameter_page(fd, error, true, NULL);
+            }
+#endif
         } else {
             send_text_errorf(fd, 404, "Not Found", S_UNKNOWN_POST);
         }

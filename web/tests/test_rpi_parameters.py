@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""RPi Network parameters: video stream 1 URI shown and saved; host-owned address fields hidden."""
+"""RPi Network parameters: video stream 1 URI shown and saved; host-owned address fields hidden.
+Cloud Upload tab: settings saved and validated, credentials stored privately and never shown."""
 import base64
 import html.parser
 import http.client
@@ -44,6 +45,8 @@ class Form(html.parser.HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if "form" in a:  # belongs to another form, so the browser would not submit it here
+            return
         if tag == "input" and a.get("name") and a.get("type") not in ("submit", "button"):
             if a.get("type") in ("checkbox", "radio") and "checked" not in a:
                 return
@@ -66,8 +69,10 @@ listener = socket.socket()
 listener.bind(("127.0.0.1", 0))
 port = listener.getsockname()[1]
 listener.close()
+rclone_config = root / "app" / "rclone.conf"
 server = subprocess.Popen([str(binary), "-p", str(port)], stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, text=True)
+                          stderr=subprocess.PIPE, text=True,
+                          env={**os.environ, "CAMERA_APP_RCLONE_CONFIG": str(rclone_config)})
 
 
 def request(method, path, body=None):
@@ -165,10 +170,83 @@ try:
     values["network_video1_uri"] = ""
     save(values)
     assert re.search(r'^video1_uri = ("")?$', camera_ini.read_text(encoding="utf-8"), re.M)
+
+    # Cloud upload: its own tab, saved like the other parameters, remote checked.
+    page, values = parameters()
+    names = ("upload_enable", "upload_remote", "upload_what", "upload_after",
+             "upload_low_space", "upload_bandwidth", "upload_scan")
+    for name in names:
+        assert name in values, name
+    assert "id=tab-upload" in page and "id=upload-status" in page
+    # The credentials come first in the tab, then the settings, then the status.
+    assert page.index("name=client_id") < page.index('name="upload_enable"') < page.index("id=upload-status")
+    assert ">What to upload<" in page
+    assert "client_id" not in values and "token" not in values  # in the credentials form
+    values.update(upload_enable="true", upload_remote="gdrive:AP Cam", upload_what="photos",
+                  upload_after="delete_when_low", upload_low_space="30", upload_bandwidth="500",
+                  upload_scan="10")
+    status, body = save(values)
+    assert status in (200, 303), (status, body[:500])
+    saved = camera_ini.read_text(encoding="utf-8")
+    for pattern in (r'^enable = true$', r'^remote = "?gdrive:AP Cam"?$', r'^what = photos$',
+                    r'^after_upload = delete_when_low$', r'^low_space_percent = 30$',
+                    r'^bandwidth_kib_s = 500$', r'^scan_minutes = 10$'):
+        assert re.search(pattern, saved, re.M), (pattern, saved)
+    for invalid in ("nocolon", "-x:y", ":folder", "a b:c", 'gdrive:"x', "gdrive:a\\b"):
+        _, values = parameters()
+        values["upload_remote"] = invalid
+        save(values)
+        assert camera_ini.read_text(encoding="utf-8") == saved, invalid
+
+    # Credentials go to their own file (0600), other remotes there are kept, and
+    # nothing secret is shown again.
+    csrf = values["csrf"]
+    token = '{"access_token":"ya29.SECRET","token_type":"Bearer","refresh_token":"1//REFRESH","expiry":"2026-10-28T11:00:00Z"}'
+
+    def credentials(**fields):
+        body = {"csrf": csrf, **fields}
+        return request("POST", "/upload-credentials", urllib.parse.urlencode(body).encode())
+
+    page, _ = parameters()
+    assert "No credentials saved yet" in page and not rclone_config.exists()
+    rclone_config.write_text("[other]\ntype = sftp\ntoken = keepme\n", encoding="utf-8")
+    status, page = credentials(action="save", client_id="123-abc.apps.googleusercontent.com",
+                               client_secret="GOCSPX-abc_DEF", token=token)
+    assert status == 200, (status, page[:500])
+    config = rclone_config.read_text(encoding="utf-8")
+    assert config.count("[gdrive]") == 1 and "type = drive" in config
+    assert "client_id = 123-abc.apps.googleusercontent.com" in config and "token = " + token in config
+    assert "[other]\ntype = sftp\ntoken = keepme" in config
+    assert oct(rclone_config.stat().st_mode & 0o777) == "0o600", oct(rclone_config.stat().st_mode)
+    page, _ = parameters()
+    assert "Credentials saved for remote gdrive" in page
+    for secret in ("GOCSPX", "ya29", "REFRESH", "keepme"):
+        assert secret not in page, secret
+    # Saving again replaces the section rather than adding another.
+    credentials(action="save", client_id="456-def", client_secret="GOCSPX-new", token=token)
+    config = rclone_config.read_text(encoding="utf-8")
+    assert config.count("[gdrive]") == 1 and "client_id = 456-def" in config and "123-abc" not in config
+    # Anything incomplete or odd is refused and changes nothing.
+    before = rclone_config.read_text(encoding="utf-8")
+    for fields in ({"client_id": "", "client_secret": "s", "token": token},
+                   {"client_id": "id", "client_secret": "s", "token": "not json"},
+                   {"client_id": "id", "client_secret": "s", "token": '{"refresh_token":"x"}'},
+                   {"client_id": "id with space", "client_secret": "s", "token": token},
+                   {"client_id": "id", "client_secret": "s\nx = y", "token": token},
+                   {"client_id": "id", "client_secret": "s", "token": token.replace("}", "\n}")}):
+        status, _ = credentials(action="save", **fields)
+        assert status == 400 and rclone_config.read_text(encoding="utf-8") == before, fields
+    status, _ = request("POST", "/upload-credentials", urllib.parse.urlencode(
+        {"action": "save", "client_id": "id", "client_secret": "s", "token": token}).encode())
+    assert status != 200 and rclone_config.read_text(encoding="utf-8") == before  # no CSRF token
+    status, _ = credentials(action="remove")
+    config = rclone_config.read_text(encoding="utf-8")
+    assert status == 200 and "[gdrive]" not in config and "[other]" in config
 finally:
     server.terminate()
     try:
         server.communicate(timeout=5)
     except subprocess.TimeoutExpired:
         server.kill()
-print("PASS RPi network parameters: video stream 1 URI saved and validated, host-owned fields hidden")
+print("PASS RPi network parameters: video stream 1 URI saved and validated, host-owned fields hidden;\n"
+      "     cloud upload settings and credentials")

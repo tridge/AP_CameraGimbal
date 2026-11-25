@@ -779,6 +779,13 @@ try:
         "network_primary_address": "",
         "network_secondary_address": "",
         "network_gateway": "",
+        "upload_enable": "false",
+        "upload_remote": "",
+        "upload_what": "both",
+        "upload_after": "keep",
+        "upload_low_space": "20",
+        "upload_bandwidth": "0",
+        "upload_scan": "5",
         "action": "save",
     }
     status, body, _ = form(
