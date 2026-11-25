@@ -20,11 +20,16 @@ int main() {
     auto bad=leased;bad.back().shared_zero=false;assert(!new_input_mapping(before,bad,info));
     bad=leased;bad.back().last+=4096;assert(!new_input_mapping(before,bad,info));
     bad=leased;bad.push_back(bad.back());assert(!new_input_mapping(before,bad,info));
-    // another thread freed a buffer between the snapshots and the SDK reused its address
-    bad=before;bad.push_back({info.plane_address[0]-0x29000,info.plane_address[0]+bytes,false});assert(new_input_mapping(bad,leased,info));
-    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,false});assert(new_input_mapping(bad,leased,info));
-    // but an SDK mapping that was already there is not a new lease
-    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,true});assert(!new_input_mapping(bad,leased,info));
+    // another thread freed malloc memory between the snapshots and the SDK reused its address
+    bad=before;bad.push_back({info.plane_address[0]-0x29000,info.plane_address[0]+bytes,false,true});assert(new_input_mapping(bad,leased,info));
+    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,false,true});assert(new_input_mapping(bad,leased,info));
+    // but an SDK mapping or a file that was already there is not a new lease
+    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,true,false});assert(!new_input_mapping(bad,leased,info));
+    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,false,false});assert(!new_input_mapping(bad,leased,info));
+    std::vector<InputMapping> kinds;
+    assert(parse("10000-20000 rw-p 00000000 00:00 0 \n20000-30000 rw-p 00000000 00:00 0 [heap]\n"
+                 "30000-40000 r-xp 00000000 b3:01 77 /lib/libc.so\n40000-50000 rw-s 00000000 00:05 9 /dev/zero (deleted)\n",kinds));
+    assert(kinds[0].anonymous && kinds[1].anonymous && !kinds[2].anonymous && !kinds[3].anonymous && kinds[3].shared_zero);
     pu++;memcpy(raw+80,&pu,8);assert(!new_input_mapping(before,leased,info));
     assert(!parse("10000-20000 rw-s 0 00:00 0 /dev/zero (deleted)",bad));
     assert(!parse("20000-10000 rw-s 0 00:00 0 /dev/zero (deleted)\n",bad));

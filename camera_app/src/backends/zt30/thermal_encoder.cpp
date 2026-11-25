@@ -28,8 +28,8 @@ int ThermalEncoder::get(InputPort *port,InputBufferConfig *config,InputBufferInf
             info->plane_address[0],info->plane_address[1],bytes);
         const uint64_t first=info->plane_address[0],last=first+bytes;
         for(const auto &m:before)if(first<m.last && m.first<last)
-            ca_log("ZT30 input before overlap: %08llx-%08llx shared_zero=%u",
-                (unsigned long long)m.first,(unsigned long long)m.last,unsigned(m.shared_zero));
+            ca_log("ZT30 input before overlap: %08llx-%08llx shared_zero=%u anonymous=%u",
+                (unsigned long long)m.first,(unsigned long long)m.last,unsigned(m.shared_zero),unsigned(m.anonymous));
         for(const auto &m:leased)if(first<m.last && m.first<last)
             ca_log("ZT30 input after overlap: %08llx-%08llx shared_zero=%u",
                 (unsigned long long)m.first,(unsigned long long)m.last,unsigned(m.shared_zero));

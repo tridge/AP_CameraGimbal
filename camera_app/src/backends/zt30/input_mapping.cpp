@@ -13,7 +13,8 @@ bool read_input_mappings(FILE *file,std::vector<InputMapping> &out) {
         char *path=line+end;while(*path==' ')++path;
         path[std::strcspn(path,"\n")]=0;
         const bool zero=!std::strcmp(perms,"rw-s") && !offset && !std::strcmp(path,"/dev/zero (deleted)");
-        out.push_back({first,last,zero});
+        const bool anonymous=perms[3]=='p' && !inode && (!*path || *path=='[');
+        out.push_back({first,last,zero,anonymous});
     }
     if(std::ferror(file) || out.empty()) { out.clear();return false; }
     return true;
@@ -27,10 +28,11 @@ bool new_input_mapping(const std::vector<InputMapping> &before,const std::vector
        before.empty() || leased.empty() || !first || !bytes || last>UINT64_C(0x100000000) ||
        uv<=first || uv>=last || !physical_y || physical_uv<=physical_y ||
        physical_uv-physical_y!=uv-first || physical_y>UINT64_MAX-bytes)return false;
-    // An SDK mapping already there has no provenance. Any other mapping seen
-    // before was freed by another thread since: the leased snapshot shows the
-    // whole range is now one SDK mapping, and mappings cannot overlap.
-    for(const auto &m:before)if(first<m.last && m.first<last && m.shared_zero)return false;
+    // Memory another thread freed since the first snapshot may have held the
+    // address: the leased snapshot shows the whole range is now one SDK
+    // mapping, and mappings cannot overlap. Anything else that was there,
+    // an SDK mapping or a file, gives the lease no provenance.
+    for(const auto &m:before)if(first<m.last && m.first<last && !m.anonymous)return false;
     unsigned matches=0;
     for(const auto &m:leased)if(m.first==first && m.last==last && m.shared_zero)++matches;
     return matches==1;
