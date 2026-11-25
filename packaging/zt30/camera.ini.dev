@@ -89,6 +89,9 @@ video1_port = 0
 video1_name = "video1"
 video2_port = 0
 video2_name = "video2"
+# Lossless raw thermal (Matroska); needs its own proxy video port.
+video3_port = 0
+video3_name = "Raw Thermal (16-bit)"
 publish_password = ""
 
 # Address settings apply on camera-app restart. Blank primary leaves current addresses in place.
