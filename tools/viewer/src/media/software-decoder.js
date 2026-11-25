@@ -170,6 +170,12 @@ export function createMiniMatroska(track, frames, packets) {
 
 /** Return the minimal available decode-order group from a keyframe to target. */
 export function selectDecodeGroup(source, target, { maxFrames = 180, maxBytes = 32 * MIB } = {}) {
+  // an independently decodable frame is its own group; no scan of a long live index
+  if (target.keyframe && source.frames[target.id]?.id === target.id) {
+    if (target.size <= 0 || target.size > maxBytes)
+      throw new Error(`Decode group exceeds ${maxBytes / MIB} MiB compressed-data budget`);
+    return [target];
+  }
   const frames = source.frames.filter((frame) => frame.trackId === target.trackId);
   const last = frames.findIndex((frame) => frame === target || frame.id === target.id);
   if (last < 0) throw new Error('Frame is not in the current media index');
