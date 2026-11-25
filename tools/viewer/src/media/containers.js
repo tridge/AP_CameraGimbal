@@ -729,6 +729,68 @@ async function blockGroup(source, group, clusterTicks) {
 const SEGMENT_CHILDREN = new Set([
   0x1549a966, 0x1654ae6b, 0x1f43b675, 0x114d9b74, 0x1c53bb6b, 0x1941a469, 0x1043a770, 0x1254c367,
 ]);
+// Yields a Cluster's video frames; returns the offset its content ends at.
+async function* clusterFrames(source, h) {
+  const reader = source.reader;
+  let pos = h.data,
+    ticks = null;
+  while (pos < h.end) {
+    const child = await ebmlHeader(reader, pos, h.end);
+    if (h.unknown && SEGMENT_CHILDREN.has(child.id)) break;
+    if (child.id === 0xe7) ticks = await ebmlUint(reader, child);
+    else if (child.id === 0xa0 || child.id === 0xa3) {
+      if (ticks === null) throw new Error('Matroska block precedes Cluster timestamp');
+      const frame =
+        child.id === 0xa0
+          ? await blockGroup(source, child, ticks)
+          : await blockFrame(source, child, ticks, null);
+      if (frame) yield frame;
+    }
+    if (child.unknown) throw new Error('Unknown-size Matroska block');
+    pos = child.end;
+  }
+  return pos;
+}
+
+// Reads elements already in memory; base is the offset of bytes[0] in the stream.
+function memoryReader(bytes, base = 0) {
+  return {
+    async read(offset, size) {
+      if (offset < base || offset + size > base + bytes.length)
+        throw new Error(`Truncated element at ${offset} (${size} bytes)`);
+      return bytes.subarray(offset - base, offset - base + size);
+    },
+  };
+}
+
+/** Tracks and TimestampScale from complete Info and Tracks elements (live streams). */
+export async function parseMatroskaHead(info, tracks) {
+  let scale = 1000000;
+  const infoReader = memoryReader(info),
+    infoBox = await ebmlHeader(infoReader, 0, info.length);
+  if (infoBox.id !== 0x1549a966 || infoBox.unknown) throw new Error('Invalid Matroska Info');
+  for await (const child of ebmlChildren(infoReader, infoBox))
+    if (child.id === 0x2ad7b1) scale = await ebmlUint(infoReader, child);
+  if (!scale) throw new Error('Invalid Matroska TimestampScale');
+  const source = { reader: memoryReader(tracks), tracks: [] },
+    box = await ebmlHeader(source.reader, 0, tracks.length);
+  if (box.id !== 0x1654ae6b || box.unknown) throw new Error('Invalid Matroska Tracks');
+  await parseMatroskaTracks(source, box, scale);
+  if (!source.tracks.length) throw new Error('No supported Matroska video track');
+  return { tracks: source.tracks, scale };
+}
+
+/** Frames of one complete known-size Cluster held in memory at stream offset base. */
+export async function parseMatroskaCluster(tracks, bytes, base = 0) {
+  const source = { reader: memoryReader(bytes, base), tracks },
+    h = await ebmlHeader(source.reader, base, base + bytes.length);
+  if (h.id !== 0x1f43b675 || h.unknown || h.end !== base + bytes.length)
+    throw new Error('Invalid Matroska Cluster');
+  const frames = [];
+  for await (const frame of clusterFrames(source, h)) frames.push(frame);
+  return frames;
+}
+
 async function* matroskaFrames(source) {
   const reader = source.reader;
   let at = 0,
@@ -758,24 +820,15 @@ async function* matroskaFrames(source) {
       yield { tracksOnly: true };
     } else if (h.id === 0x1f43b675) {
       if (!source.tracks.length) throw new Error('Matroska clusters precede tracks');
-      let pos = h.data,
-        ticks = null;
-      while (pos < h.end) {
-        const child = await ebmlHeader(reader, pos, h.end);
-        if (h.unknown && SEGMENT_CHILDREN.has(child.id)) break;
-        if (child.id === 0xe7) ticks = await ebmlUint(reader, child);
-        else if (child.id === 0xa0 || child.id === 0xa3) {
-          if (ticks === null) throw new Error('Matroska block precedes Cluster timestamp');
-          const frame =
-            child.id === 0xa0
-              ? await blockGroup(source, child, ticks)
-              : await blockFrame(source, child, ticks, null);
-          if (frame) yield frame;
+      const cluster = clusterFrames(source, h);
+      for (;;) {
+        const { done, value } = await cluster.next();
+        if (done) {
+          at = value;
+          break;
         }
-        if (child.unknown) throw new Error('Unknown-size Matroska block');
-        pos = child.end;
+        yield value;
       }
-      at = pos;
       continue;
     } else if (h.unknown) throw new Error('Unsupported unknown-size Matroska element');
     at = h.end;
