@@ -137,6 +137,11 @@ int main()
     int rate = ca_config_param_find("RAW_STREAM_FPS"); assert(rate >= 0);
     assert(ca_config_param_save(&loaded, REPLACEMENT_CONFIG_PATH, rate, 7) == 0);
     assert(loaded.raw_stream_fps == 7);
+    // raw thermal is published to SupportProxy on its own port
+    int raw_port = ca_config_param_find("PROXY_VID3_PORT"); assert(raw_port >= 0);
+    assert(ca_config_param_save(&loaded, REPLACEMENT_CONFIG_PATH, raw_port, 40010) == 0);
+    assert(loaded.support.video3_port == 40010U);
+    assert(contents(REPLACEMENT_CONFIG_PATH).find("video3_port") != std::string::npos);
     for (const char *name : {"PHOTO_SCOPE","RAW_STREAM_FPS","RAW_RECORD_FPS","LOG_DISARMED",
                              "REC_AUTOSTART","REC_RESOLUTION","VIDEO_MAIN_RES","VIDEO_MAIN_CODEC",
                              "VIDEO_SUB_RES","VIDEO_SUB_CODEC","THERMAL_HFOV_CD","OSD_THERMAL_FOV","MAV_POS_TARGET","TRACK_METHOD","OSD_CROSS","OSD_RECORD","SURV_LENS","SURV_PATTERN","SURV_OVERLAP"}) {

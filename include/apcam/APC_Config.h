@@ -363,7 +363,7 @@ private:
         {"support_proxy", "video2_name", Kind::String,
          offsetof(struct ca_config, support.video2_name),
          sizeof(((struct ca_config *)0)->support.video2_name), NULL, 0U, 0, 63, NULL},
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
         {"support_proxy", "video3_port", Kind::Uint,
          offsetof(struct ca_config, support.video3_port),
          sizeof(((struct ca_config *)0)->support.video3_port), NULL, 0U, 0, 65535, "PROXY_VID3_PORT"},
