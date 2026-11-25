@@ -28,6 +28,9 @@ inputs:
 | tcpdump | 4.99.6 | BSD-3-Clause | <https://www.tcpdump.org/release/tcpdump-4.99.6.tar.xz> |
 | libxcrypt | 4.5.2 | LGPL-2.1-or-later | <https://github.com/besser82/libxcrypt/releases/tag/v4.5.2> |
 | Dropbear SSH | 2026.94 | MIT | <https://matt.ucc.asn.au/dropbear/releases/dropbear-2026.94.tar.bz2> |
+| libcurl (native uploads) | 8.23.0 | curl licence (MIT-style) | <https://github.com/curl/curl/releases/tag/curl-8_23_0> |
+| Mbed TLS (native uploads) | 3.6.7 LTS | Apache-2.0 OR GPL-2.0-or-later | <https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-3.6.7> |
+| Mozilla CA data (native uploads) | 2026-10-20 | MPL-2.0 | <https://curl.se/docs/caextract.html> |
 
 The bootstrap script verifies the downloaded minimp4 header against its pinned
 SHA-256. The camera build copies that header and applies
@@ -134,3 +137,11 @@ and ABI checks in `packaging/vpn`. Build scripts pin the upstream source
 archives and installed binary hashes. License texts, component notices and
 exact source/build pointers ship in `web/webroot/licenses/vpn` with both camera
 packages and ZT30 application bundles; see its `SOURCES.txt`.
+
+The native upload worker links the pinned libcurl/mbedTLS libraries, not the
+camera control process. Full notices are in `web/webroot/licenses/upload-*`;
+the CA source form is `packaging/cloud-upload/upload-ca.pem`. Corresponding
+source archives are checksum-pinned in `tools/build_cloud_upload.sh` and kept
+under `build/deps/cloud-upload/downloads`. Preserve these sources/build recipes
+when distributing binaries. Rclone can be used on an operator computer for
+OAuth consent; it is not bundled or executed by the camera by default.

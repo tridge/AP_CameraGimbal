@@ -34,6 +34,7 @@ Key features of the firmware:
  - comprehsive CI feature testing
  - support for the ArduPilot SupportProxy for MAVLink and video
    proxying
+ - direct [Google Drive uploads](docs/CLOUD_UPLOAD_NATIVE.md) of photos and recordings
  - on-camera logging for analysis and diagnosing issues
 
 ## Repository layout
