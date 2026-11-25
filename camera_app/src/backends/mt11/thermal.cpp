@@ -221,8 +221,7 @@ static int unlock_controls(struct ca_mt11_thermal *thermal, int result)
 
 static int32_t raw_to_centi_c(uint16_t raw)
 {
-    int32_t centi_c = (int32_t)(((uint32_t)raw * 100U + 32U) / 64U) - 27315;
-    return centi_c;
+    return ca_thermal_kelvin64_centi_c(raw);
 }
 
 bool ca_mt11_thermal_range_from_y16(const uint16_t *pixels, uint32_t width,

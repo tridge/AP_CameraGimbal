@@ -58,7 +58,9 @@ endpoints and requires fresh, valid zoom feedback.
 Automatic upright mounting is the supported native orientation. Inverted
 coordinate transforms, focus actuation, image tracking,
 side-by-side composition, lidar and calibrated thermometry are not qualified.
-Raw thermal values are counts, not temperatures. Geographic ROI and survey
+Raw thermal values are counts. Temperatures (`CAMERA_THERMAL_RANGE`, and
+`minimum_c` / `maximum_c` in raw thermal metadata) read them as the MT11's
+Kelvin multiplied by 64, which is assumed and not verified for this sensor. Geographic ROI and survey
 settings use the shared camera controllers; entering survey on a stationary
 bench does not qualify flight capture or its georeferencing.
 

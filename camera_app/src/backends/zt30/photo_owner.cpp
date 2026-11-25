@@ -125,8 +125,8 @@ static int raw_sidecar(const char *path,const timespec &at) {
     const int bytes=std::snprintf(json,sizeof(json),
         "{\"schema\":\"apcg.thermal.v1\",\"width\":640,\"height\":512,\"pixel_format\":\"gray16le\","
         "\"bits_per_sample\":16,\"timestamp_source\":\"usb_receive\",\"capture_unix_us\":%llu,"
-        "\"utc_valid\":%s,\"temperature_scale_k\":null,\"temperature_offset_k\":null,"
-        "\"temperature_calibration\":\"unverified_sensor_counts\",\"rotation_deg\":0}\n",
+        "\"utc_valid\":%s,\"temperature_scale_k\":0.015625,\"temperature_offset_k\":0,"
+        "\"temperature_calibration\":\"assumed_sensor_kelvin_64\",\"rotation_deg\":0}\n",
         (unsigned long long)(uint64_t(at.tv_sec)*1000000+at.tv_nsec/1000),at.tv_sec>=1483228800?"true":"false");
     if(bytes<0 || bytes>=int(sizeof(json))) { errno=EOVERFLOW;return -1; }
     const int fd=::open(temporary,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);if(fd<0)return -1;

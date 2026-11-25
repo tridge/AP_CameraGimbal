@@ -9,10 +9,12 @@ radiometric path. The complete USB radiometric word is retained: unsigned
 the MT11 sensor's output format; it does not assert its internal ADC precision.
 
 Native ZT30 also exposes this transport, preserving its 16-bit raw counts.
-Its temperature conversion is not calibrated: `temperature_calibration` is
-`unverified_sensor_counts`, and `temperature_scale_k`, `temperature_offset_k`, `minimum_c`
-and `maximum_c` are JSON `null`. Never apply MT11's Kelvin conversion to these
-counts. Calibrated MT11 frames report `temperature_calibration: "sensor_kelvin_64"`.
+Its temperature conversion is not calibrated. The counts are read as the MT11's
+Kelvin multiplied by 64 by assumption: `temperature_calibration` is
+`assumed_sensor_kelvin_64`, with the same `temperature_scale_k` (1/64) and
+`temperature_offset_k` (0), and `minimum_c` and `maximum_c` computed from them.
+Treat ZT30 temperatures as indicative until the sensor is characterised.
+Calibrated MT11 frames report `temperature_calibration: "sensor_kelvin_64"`.
 These optional/nullable fields extend `apcg.thermal.v1`; consumers must accept
 unknown calibration and null numeric values before displaying temperatures.
 
@@ -60,8 +62,8 @@ The `apcg.thermal.v1` JSON contains:
 | `simulation_source` | `terrain` or `test_pattern` in SITL; empty on hardware |
 | `timestamp_source`, `simulated` | `usb_receive` on hardware; `simulation`, true in SITL |
 | `width`, `height`, `pixel_format`, `bits_per_sample` | 640, 512, gray16le, 16 |
-| `temperature_calibration` | `sensor_kelvin_64` for calibrated MT11; `unverified_sensor_counts` for uncalibrated sources |
-| `temperature_scale_k`, `temperature_offset_k` | Kelvin = raw * scale + offset; 1/64, 0 for MT11, otherwise null |
+| `temperature_calibration` | `sensor_kelvin_64` for calibrated MT11; `assumed_sensor_kelvin_64` for native ZT30 (MT11 conversion assumed); `unverified_sensor_counts` for sources with no conversion |
+| `temperature_scale_k`, `temperature_offset_k` | Kelvin = raw * scale + offset; 1/64, 0 for MT11 and (assumed) native ZT30, otherwise null |
 | `gain` | MT11 gain value (0 low, 1 high); -1 until known |
 | `minimum_raw`, `maximum_raw`, `minimum_c`, `maximum_c` | Actual raw extrema; Celsius extrema are null without temperature calibration |
 | `rotation_deg` | Rotation to upright display, 0 or 180; native pixels remain untouched |

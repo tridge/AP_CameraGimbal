@@ -346,6 +346,9 @@ public:
         if(!context->thermal_live->snapshot(frame,ThermalPixelFrameBytes,at))return -1;
         return context->photos->capture(context->capture_root.c_str(),scope,frame,ThermalPixelFrameBytes,at,context->raw_photo);
     }
+    bool thermal_range(ca_thermal_range *range) override {
+        return context->thermal_live && context->thermal_live->ready() && context->thermal_live->thermal_range(range);
+    }
     float survey_hfov(unsigned lens) const override {
         if(lens==0)return context->thermal_hfov_cd.load()*.01f;
         if(lens==1)return zoom_feedback().hfov(true,monotonic_ns()/1000000);

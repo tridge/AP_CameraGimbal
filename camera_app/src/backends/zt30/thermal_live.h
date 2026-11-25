@@ -1,4 +1,5 @@
 #pragma once
+#include "camera_app/thermal.h"
 #include "thermal_encoder.h"
 #include "thermal_controls.h"
 #include "thermal_start_budget.h"
@@ -39,6 +40,8 @@ public:
     void join();
     // Same USB frame supplies display and raw plane; refuse stale/degraded data.
     bool snapshot(uint8_t *frame,size_t capacity,timespec &captured_at);
+    // Extremes of the newest frame, with counts read as Kelvin x 64 as on the MT11.
+    bool thermal_range(ca_thermal_range *out);
 private:
     static uint64_t now(void* =nullptr);
     static void pause(void*,unsigned);
@@ -56,6 +59,7 @@ private:
     ThermalControls controls{{nullptr,ioctl_call,close_call,now,pause}};
     uint8_t wanted_palette=0;
     std::atomic<unsigned> overlay_options{0};
+    std::mutex range_lock;ca_thermal_range range{};
     ca_overlay_bitmap cross_bits[CA_OVERLAY_REGIONS]{};
     FrameCallback callback=nullptr;void *callback_opaque=nullptr;
     ca_raw_thermal_server *raw_server;ca_thermal_stream *raw_stream;

@@ -106,7 +106,7 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
                           const char *telemetry, uint8_t gain, bool rotated,
                           const char *simulation_source, float hfov,
                           const ca_metadata &pose, const timespec &captured_at,
-                          bool calibrated=true)
+                          const char *calibration="sensor_kelvin_64")
 {
     unsigned minimum = UINT16_MAX, maximum = 0;
     for (unsigned i=0;i<640U*512U;i++) {
@@ -118,11 +118,9 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     char hfov_json[32] = "null";
     const bool known_fov = isfinite(hfov) && hfov > 0 && hfov < 180;
     if (known_fov) snprintf(hfov_json,sizeof(hfov_json),"%.6f",double(hfov));
-    char minimum_c[32]="null",maximum_c[32]="null";
-    if (calibrated) {
-        snprintf(minimum_c,sizeof(minimum_c),"%.6f",minimum/64.0-273.15);
-        snprintf(maximum_c,sizeof(maximum_c),"%.6f",maximum/64.0-273.15);
-    }
+    char minimum_c[32],maximum_c[32];
+    snprintf(minimum_c,sizeof(minimum_c),"%.6f",minimum/64.0-273.15);
+    snprintf(maximum_c,sizeof(maximum_c),"%.6f",maximum/64.0-273.15);
     char json[CA_VIDEO_METADATA_JSON_MAX+2048];
     int n = snprintf(json,sizeof(json),
         "{\"schema\":\"apcg.thermal.v1\",\"frame_id\":%llu,\"capture_monotonic_us\":%llu,"
@@ -134,8 +132,8 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
         "\"altitude_datum\":\"AMSL\",\"gimbal_frame\":\"roll_pitch_level_yaw_vehicle\","
         "\"telemetry\":%s}",
         (unsigned long long)s->sequence,(unsigned long long)now,
-        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,calibrated?"0.015625":"null",calibrated?"0":"null",
-        calibrated?"sensor_kelvin_64":"unverified_sensor_counts",gain==255?-1:int(gain),
+        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,"0.015625","0",
+        calibration,gain==255?-1:int(gain),
         minimum,maximum,minimum_c,maximum_c,
         rotated?180:0,hfov_json,known_fov?"nominal_pinhole":"unknown",telemetry);
     if (n<0 || size_t(n)>=sizeof(json)) return;
@@ -147,7 +145,7 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
 }
 
 static void publish_sensor(ca_thermal_stream *s, const uint16_t *pixels,
-                           const timespec *captured_at, uint8_t gain, bool rotated, bool calibrated,uint64_t received_us=0)
+                           const timespec *captured_at, uint8_t gain, bool rotated, const char *calibration,uint64_t received_us=0)
 {
     if (!s || !pixels || !captured_at) return;
     const uint64_t current=mono_us();
@@ -167,16 +165,16 @@ static void publish_sensor(ca_thermal_stream *s, const uint16_t *pixels,
     char telemetry[CA_VIDEO_METADATA_JSON_MAX];
     if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
     publish_frame(s, pixels, now, telemetry, gain, rotated,
-                  s->simulated ? "test_pattern" : "", s->thermal_hfov_cd.load()*.01f, metadata, *captured_at, calibrated);
+                  s->simulated ? "test_pattern" : "", s->thermal_hfov_cd.load()*.01f, metadata, *captured_at, calibration);
 }
 
 void ca_thermal_stream_publish(ca_thermal_stream *s,const uint16_t *pixels,
                                const timespec *at,uint8_t gain,bool rotated) {
-    publish_sensor(s,pixels,at,gain,rotated,true);
+    publish_sensor(s,pixels,at,gain,rotated,"sensor_kelvin_64");
 }
-void ca_thermal_stream_publish_counts(ca_thermal_stream *s,const uint16_t *pixels,
-                                      const timespec *at,uint8_t gain,bool rotated,uint64_t received_us) {
-    publish_sensor(s,pixels,at,gain,rotated,false,received_us);
+void ca_thermal_stream_publish_assumed(ca_thermal_stream *s,const uint16_t *pixels,
+                                       const timespec *at,uint8_t gain,bool rotated,uint64_t received_us) {
+    publish_sensor(s,pixels,at,gain,rotated,"assumed_sensor_kelvin_64",received_us);
 }
 void ca_thermal_stream_source_timeout(ca_thermal_stream *s,unsigned milliseconds) {
     if(!s)return;
@@ -590,7 +588,7 @@ int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 
 int ca_thermal_stream_capture(ca_thermal_stream *,const char *,const ca_survey_request &,ca_survey_result &,const std::atomic<uint64_t> &) { errno=ENOTSUP; return -1; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
 void ca_thermal_stream_source_timeout(ca_thermal_stream *, unsigned) {}
-void ca_thermal_stream_publish_counts(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool,uint64_t) {}
+void ca_thermal_stream_publish_assumed(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool,uint64_t) {}
 void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *, uint64_t, const char *, uint8_t, float, const ca_metadata *, const timespec *) {}
 unsigned ca_thermal_stream_port() { return 0; }
 bool ca_thermal_stream_available() { return false; }
