@@ -1106,26 +1106,27 @@ static void send_stream_information(struct ca_mavlink_server *server,
                                        (thermal ? "Thermal" : "Visible")));
     char uri[160];
     int length = 0;
+    // A configured URI (validated when loaded) replaces the one built here, on every route.
+    const char *configured = stream_id == 1U ? server->settings.video1_uri :
+                             stream_id == 2U ? server->settings.video2_uri : "";
     if (route->kind == ROUTE_PROXY) {
         const struct ca_support_config *support = &server->settings.support;
-        unsigned port = stream_id == 1U ? support->video1_port : support->video2_port;
         put_text(info.name, sizeof(info.name), stream_id == 1U ? support->video1_name : support->video2_name);
+    }
+    if (configured[0]) {
+        length = snprintf(uri, sizeof(uri), "%s", configured);
+        if (!strncmp(configured, "http", 4)) info.type = VIDEO_STREAM_TYPE_MPEG_TS;
+    } else if (route->kind == ROUTE_PROXY) {
+        const struct ca_support_config *support = &server->settings.support;
+        unsigned port = stream_id == 1U ? support->video1_port : support->video2_port;
         info.type = VIDEO_STREAM_TYPE_MPEG_TS;
         if (port) length = snprintf(uri, sizeof(uri), "http://%s:%u/v%u.ts", support->host, port, stream_id);
         else info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
     } else {
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
-#if !APCAM_HAVE_NETWORK_CONFIG
-        // A configured URI (validated when loaded) replaces the one built here.
-        if (stream_id == 1U && server->settings.video1_uri[0]) {
-            length = snprintf(uri, sizeof(uri), "%s", server->settings.video1_uri);
-        } else
-#endif
-        {
-            (void)route_local_ipv4(server, route, host);
-            length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u%s", host,
-                              server->rtsp_port, source ? source : stream_id, misb ? ".misb" : "");
-        }
+        (void)route_local_ipv4(server, route, host);
+        length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u%s", host,
+                          server->rtsp_port, source ? source : stream_id, misb ? ".misb" : "");
     }
     if (length > 0 && (size_t)length < sizeof(uri)) put_text(info.uri, sizeof(info.uri), uri);
     if (raw_thermal_stream(stream_id)) {
@@ -1148,6 +1149,10 @@ static void send_stream_information(struct ca_mavlink_server *server,
                 if (ca_thermal_stream_available() && ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
             }
             else { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
+        }
+        if (server->settings.video3_uri[0]) {
+            snprintf(uri, sizeof(uri), "%s", server->settings.video3_uri);
+            if (ca_thermal_stream_available() && ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
         }
         put_text(info.uri,sizeof(info.uri),uri);
         info.encoding = VIDEO_STREAM_ENCODING_UNKNOWN; // FFV1 is identified by Matroska CodecID
@@ -2611,6 +2616,8 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     next.network_capture = desired.network_capture;
     next.vpn = desired.vpn;
     memcpy(next.video1_uri, desired.video1_uri, sizeof(next.video1_uri));
+    memcpy(next.video2_uri, desired.video2_uri, sizeof(next.video2_uri));
+    memcpy(next.video3_uri, desired.video3_uri, sizeof(next.video3_uri));
     next.main_resolution = server->settings.main_resolution;
     next.sub_resolution = server->settings.sub_resolution;
     next.recording_resolution = server->settings.recording_resolution;

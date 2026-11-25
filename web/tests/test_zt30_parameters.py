@@ -142,6 +142,23 @@ int main()
     assert(ca_config_param_save(&loaded, REPLACEMENT_CONFIG_PATH, raw_port, 40010) == 0);
     assert(loaded.support.video3_port == 40010U);
     assert(contents(REPLACEMENT_CONFIG_PATH).find("video3_port") != std::string::npos);
+    // each stream's advertised URI can be set, e.g. to a SupportProxy's
+    {
+        FILE *f = fopen(APP_DIR "/uris.ini", "w"); assert(f);
+        fputs("[network]\nvideo1_uri = rtsp://proxy.example.org:40011/view/v1\n"
+              "video2_uri = http://proxy.example.org:40012/v2.ts\n"
+              "video3_uri = http://proxy.example.org:40013/v3.mkv\n", f);
+        fclose(f);
+        ca_config uris; ca_config_defaults(&uris);
+        assert(ca_config_load(&uris, APP_DIR "/uris.ini", error, sizeof(error)) == 0);
+        assert(!strcmp(uris.video1_uri, "rtsp://proxy.example.org:40011/view/v1"));
+        assert(!strcmp(uris.video2_uri, "http://proxy.example.org:40012/v2.ts"));
+        assert(!strcmp(uris.video3_uri, "http://proxy.example.org:40013/v3.mkv"));
+        unsigned shown = 0;
+        for (const auto &parameter : replacement_parameters)
+            if (!strncmp(parameter.form_name, "network_video", 13) && parameter_shown(&parameter)) shown++;
+        assert(shown == 3);
+    }
     for (const char *name : {"PHOTO_SCOPE","RAW_STREAM_FPS","RAW_RECORD_FPS","LOG_DISARMED",
                              "REC_AUTOSTART","REC_RESOLUTION","VIDEO_MAIN_RES","VIDEO_MAIN_CODEC",
                              "VIDEO_SUB_RES","VIDEO_SUB_CODEC","THERMAL_HFOV_CD","OSD_THERMAL_FOV","MAV_POS_TARGET","TRACK_METHOD","OSD_CROSS","OSD_RECORD","SURV_LENS","SURV_PATTERN","SURV_OVERLAP"}) {

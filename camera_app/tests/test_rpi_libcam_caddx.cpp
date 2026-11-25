@@ -26,9 +26,11 @@ static void video_uri_validation(void)
     const char *valid[] = {
         "rtsp://10.0.0.5:8554/video1", "rtsps://pi.local/stream", "rtsp://pi-1.example.com",
         "rtsp://192.168.1.2:1/a/b.264", "rtsp://host:65535/",
+        "http://proxy.example.org:40001/v1.ts", "https://proxy.example.org/v3.mkv",
+        "rtsp://proxy.example.org:40001/view/v1?pw=x",
     };
     const char *invalid[] = {
-        "", "10.0.0.5", "http://10.0.0.5/video1", "RTSP://10.0.0.5/video1", "rtsp://",
+        "", "10.0.0.5", "ftp://10.0.0.5/video1", "RTSP://10.0.0.5/video1", "rtsp://",
         "rtsp:///video1", "rtsp://:8554/video1", "rtsp://host:/video1", "rtsp://host:0/video1",
         "rtsp://host:65536/video1", "rtsp://host:123456/video1", "rtsp://host:80x/video1",
         "rtsp://user:pass@host/video1", "rtsp://host?x=1", "rtsp://host/has space",
@@ -330,7 +332,7 @@ static void video1_uri(void)
         {"[network]\nvideo1_uri = rtsp://10.0.2.100:8554/video1\n", true, "rtsp://10.0.2.100:8554/video1"},
         {"[network]\nvideo1_uri = rtsps://pi.local/camera\n", true, "rtsps://pi.local/camera"},
         {"[network]\nvideo1_uri = 10.0.2.100\n", false, NULL},
-        {"[network]\nvideo1_uri = http://10.0.2.100/video1\n", false, NULL},
+        {"[network]\nvideo1_uri = ftp://10.0.2.100/video1\n", false, NULL},
         {"[network]\nvideo1_uri = rtsp://user:pw@10.0.2.100/video1\n", false, NULL},
         {"[network]\nvideo1_uri = rtsp://10.0.2.100:99999/video1\n", false, NULL},
     };

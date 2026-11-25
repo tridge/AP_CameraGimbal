@@ -123,7 +123,7 @@ def main():
             wait_uri(connection, lambda uri: uri == second)
 
             # Not an RTSP URI; keep the last good value.
-            write_config(config, "http://pi.example.com/video1")
+            write_config(config, "ftp://pi.example.com/video1")
             time.sleep(1.5)
             assert stream_uri(connection) == second
 

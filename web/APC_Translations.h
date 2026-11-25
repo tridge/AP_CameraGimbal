@@ -395,6 +395,8 @@ enum string_id {
     S_P_UART_DEVICE_OVERRIDE,
     S_H_UART_DEVICE_OVERRIDE,
     S_P_NETWORK_VIDEO1_URI,
+    S_P_NETWORK_VIDEO2_URI,
+    S_P_NETWORK_VIDEO3_URI,
     S_H_NETWORK_VIDEO1_URI,
     S_NETWORK_CAPTURE_FILES,
     S_P_NETWORK_ADDRESS,
@@ -1077,7 +1079,9 @@ static constexpr Translations translations = [] {
     result[S_P_UART_DEVICE_OVERRIDE] = {"Gimbal link", "云台连接", "ジンバル接続"};
     result[S_H_UART_DEVICE_OVERRIDE] = {"Serial port on the Pi, or a network address such as udp://IP:PORT or tcp://IP:PORT.", "树莓派上的串口，或网络地址，例如 udp://IP:PORT 或 tcp://IP:PORT。", "Pi のシリアルポート、または udp://IP:PORT や tcp://IP:PORT などのネットワークアドレス。"};
     result[S_P_NETWORK_VIDEO1_URI] = {"Video stream 1 URI", "视频流 1 URI", "映像ストリーム 1 URI"};
-    result[S_H_NETWORK_VIDEO1_URI] = {"Complete rtsp:// or rtsps:// URI the GCS should use for video stream 1, for example rtsp://10.0.0.5:8554/video1. Sent as is in the video-stream-information message's URI field. The camera does not check that it serves this path; use the stream alias to serve extra paths. If left blank the URI is built from the Pi's own address, which is a guess when the Pi has several networks. Applies without restarting.", "地面站接收视频流 1 应使用的完整 rtsp:// 或 rtsps:// URI，例如 rtsp://10.0.0.5:8554/video1。通过 video-stream-information 消息的 URI 字段原样发送。相机不会检查是否提供该路径；可使用流别名提供额外路径。留空则根据树莓派自身的地址生成 URI；当树莓派有多个网络时，该地址只是推测。无需重启即可生效。", "GCS が映像ストリーム 1 に使用する完全な rtsp:// または rtsps:// URI（例: rtsp://10.0.0.5:8554/video1）。video-stream-information メッセージの URI フィールドでそのまま送信されます。カメラがこのパスを配信しているかは確認されません。追加のパスにはストリームのエイリアスを使用してください。空欄の場合は Pi 自身のアドレスから URI を生成しますが、Pi に複数のネットワークがある場合は推測になります。再起動なしで反映されます。"};
+    result[S_P_NETWORK_VIDEO2_URI] = {"Video stream 2 URI", "视频流 2 URI", "映像ストリーム 2 URI"};
+    result[S_P_NETWORK_VIDEO3_URI] = {"Raw thermal stream URI", "原始热成像流 URI", "生サーマルストリーム URI"};
+    result[S_H_NETWORK_VIDEO1_URI] = {"Complete URI the GCS should use for this video stream: rtsp://, rtsps://, http:// or https://, for example rtsp://10.0.0.5:8554/video1, or a SupportProxy address such as rtsp://proxy.example.org:40001/view/v1 or http://proxy.example.org:40003/v3.mkv. Sent as is in the video-stream-information message's URI field, to every ground station. The camera does not check that the address serves the stream. If left blank the URI is built from the camera's own address, which is a guess when it has several networks. Applies without restarting.", "地面站接收此视频流应使用的完整 URI：rtsp://、rtsps://、http:// 或 https://，例如 rtsp://10.0.0.5:8554/video1，或 SupportProxy 地址，如 rtsp://proxy.example.org:40001/view/v1 或 http://proxy.example.org:40003/v3.mkv。通过 video-stream-information 消息的 URI 字段原样发送给所有地面站。相机不会检查该地址是否提供此视频流。留空则根据相机自身的地址生成 URI；当相机有多个网络时，该地址只是推测。无需重启即可生效。", "GCS がこの映像ストリームに使用する完全な URI（rtsp://、rtsps://、http:// または https://）。例: rtsp://10.0.0.5:8554/video1、または SupportProxy のアドレス rtsp://proxy.example.org:40001/view/v1 や http://proxy.example.org:40003/v3.mkv。video-stream-information メッセージの URI フィールドで、すべての地上局にそのまま送信されます。カメラはそのアドレスがストリームを配信しているかを確認しません。空欄の場合はカメラ自身のアドレスから URI を生成しますが、複数のネットワークがある場合は推測になります。再起動なしで反映されます。"};
     result[S_NETWORK_CAPTURE_FILES] = {"Browse network captures", "浏览网络抓包文件", "キャプチャファイルを表示"};
     result[S_H_NETWORK_INTERFACE] = {"Interface used for camera addresses and the default gateway, independent of SupportProxy.", "用于相机地址和默认网关的接口，独立于 SupportProxy。", "カメラのアドレスとデフォルトゲートウェイのインターフェース。SupportProxy とは独立しています。"};
     result[S_P_NETWORK_ADDRESS] = {"Secondary IPv4 address/prefix", "附加 IPv4 地址/前缀", "追加 IPv4 アドレス/プレフィックス"};

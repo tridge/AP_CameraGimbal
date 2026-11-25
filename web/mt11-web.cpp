@@ -824,8 +824,14 @@ static const struct parameter replacement_parameters[] = {
 #endif
     {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
-#if !APCAM_HAVE_NETWORK_CONFIG
     {"network_video1_uri", "network", "video1_uri", S_P_NETWORK_VIDEO1_URI, S_H_NETWORK_VIDEO1_URI,
+     PARAM_TEXT, 0, 159, 1, NULL, 0},
+#if APCAM_NUM_STREAMS >= 2
+    {"network_video2_uri", "network", "video2_uri", S_P_NETWORK_VIDEO2_URI, S_H_NETWORK_VIDEO1_URI,
+     PARAM_TEXT, 0, 159, 1, NULL, 0},
+#endif
+#if APCAM_HAVE_RAW_THERMAL
+    {"network_video3_uri", "network", "video3_uri", S_P_NETWORK_VIDEO3_URI, S_H_NETWORK_VIDEO1_URI,
      PARAM_TEXT, 0, 159, 1, NULL, 0},
 #endif
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
@@ -914,7 +920,11 @@ static const char *replacement_defaults[] = {
     "false", "zerotier", "",
 #endif
     "false",
-#if !APCAM_HAVE_NETWORK_CONFIG
+    "",
+#if APCAM_NUM_STREAMS >= 2
+    "",
+#endif
+#if APCAM_HAVE_RAW_THERMAL
     "",
 #endif
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
@@ -2227,7 +2237,7 @@ static bool valid_text_parameter(const struct parameter *parameter,
         if (!strcmp(parameter->key, "vpn_network_id")) return apcam_vpn_network_id_valid(text);
         if (!length) return true;
         if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
-        if (!strcmp(parameter->key, "video1_uri"))
+        if (!strncmp(parameter->key, "video", 5) && !strcmp(parameter->key + 6, "_uri"))
             return apcam_video_uri_valid(text);
         if (!strcmp(parameter->key, "uart_device_override"))
             return apcam_uart_device_override_valid(text);
@@ -2287,6 +2297,7 @@ static bool parameter_shown(const struct parameter *parameter)
     /* The host OS owns the interfaces; only capture, the video URI and the gimbal link apply. */
     if (!APCAM_HAVE_NETWORK_CONFIG && !strcmp(parameter->section, "network") &&
         strcmp(parameter->key, "capture") && strcmp(parameter->key, "video1_uri") &&
+        strcmp(parameter->key, "video2_uri") && strcmp(parameter->key, "video3_uri") &&
         strcmp(parameter->key, "uart_device_override")) return false;
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->section,"thermal") &&
         !(APCAM_HAVE_RAW_THERMAL && (!strcmp(parameter->key,"stream_fps") || !strcmp(parameter->key,"record_fps"))) &&
@@ -4862,7 +4873,8 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
     page->append_html(T(parameter->help));
     if (strcmp(parameter->section, "support_proxy") == 0 ||
         (strcmp(parameter->section, "network") == 0 && strcmp(parameter->key, "capture") != 0 &&
-         strcmp(parameter->key, "video1_uri") != 0) ||
+         strcmp(parameter->key, "video1_uri") != 0 && strcmp(parameter->key, "video2_uri") != 0 &&
+         strcmp(parameter->key, "video3_uri") != 0) ||
         strcmp(parameter->form_name, "orientation") == 0 ||
         strcmp(parameter->form_name, "uart_protocol") == 0 ||
         strcmp(parameter->form_name, "mavlink_system_id") == 0 ||

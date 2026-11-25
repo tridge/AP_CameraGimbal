@@ -23,7 +23,8 @@ static inline bool apcam_ipv4_host(const char *text, struct in_addr *address)
     uint32_t host = ntohl(address->s_addr);
     return (host >> 24) > 0 && (host >> 24) != 127 && (host >> 24) < 224;
 }
-/* A video URI override sent to the GCS as is: rtsp:// or rtsps://, a host name
+/* A video URI override sent to the GCS as is: rtsp://, rtsps://, http:// or
+ * https:// (MPEG-TS or raw thermal Matroska, as a SupportProxy serves), a host name
  * or IPv4 address, an optional port and an optional path. Printable ASCII only,
  * no credentials, and short enough for VIDEO_STREAM_INFORMATION's uri field. */
 #define APCAM_VIDEO_URI_SIZE 160
@@ -38,7 +39,9 @@ static inline bool apcam_video_uri_valid(const char *text)
             return false;
     }
     const char *host = !strncmp(text, "rtsp://", 7) ? text + 7 :
-        !strncmp(text, "rtsps://", 8) ? text + 8 : NULL;
+        !strncmp(text, "rtsps://", 8) ? text + 8 :
+        !strncmp(text, "http://", 7) ? text + 7 :
+        !strncmp(text, "https://", 8) ? text + 8 : NULL;
     if (!host)
         return false;
     size_t host_length = strcspn(host, ":/?#@");
