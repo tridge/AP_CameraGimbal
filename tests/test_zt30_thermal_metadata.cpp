@@ -1,6 +1,7 @@
 // Exercise native raw-stream metadata without a USB module or video clients.
 #include "../camera_app/src/streaming/thermal_stream.cpp"
 #include <cassert>
+#include "camera_app/thermal.h"
 void ca_log(const char *,...) {}
 void ca_metadata_snapshot(ca_metadata *pose) { *pose={}; }
 bool ca_metadata_at(uint64_t,ca_metadata *) { return false; }
@@ -16,13 +17,24 @@ int main() {
     for(unsigned fov : {2420U,3000U,0U}) {
         config.thermal_hfov_cd=fov;
         assert(ca_thermal_stream_configure(&stream,&config)==0);
-        ca_thermal_stream_publish_counts(&stream,pixels.data(),&at,255,false,mono_us());
+        ca_thermal_stream_publish_assumed(&stream,pixels.data(),&at,255,false,mono_us());
         char expected[64];
         if(fov)snprintf(expected,sizeof(expected),"\"hfov_deg\":%.6f",double(fov*.01f));
         else snprintf(expected,sizeof(expected),"\"hfov_deg\":null");
         assert(stream.json.find(expected)!=std::string::npos);
         assert(stream.json.find("\"gain\":-1")!=std::string::npos);
-        assert(stream.json.find("\"temperature_calibration\":\"unverified_sensor_counts\"")!=std::string::npos);
+        // counts are read as the MT11's Kelvin x 64, and say that this is assumed
+        assert(stream.json.find("\"temperature_calibration\":\"assumed_sensor_kelvin_64\"")!=std::string::npos);
+        assert(stream.json.find("\"temperature_scale_k\":0.015625,\"temperature_offset_k\":0,")!=std::string::npos);
+        assert(stream.json.find("\"minimum_raw\":1234,\"maximum_raw\":1234,\"minimum_c\":-253.868750,\"maximum_c\":-253.868750")!=std::string::npos);
     }
+    // 20 degC is 293.15 K, 18762 counts; extremes are reported with their pixels
+    pixels.assign(640U*512U,18762);pixels[640U*100U+7U]=25162;pixels[640U*511U+639U]=12362;
+    ca_thermal_range range{};
+    assert(ca_thermal_range_from_kelvin64(pixels.data(),640,512,&range));
+    assert(range.maximum_centi_c==12001 && range.maximum_x==7 && range.maximum_y==100);
+    assert(range.minimum_centi_c==-7999 && range.minimum_x==639 && range.minimum_y==511);
+    assert(ca_thermal_kelvin64_centi_c(18762)==2001);
+    assert(!ca_thermal_range_from_kelvin64(nullptr,640,512,&range));
     puts("PASS native thermal metadata: configurable/unknown FOV and unknown gain");
 }

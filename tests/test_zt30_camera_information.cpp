@@ -80,6 +80,7 @@ int main() {
             assert(info.flags & CAMERA_CAP_FLAGS_CAPTURE_IMAGE);
             assert(info.flags & CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE);
             assert(info.flags & CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM);
+            assert(info.flags & CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE);
             if(!initial_flags)initial_flags=info.flags;
             assert(info.flags==initial_flags);
             assert(info.resolution_h==(scope==CA_PHOTO_SCOPE_THERMAL?640:3840));

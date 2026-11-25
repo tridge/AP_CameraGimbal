@@ -150,6 +150,8 @@
 #define APCAM_HAVE_PHOTO 0
 #else
 #define APCAM_HAVE_RAW_THERMAL 1
+/* Raw counts are read as the MT11's Kelvin x 64; this is assumed, not calibrated. */
+#define APCAM_HAVE_THERMAL_RANGE 1
 #endif
 #undef APCAM_HAVE_FOCUS
 #define APCAM_HAVE_FOCUS 0

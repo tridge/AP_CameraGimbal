@@ -1,6 +1,7 @@
 #include "thermal_live.h"
 #include "thermal_pixels.h"
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
 #include "camera_app/video_metadata.h"
 #include <cerrno>
 #include <cstdio>
@@ -214,7 +215,15 @@ void ThermalLive::encode() {
                 if(error && !raw_error_logged)ca_log("ZT30 raw TCP publish failed errno=%d; repeats suppressed",errno);
                 raw_error_logged=error;
             }
-            ca_thermal_stream_publish_counts(raw_stream,radiometric.get(),&at,255,false,received/1000);
+            {
+                ca_thermal_range measured{};
+                if(ca_thermal_range_from_kelvin64(radiometric.get(),640,512,&measured)) {
+                    std::lock_guard<std::mutex> guard(range_lock);
+                    measured.frame_sequence=range.frame_sequence+1;measured.sampled_us=ca_binlog_time_us();
+                    range=measured;
+                }
+            }
+            ca_thermal_stream_publish_assumed(raw_stream,radiometric.get(),&at,255,false,received/1000);
             uint64_t pts=0;const auto before=now();const int rc=sdk.current_pts(0,&pts);const auto after=now();
             if(rc) { ca_log("ZT30 thermal degraded: GetCurPts raw=%d",rc);degraded.store(true);break; }
             if(after-before>2000000ULL) {
@@ -333,5 +342,10 @@ void ThermalLive::join() {
     ca_overlay_free(cross_bits);
     if(normal && !usb_failed.load() && !degraded.load() && published_ns.load() && !budget.reset())
         ca_log("ZT30 thermal clean-shutdown budget reset failed");
+}
+bool ThermalLive::thermal_range(ca_thermal_range *out) {
+    std::lock_guard<std::mutex> guard(range_lock);
+    if(!out || !range.sampled_us)return false;
+    *out=range;return true;
 }
 }
