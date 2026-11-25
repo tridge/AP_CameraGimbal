@@ -4,6 +4,7 @@
 #include <new>
 #include "pipeline.h"
 #include "native.h"
+#include "camera_app/directories.h"
 #include "camera_app/APC_Media_Backend.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/rtsp.h"
@@ -255,8 +256,7 @@ int APC_Media_Z1Mini::set_recording(bool active)
             errno = ENODEV; result = -1; goto done;
         }
 #endif
-        struct stat st;
-        if (stat(m->config.record_root, &st) || !S_ISDIR(st.st_mode)) { result = -1; goto done; }
+        if (ca_mkdir_p_mounted(m->config.record_root, 0755) < 0) { result = -1; goto done; }
         struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
         int n = snprintf(m->path, sizeof(m->path), "%s/Z1_%lld_%09ld.%s",
                          m->config.record_root, (long long)now.tv_sec, now.tv_nsec, ca_video_recording_extension());

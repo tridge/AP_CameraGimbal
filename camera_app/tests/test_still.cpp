@@ -211,13 +211,16 @@ int main(void)
     errno = 0;
     assert(ca_mkdir_p(file, 0700) < 0 && errno == ENOTDIR);
     assert(ca_mkdir_p("", 0700) < 0 && errno == EINVAL);
-    // the JPEG writer makes a capture root's missing parents
     assert(rmdir(nested) == 0 && unlink(file) == 0 && rmdir(parent) == 0);
+    // A missing parent in a plain directory is a card that is not mounted:
+    // nothing is created. (Under a mount point it is a card with no DCIM.)
+    errno = 0;
+    assert(ca_mkdir_p_mounted(nested, 0700) < 0 && errno == ENODEV);
     assert(ca_still_write_jpeg(nested, 'C', jpeg, sizeof(jpeg), &captured_at,
-                               path, sizeof(path)) == 0);
-    strcpy(directory, path);
-    *strrchr(directory, '/') = '\0';
-    assert(unlink(path) == 0 && rmdir(directory) == 0);
+                               path, sizeof(path)) < 0 && errno == ENODEV);
+    assert(stat(parent, &status) < 0 && errno == ENOENT);
+    // with the parent there, only the root is missing, as before
+    assert(mkdir(parent, 0700) == 0 && ca_mkdir_p_mounted(nested, 0700) == 0);
     assert(rmdir(nested) == 0 && rmdir(parent) == 0);
     assert(rmdir(root) == 0);
     puts("still JPEG tests passed");

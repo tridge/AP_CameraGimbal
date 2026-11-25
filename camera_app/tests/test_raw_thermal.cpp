@@ -4,6 +4,7 @@
 #include "camera_app/raw_thermal.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -64,18 +65,15 @@ int main(void)
     assert(unlink(second) == 0);
     assert(rmdir(directory) == 0);
 
-    // a card with no DCIM: the capture root's parents are made too
+    // no card mounted (a missing parent in a plain directory): nothing is created
     char nested[96], parent[64];
     snprintf(parent, sizeof(parent), "%s/DCIM", root);
     snprintf(nested, sizeof(nested), "%s/capture", parent);
     assert(ca_raw_thermal_open(&capture, nested) == 0);
-    assert(ca_raw_thermal_write_at(capture, pixels, 2, 2, &captured_at) == 0);
-    strcpy(first, ca_raw_thermal_path(capture));
+    errno = 0;
+    assert(ca_raw_thermal_write_at(capture, pixels, 2, 2, &captured_at) < 0 && errno == ENODEV);
     ca_raw_thermal_close(capture);
-    strcpy(directory, first);
-    *strrchr(directory, '/') = '\0';
-    assert(unlink(first) == 0 && rmdir(directory) == 0);
-    assert(rmdir(nested) == 0 && rmdir(parent) == 0);
+    assert(stat(parent, &status) < 0 && errno == ENOENT);
     assert(rmdir(root) == 0);
     puts("raw thermal capture tests passed");
     return 0;
