@@ -243,7 +243,7 @@ static int write_all(int fd,const void *data,size_t size)
 }
 static int open_log(void)
 {
-    if (ca_mkdir_p(logger.root,0755)<0) return -1;
+    if (ca_mkdir_p_mounted(logger.root,0755)<0) return -1;
     DIR *dir=opendir(logger.root);
     if (!dir) return -1;
     unsigned maximum=0;

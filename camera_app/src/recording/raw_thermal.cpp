@@ -61,7 +61,7 @@ static int make_path(struct ca_raw_thermal *capture, int *fd,
         errno = EINVAL;
         return -1;
     }
-    if (ca_mkdir_p(capture->root, 0700) < 0) return -1;
+    if (ca_mkdir_p_mounted(capture->root, 0700) < 0) return -1;
     if (snprintf(directory, sizeof(directory), "%s/%s", capture->root,
                  day) >= (int)sizeof(directory)) {
         errno = ENAMETOOLONG;

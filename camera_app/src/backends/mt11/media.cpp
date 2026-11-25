@@ -410,7 +410,7 @@ static int make_recording_path(struct APC_Media_MT11_State *media)
 
     localtime_r(&now, &local);
     strftime(day, sizeof(day), "%Y-%m-%d", &local);
-    if (ca_mkdir_p(media->config.record_root, 0700) < 0) return -1;
+    if (ca_mkdir_p_mounted(media->config.record_root, 0700) < 0) return -1;
     if (snprintf(directory, sizeof(directory), "%s/%s",
                  media->config.record_root, day) >= (int)sizeof(directory)) {
         errno = ENAMETOOLONG;
