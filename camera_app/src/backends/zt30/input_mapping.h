@@ -3,7 +3,8 @@
 #include <vector>
 #include <cstdio>
 namespace ca_zt30 {
-struct InputMapping { uint64_t first,last; bool shared_zero; };
+// anonymous: private with no file behind it, such as malloc memory or a stack
+struct InputMapping { uint64_t first,last; bool shared_zero,anonymous; };
 // Bounded proc parser, never reads memory at the recorded addresses.
 bool read_input_mappings(FILE*,std::vector<InputMapping>&);
 // Require a newly introduced exact shared writable SDK mapping and consistent
