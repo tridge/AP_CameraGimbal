@@ -549,16 +549,21 @@ export class ReviewMap {
     commit();
     this.render();
   }
-  setVideoTrack(frames, recordForFrame) {
-    return this.setTrackRange(frames, recordForFrame);
+  setVideoTrack(frames, recordForFrame, options) {
+    return this.setTrackRange(frames, recordForFrame, options);
   }
   /** Draw (and seek on) only `frames`, built before decimation so a short range always draws;
    * dimOthers with allFrames also draws the whole track dimmed, without seeking. */
-  async setTrackRange(frames, recordForFrame, { dimOthers = false, allFrames = null } = {}) {
+  async setTrackRange(
+    frames,
+    recordForFrame,
+    { dimOthers = false, allFrames = null, keepPicking = false } = {},
+  ) {
     this.trackController?.abort();
     const controller = new AbortController();
     this.trackController = controller;
-    this.videoTrack = [];
+    // keepPicking: the same recording grown longer, so the old track still seeks correctly
+    if (!keepPicking) this.videoTrack = [];
     // small tracks build synchronously, as before
     const large = (list) => list.length > 20000;
     const slow = (list) =>

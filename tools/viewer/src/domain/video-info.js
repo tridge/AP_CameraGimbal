@@ -152,7 +152,7 @@ export function videoInformation(state, alignedTelemetry = state.frame?.telemetr
       title: 'File',
       rows: [
         ['Filename', file?.name || unknown],
-        ['File size', bytes(file?.size)],
+        ['File size', bytes(state.live && !state.indexed ? state.live.bytes : file?.size)],
         ['Reported file type', file?.type || unknown],
         ['File modified', fileDate],
         ['Container', container],

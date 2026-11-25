@@ -53,6 +53,8 @@ export function connectedTrackPoints(a, b) {
     !!a &&
     !!b &&
     a.clockSegment === b.clockSegment &&
+    // a live publisher that restarted: nothing was observed in between
+    (a.epoch ?? 0) === (b.epoch ?? 0) &&
     Math.abs(a.lat - b.lat) <= 0.1 &&
     Math.abs(a.lon - b.lon) <= 0.1 &&
     (!finite(a.pts) || !finite(b.pts) || (b.pts >= a.pts && b.pts - a.pts <= 10)) &&
@@ -107,6 +109,7 @@ function* trackBuilder(frames, recordForFrame, budget) {
       ...position,
       pts: frame.pts,
       frameId: frame.id,
+      epoch: frame.epoch ?? 0,
       tmaxC: frameMaximumC(frame),
       utcUs: record.pose_utc_us ?? record.utc_us,
       clockSegment: segment,
