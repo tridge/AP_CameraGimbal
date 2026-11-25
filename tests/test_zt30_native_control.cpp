@@ -34,7 +34,8 @@ static void expect_local(uint8_t opcode,std::initializer_list<uint8_t> values) {
 }
 static bool camera_thermal=false,camera_wide=true,lens_fail=false;
 static uint8_t camera_palette=0;
-static int mounting(void*,bool inverted) { return inverted?-1:0; }
+static unsigned inverted_attempts;
+static int mounting(void*,bool inverted) { if(inverted)++inverted_attempts;return inverted?-1:0; }
 static std::vector<uint8_t> take(int fd) {
     uint8_t wire[512];ssize_t n=recv(fd,wire,sizeof(wire),0);assert(n>=13);
     assert(wire[4]==ca_crc8_maxim(wire,4));assert(ca_crc16(wire,n-2)==(wire[n-2]|(uint16_t(wire[n-1])<<8)));
@@ -192,13 +193,28 @@ int main() {
         assert(!ca_backend_has_gimbal(r) && !r->mounting_direction_cached);
         reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1],850);
         assert(!ca_backend_has_gimbal(r));                            // a 0 cannot restore upright
+        free(r);r=fresh();                                            // nor can a restart
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1],850);assert(!ca_backend_has_gimbal(r));
+        const uint8_t junk=3;reply(r,fds[1],0x17,&junk,1);            // not a direction: changes nothing
+        reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1],850);assert(!ca_backend_has_gimbal(r));
         reply(r,fds[1],0x17,&up,1);attitude(r,fds[1]);assert(ca_backend_has_gimbal(r));
         reply(r,fds[1],0x17,&down,1);assert(!ca_backend_has_gimbal(r));
+        const unsigned attempts=inverted_attempts;                    // repeated: not applied or logged again
+        reply(r,fds[1],0x17,&down,1);reply(r,fds[1],0x17,&down,1);
+        assert(inverted_attempts==attempts && !ca_backend_has_gimbal(r));
         free(r);r=fresh();                                            // restart, last report inverted
         reply(r,fds[1],0x17,&zero,1);attitude(r,fds[1]);
         assert(!ca_backend_has_gimbal(r) && r->mounting_unsupported);
         reply(r,fds[1],0x17,&zero,1);assert(!ca_backend_has_gimbal(r));
         reply(r,fds[1],0x17,&up,1);attitude(r,fds[1]);assert(ca_backend_has_gimbal(r));
+        // a report that could not be stored is stored later
+        reply(r,fds[1],0x17,&down,1);
+        assert(setenv("CAMERA_APP_ZT30_MOUNT_CACHE","/nonexistent-zt30/mounting",1)==0);
+        reply(r,fds[1],0x17,&up,1);
+        assert(r->mounting_cache_pending==1 && ca_mounting_cache_load(cache)==2);
+        assert(setenv("CAMERA_APP_ZT30_MOUNT_CACHE",cache,1)==0);
+        r->mounting_cache_retry_ms=0;ca_backend_periodic(r);
+        assert(!r->mounting_cache_pending && ca_mounting_cache_load(cache)==1);
         free(r);drain();
     }
     b->zoom_get=[](void*) { return 2.5f; };
