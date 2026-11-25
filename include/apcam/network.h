@@ -125,4 +125,25 @@ static inline bool apcam_network_valid(const char *primary, const char *secondar
     }
     return true;
 }
+/* True if text is blank or an rclone remote, name:folder. The name is letters,
+ * digits and _.+- (not starting with -), so rclone cannot read it as an option
+ * or treat it as a folder on this device. The folder is printable ASCII
+ * without quotes or backslashes. */
+#define APCAM_UPLOAD_REMOTE_SIZE 160
+static inline bool apcam_upload_remote_valid(const char *text)
+{
+    size_t length = strlen(text);
+    if (length >= APCAM_UPLOAD_REMOTE_SIZE)
+        return false;
+    if (!length)
+        return true;
+    size_t name = strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-");
+    if (!name || text[0] == '-' || text[name] != ':')
+        return false;
+    for (const char *p = text + name + 1; *p; p++) {
+        if ((unsigned char)*p < 0x20 || (unsigned char)*p > 0x7e || *p == '"' || *p == '\\')
+            return false;
+    }
+    return true;
+}
 #endif

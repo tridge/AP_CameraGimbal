@@ -37,3 +37,7 @@ tests/test_support_mavlink
 tests/test_exposure
 tests/test_exposure_native
 tests/test_manual_control
+tests/test_uploader
+
+apcam-upload
+upload-ca.pem

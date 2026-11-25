@@ -193,6 +193,18 @@ struct ca_vpn_config {
     char network_id[17];
 };
 
+/* [upload] what and after_upload. The numbers match camera_app/uploader.h. */
+enum ca_upload_what {
+    CA_UPLOAD_WHAT_PHOTOS = 1,
+    CA_UPLOAD_WHAT_RECORDINGS = 2,
+    CA_UPLOAD_WHAT_BOTH = 3,
+};
+enum ca_upload_after_mode {
+    CA_UPLOAD_AFTER_KEEP = 0,
+    CA_UPLOAD_AFTER_DELETE = 1,
+    CA_UPLOAD_AFTER_DELETE_WHEN_LOW = 2,
+};
+
 struct ca_config {
     struct ca_survey_config survey;
     struct ca_network_config network;
@@ -252,6 +264,14 @@ struct ca_config {
     unsigned mavlink_camera_component_id;
     unsigned mavlink_tcp_port;
     unsigned mavlink_udp_port;
+    /* Cloud upload on targets with APCAM_HAVE_UPLOAD. Size: APCAM_UPLOAD_REMOTE_SIZE. */
+    bool upload_enable;
+    char upload_remote[160];
+    enum ca_upload_what upload_what;
+    enum ca_upload_after_mode upload_after;
+    unsigned upload_low_space_percent;
+    unsigned upload_bandwidth_kib_s;
+    unsigned upload_scan_minutes;
 };
 
 bool ca_config_image_equal(const struct ca_config *a, const struct ca_config *b);

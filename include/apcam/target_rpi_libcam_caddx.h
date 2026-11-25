@@ -122,6 +122,10 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 /* Pi OS has no /mnt media card; the service may override these. */
 #define APCAM_LOG_ROOT "/var/lib/ap_cameragimbal/logs"
+/* Retain the original credentials location for existing installations. */
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_RCLONE_PATH ""
+#define APCAM_RCLONE_CONFIG "/var/lib/ap_cameragimbal/rclone.conf"
 
 /* Platform paths are consumed only by the web service. systemd supervises
  * both services: the web stops camera-app and systemd starts a fresh one. */

@@ -422,6 +422,69 @@ static void main_resolutions(void)
     unlink(path);
 }
 
+/* [upload]: the remote rule, the defaults and the ini keys. */
+static void upload_config(void)
+{
+    const char *valid[] = {
+        "", "gdrive:", "gdrive:AP_CameraGimbal", "my-drive.1:Camera Photos/2026", "a_b+c:x",
+    };
+    const char *invalid[] = {
+        "gdrive", "-x:y", ":folder", "a b:c", "gdrive:\"x", "gdrive:a\\b", "gd/rive:x", "gdrive:caf\xc3\xa9",
+    };
+    for (const char *remote : valid) assert(apcam_upload_remote_valid(remote));
+    for (const char *remote : invalid) assert(!apcam_upload_remote_valid(remote));
+    char longest[APCAM_UPLOAD_REMOTE_SIZE + 1];
+    memset(longest, 'a', sizeof(longest));
+    longest[0] = 'g'; longest[1] = ':';
+    longest[APCAM_UPLOAD_REMOTE_SIZE - 1] = '\0';
+    assert(apcam_upload_remote_valid(longest));
+    longest[APCAM_UPLOAD_REMOTE_SIZE - 1] = 'a';
+    longest[APCAM_UPLOAD_REMOTE_SIZE] = '\0';
+    assert(!apcam_upload_remote_valid(longest));
+
+    struct ca_config defaults;
+    ca_config_defaults(&defaults);
+    assert(!defaults.upload_enable && defaults.upload_remote[0] == '\0');
+    assert(defaults.upload_what == CA_UPLOAD_WHAT_BOTH && defaults.upload_after == CA_UPLOAD_AFTER_KEEP);
+    assert(defaults.upload_low_space_percent == 20 && defaults.upload_bandwidth_kib_s == 0 &&
+           defaults.upload_scan_minutes == 5);
+
+    static const struct { const char *ini; bool loads; } cases[] = {
+        {"[upload]\nenable = true\nremote = gdrive:Cam\nwhat = photos\nafter_upload = delete_when_low\n"
+         "low_space_percent = 30\nbandwidth_kib_s = 500\nscan_minutes = 10\n", true},
+        {"[upload]\nenable = false\nremote = \"\"\nwhat = recordings\nafter_upload = delete\n", true},
+        {"[upload]\nremote = nocolon\n", false},
+        {"[upload]\nwhat = everything\n", false},
+        {"[upload]\nafter_upload = remove\n", false},
+        {"[upload]\nlow_space_percent = 0\n", false},
+        {"[upload]\nlow_space_percent = 91\n", false},
+        {"[upload]\nscan_minutes = 0\n", false},
+        {"[upload]\nenable = yes\n", false},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[] = "/tmp/camera-upload-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        size_t length = strlen(cases[i].ini);
+        assert(write(fd, cases[i].ini, length) == (ssize_t)length);
+        close(fd);
+        struct ca_config config;
+        ca_config_defaults(&config);
+        char error[256] = "";
+        assert((ca_config_load(&config, path, error, sizeof(error)) == 0) == cases[i].loads);
+        if (i == 0) {
+            assert(config.upload_enable && !strcmp(config.upload_remote, "gdrive:Cam"));
+            assert(config.upload_what == CA_UPLOAD_WHAT_PHOTOS && config.upload_after == CA_UPLOAD_AFTER_DELETE_WHEN_LOW);
+            assert(config.upload_low_space_percent == 30 && config.upload_bandwidth_kib_s == 500 &&
+                   config.upload_scan_minutes == 10);
+        } else if (i == 1) {
+            assert(!config.upload_enable && config.upload_remote[0] == '\0');
+            assert(config.upload_what == CA_UPLOAD_WHAT_RECORDINGS && config.upload_after == CA_UPLOAD_AFTER_DELETE);
+        }
+        unlink(path);
+    }
+}
+
 int main(void)
 {
     main_resolutions();
@@ -483,6 +546,7 @@ int main(void)
     caddx_udp_unreachable();
     caddx_tcp();
     caddx_tcp_late_server();
+    upload_config();
     puts("rpi_libcam_caddx image controls and CADDX gimbal passed");
     return 0;
 }

@@ -24,6 +24,8 @@ struct ca_mavlink_server_config {
     struct ca_config settings;
     struct ca_backend *backend;
     struct ca_media *media;
+    const char *rclone_path;   /* uploads; targets with APCAM_HAVE_UPLOAD */
+    const char *rclone_config;
 };
 
 int ca_mavlink_server_open(struct ca_mavlink_server **server,

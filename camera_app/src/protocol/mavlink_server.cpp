@@ -204,6 +204,13 @@ struct ca_mavlink_server {
     int logged_saved[128], logged_applied[128];
     float logged_camera[128];
     struct ca_log_mode logged_mode;
+    uint64_t vehicle_heartbeat_ms; /* for uploads */
+#if APCAM_HAVE_UPLOAD
+    struct ca_uploader *uploader;
+    char rclone_path[256], rclone_config[256], record_root[256];
+    char upload_status_path[4096], upload_status_text[512];
+    uint64_t upload_status_ms;
+#endif
 };
 
 static bool survey_running(const ca_mavlink_server *);
@@ -3120,6 +3127,7 @@ static void process_message(struct ca_mavlink_server *server,
                       MAV_MODE_FLAG_SAFETY_ARMED) != 0U;
         server->have_vehicle_armed = true;
         server->vehicle_armed = armed;
+        server->vehicle_heartbeat_ms = monotonic_ms();
         server->flight_mode = mavlink_msg_heartbeat_get_custom_mode(message);
         update_binlog(server, false);
         mavlink_heartbeat_t heartbeat;
@@ -3371,6 +3379,8 @@ static uint8_t survey_capture_start(ca_mavlink_server *s,int32_t count,float int
     return MAV_RESULT_ACCEPTED;
 }
 
+#include "upload_server.inc"
+
 int ca_mavlink_server_open(struct ca_mavlink_server **result,
                            const struct ca_mavlink_server_config *config)
 {
@@ -3483,6 +3493,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
         ca_log("SupportProxy MAVLink startup failed: %s", strerror(errno));
     ca_mavlink_parser_init(&server->udp_parser);
     ca_mavlink_parser_init(&server->mcu_parser);
+    if (!upload_open(server, config)) goto fail;
     *result = server;
     return 0;
 fail: {
@@ -3656,6 +3667,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
             broadcast_message(server, &message);
         }
     }
+    upload_periodic(server, now);
 }
 
 void ca_mavlink_server_close(struct ca_mavlink_server *server)
@@ -3673,5 +3685,6 @@ void ca_mavlink_server_close(struct ca_mavlink_server *server)
     ca_camera_ftp_close(&server->ftp);
     ca_terrain_stop();
     delete server->survey;
+    upload_close(server);
     free(server);
 }

@@ -101,6 +101,10 @@ void ca_config_defaults(struct ca_config *config)
     strcpy(config->support.video3_name, "Raw Thermal (16-bit)");
     strcpy(config->support.network_interface, "eth0");
     strcpy(config->network.interface, "eth0");
+    config->upload_what = CA_UPLOAD_WHAT_BOTH;
+    config->upload_after = CA_UPLOAD_AFTER_KEEP;
+    config->upload_low_space_percent = 20;
+    config->upload_scan_minutes = 5;
 #ifdef CAMERA_APP_ZT30_DEV
     config->thermal_hfov_cd = (unsigned)(APCAM_LENS3_FOV_H*100+.5f);
     // Omitted keys use implemented native defaults. Explicit legacy values
@@ -289,6 +293,11 @@ static int read_config(struct ca_config *config, FILE *file,
     }
     if (!apcam_uart_device_override_valid(parsed.uart_device_override)) {
         snprintf(error, error_size, "Gimbal link must be blank, a /dev serial device, udp://IPv4:PORT or tcp://IPv4:PORT");
+        errno = EINVAL;
+        goto fail;
+    }
+    if (!apcam_upload_remote_valid(parsed.upload_remote)) {
+        snprintf(error, error_size, "Upload remote must be blank or name:folder");
         errno = EINVAL;
         goto fail;
     }

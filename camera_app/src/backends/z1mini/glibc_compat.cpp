@@ -43,3 +43,16 @@ extern "C" int __wrap_fcntl(int fd, int command, ...)
         errno = ENOTSUP; return -1;
     }
 }
+
+/* libcurl and the upload supervisor use the large-file spelling for flags. */
+extern "C" int __wrap_fcntl64(int fd, int command, ...)
+{
+    switch(command) {
+    case F_GETFL: case F_GETFD: case F_GETOWN: return __wrap_fcntl(fd,command);
+    case F_SETFL: case F_SETFD: case F_SETOWN: case F_DUPFD: case F_DUPFD_CLOEXEC: {
+        va_list ap;va_start(ap,command);int arg=va_arg(ap,int);va_end(ap);
+        return __wrap_fcntl(fd,command,arg);
+    }
+    default: errno=ENOTSUP;return -1;
+    }
+}

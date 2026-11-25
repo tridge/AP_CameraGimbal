@@ -110,7 +110,7 @@ def main():
         tool_build_deps = (['autoconf', 'automake', 'libtool', 'pkg-config',
                             'bison', 'flex', 'gawk'] if args.with_tool_build_deps else [])
         run(*prefix, 'apt-get', 'install', '-y', 'build-essential', 'gcc-aarch64-linux-gnu',
-            'g++-aarch64-linux-gnu', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
+            'g++-aarch64-linux-gnu', 'cmake', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
             'mtd-utils', 'fakeroot', 'zlib1g-dev', 'liblzo2-dev', 'libzstd-dev', 'liblzma-dev',
             'openssl', 'patch', 'rsync', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
             'python3-av', 'python3-opencv', *tool_build_deps)

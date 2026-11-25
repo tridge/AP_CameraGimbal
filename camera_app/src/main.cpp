@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "apcam/target.h"
+#include "apcam/upload_paths.h"
 #include "apcam/APC_Timezone.h"
 #include "camera_app/APC_CameraApp.h"
 #include "apcam/APC_Resource.h"
@@ -564,6 +565,16 @@ int APC_CameraApp::run(int argc, char **argv)
     if (!gimbal_ready) { ca_log("Z1 gimbal feedback unavailable"); return result; }
 #endif
     ca_metadata_set_model(APCAM_MODEL_NAME);
+    char native_worker[4096] = "", native_credentials[256] = "", executable[4096];
+    if(apcam_upload_executable(executable,sizeof(executable))) {
+        (void)apcam_upload_sibling(native_worker,sizeof(native_worker),executable,"apcam-upload");
+    }
+    (void)apcam_upload_sibling(native_credentials,sizeof(native_credentials),config_path,"upload.conf");
+    // Old environment names remain supported for existing RPi installations.
+    const char *rclone_path = environment_string("CAMERA_APP_UPLOAD_WORKER",
+        environment_string("CAMERA_APP_RCLONE",native_worker));
+    const char *rclone_config = environment_string("CAMERA_APP_RCLONE_CONFIG",
+        APCAM_RCLONE_CONFIG[0] ? APCAM_RCLONE_CONFIG : native_credentials);
     struct ca_mavlink_server_config mavlink_config = {
         .manual_control = &_manual.active,
         .tcp_port = mavlink_tcp_port,
@@ -581,6 +592,8 @@ int APC_CameraApp::run(int argc, char **argv)
         .settings = app_config,
         .backend = _backend,
         .media = _media,
+        .rclone_path = rclone_path,
+        .rclone_config = rclone_config,
     };
     if (ca_mavlink_server_open(&_mavlink_server, &mavlink_config) < 0) {
         ca_log("cannot initialize MAVLink: %s", strerror(errno));

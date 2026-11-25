@@ -87,7 +87,7 @@ CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -D_FILE_OFFSET_BITS=64
-TARGET_LINK_FLAGS := -Wl,--wrap=fcntl,--wrap=exp,--wrap=pow
+TARGET_LINK_FLAGS := -Wl,--wrap=fcntl,--wrap=fcntl64,--wrap=exp,--wrap=pow
 endif
 # header dependency tracking, so struct layout changes rebuild every user
 DEPFLAGS := -MMD -MP
@@ -168,7 +168,8 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp $(MISB_SOURCES) \
-	$(CONTROL_DIR)/control.cpp
+	$(CONTROL_DIR)/control.cpp \
+	src/upload/uploader.cpp
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
@@ -1160,3 +1161,57 @@ build/tests/test_stream_layout: tests/test_stream_layout.cpp src/protocol/mavlin
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $< -lpthread -lm
 
 test: stream-layout-test
+# Cloud upload: nonblocking supervisor and host integration tests.
+tests/test_uploader: tests/test_uploader.cpp src/upload/uploader.cpp include/camera_app/uploader.h src/log.cpp tests/fake_rclone.sh
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
+
+.PHONY: uploader-test
+uploader-test: tests/test_uploader
+	./tests/test_uploader
+test: uploader-test
+
+.PHONY: rpi-upload-test
+rpi-upload-test: $(RPI_HOST_TARGET)
+	python3 tests/test_rpi_upload.py ./$(RPI_HOST_TARGET)
+test: rpi-upload-test
+
+
+# Native Drive worker: static HTTPS/TLS dependencies, separate from camera-app.
+UPLOAD_DEPS_ROOT ?= $(abspath ../build/deps/cloud-upload)
+UPLOAD_PREFIX := $(UPLOAD_DEPS_ROOT)/$(CAMERA_BACKEND)
+UPLOAD_TARGET := $(dir $(TARGET))apcam-upload
+UPLOAD_HOST_LINK_FLAGS := -Wl,--gc-sections
+ifeq ($(shell uname -s),Darwin)
+UPLOAD_HOST_LINK_FLAGS := -Wl,-dead_strip
+endif
+.PHONY: upload-worker upload-libraries native-upload-test
+upload-libraries:
+	+APCAM_UPLOAD_DEPS_ROOT='$(UPLOAD_DEPS_ROOT)' ../tools/build_cloud_upload.sh '$(CAMERA_BACKEND)' '$(CROSS_COMPILE)'
+upload-worker: upload-libraries
+	@mkdir -p $(dir $(UPLOAD_TARGET))
+	$(CXX) -std=gnu++17 -Os -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DCURL_STATICLIB -I../include -I$(UPLOAD_PREFIX)/include \
+		src/upload/drive_worker.cpp -L$(UPLOAD_PREFIX)/lib -ffunction-sections -fdata-sections -Wl,--gc-sections \
+		$(LDFLAGS) $(if $(filter z1mini,$(CAMERA_BACKEND)),src/backends/z1mini/glibc_compat.cpp $(TARGET_LINK_FLAGS)) -static-libstdc++ -static-libgcc -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -pthread -lm -o $(UPLOAD_TARGET)
+	cp ../packaging/cloud-upload/upload-ca.pem $(dir $(UPLOAD_TARGET))upload-ca.pem
+
+native-upload-test:
+	+APCAM_UPLOAD_DEPS_ROOT='$(UPLOAD_DEPS_ROOT)' ../tools/build_cloud_upload.sh host
+	@mkdir -p build/tests
+	$(HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DCURL_STATICLIB -DAPCAM_UPLOAD_TESTING -I../include -I$(UPLOAD_DEPS_ROOT)/host/include \
+		src/upload/drive_worker.cpp -L$(UPLOAD_DEPS_ROOT)/host/lib $(UPLOAD_HOST_LINK_FLAGS) \
+		-lcurl -lmbedtls -lmbedx509 -lmbedcrypto -pthread -lm -o build/tests/apcam-upload-test
+	python3 tests/test_native_upload.py build/tests/apcam-upload-test
+
+all: upload-worker
+
+.PHONY: upload-sitl-worker
+upload-sitl-worker:
+	+APCAM_UPLOAD_DEPS_ROOT='$(UPLOAD_DEPS_ROOT)' ../tools/build_cloud_upload.sh host
+	@mkdir -p $(dir $(SITL_TARGET))
+	$(HOST_CXX) -std=gnu++17 -Os -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DCURL_STATICLIB -I../include -I$(UPLOAD_DEPS_ROOT)/host/include \
+		src/upload/drive_worker.cpp -L$(UPLOAD_DEPS_ROOT)/host/lib $(UPLOAD_HOST_LINK_FLAGS) \
+		-lcurl -lmbedtls -lmbedx509 -lmbedcrypto -pthread -lm -o $(dir $(SITL_TARGET))apcam-upload
+	cp ../packaging/cloud-upload/upload-ca.pem $(dir $(SITL_TARGET))upload-ca.pem
+
+sitl: upload-sitl-worker

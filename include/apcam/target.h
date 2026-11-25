@@ -147,4 +147,15 @@
 #ifndef APCAM_HAVE_THERMAL_VIDEO
 #define APCAM_HAVE_THERMAL_VIDEO APCAM_HAVE_THERMAL
 #endif
+/* All targets use the small native transfer worker. Disabled by default in
+ * configuration; executable and credentials follow the camera installation. */
+#ifndef APCAM_HAVE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#endif
+#ifndef APCAM_RCLONE_PATH
+#define APCAM_RCLONE_PATH ""
+#endif
+#ifndef APCAM_RCLONE_CONFIG
+#define APCAM_RCLONE_CONFIG ""
+#endif
 #endif
