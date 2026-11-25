@@ -185,6 +185,8 @@ enum string_id {
     S_SURV_FORE_AFT,
     S_SURV_FORE_ONLY,
     S_SURV_FORE_WIDE,
+    S_SURV_PORT,
+    S_SURV_STARBOARD,
     S_SURV_AIM,
     S_SURV_AIM_HELP,
     S_SURV_AIM_ROWS,
@@ -200,6 +202,8 @@ enum string_id {
     S_SURV_FORE_PCT_HELP,
     S_SURV_AFT_PCT,
     S_SURV_AFT_PCT_HELP,
+    S_SURV_SIDE_PCT,
+    S_SURV_SIDE_PCT_HELP,
     S_SURV_BURST,
     S_SURV_BURST_HELP,
     S_SURV_BURST_MS,
@@ -855,12 +859,14 @@ static constexpr Translations translations = [] {
     result[S_H_THERMAL_PALETTE] = {"Pseudo-colour palette applied by the thermal module to video and still images.", "热成像模块应用于视频和照片的伪彩调色板。", "サーマルモジュールが映像と静止画に適用する疑似カラーパレット。"};
     result[S_PARAMS_SURVEY] = {"Survey", "Survey", "Survey"};
     result[S_SURV_PATTERN] = {"Survey pattern", "Survey pattern", "Survey pattern"};
-    result[S_SURV_PATTERN_HELP] = {"Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Both uses the full nine-view grid."};
+    result[S_SURV_PATTERN_HELP] = {"Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Port and starboard scan fore to aft along one side. Both uses the full nine-view grid.", "Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Port and starboard scan fore to aft along one side. Both uses the full nine-view grid.", "Fore-only uses three forward views. Fore-wide uses three fore views which straddle the centre line. Left/right and fore/aft use two views. Port and starboard scan fore to aft along one side. Both uses the full nine-view grid."};
     result[S_SURV_BOTH] = {"Both (nine views)", "Both (nine views)", "Both (nine views)"};
     result[S_SURV_LEFT_RIGHT] = {"Left/right only", "Left/right only", "Left/right only"};
     result[S_SURV_FORE_AFT] = {"Fore/aft only", "Fore/aft only", "Fore/aft only"};
     result[S_SURV_FORE_ONLY] = {"Fore-only (three pitch angles)", "Fore-only (three pitch angles)", "Fore-only (three pitch angles)"};
     result[S_SURV_FORE_WIDE] = {"Fore wide (fore_left, fore_centre, fore_right)", "Fore wide (fore_left, fore_centre, fore_right)", "Fore wide (fore_left, fore_centre, fore_right)"};
+    result[S_SURV_PORT] = {"Port side (fore-left, left, rear-left)", "Port side (fore-left, left, rear-left)", "Port side (fore-left, left, rear-left)"};
+    result[S_SURV_STARBOARD] = {"Starboard side (fore-right, right, rear-right)", "Starboard side (fore-right, right, rear-right)", "Starboard side (fore-right, right, rear-right)"};
     result[S_SURV_AIM] = {"Survey aiming", "Survey aiming", "Survey aiming"};
     result[S_SURV_AIM_HELP] = {"Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft.", "Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft.", "Fixed ground rows revisit the same ground from several views. Ahead of aircraft keeps each view a constant distance from the aircraft."};
     result[S_SURV_AIM_ROWS] = {"Fixed ground rows", "Fixed ground rows", "Fixed ground rows"};
@@ -877,6 +883,8 @@ static constexpr Translations translations = [] {
     result[S_SURV_AFT_PCT] = {"Rear distance (% AGL)", "Rear distance (% AGL)", "Rear distance (% AGL)"};
     result[S_SURV_AFT_PCT_HELP] = {"Rear viewing distance as a percentage of height above ground.", "Rear viewing distance as a percentage of height above ground.", "Rear viewing distance as a percentage of height above ground."};
     result[S_SURV_BURST] = {"Images per position", "Images per position", "Images per position"};
+    result[S_SURV_SIDE_PCT] = {"Side distance (% AGL)", "Side distance (% AGL)", "Side distance (% AGL)"};
+    result[S_SURV_SIDE_PCT_HELP] = {"Sideways viewing distance of left and right views as a percentage of height above ground. 0 uses one footprint spacing.", "Sideways viewing distance of left and right views as a percentage of height above ground. 0 uses one footprint spacing.", "Sideways viewing distance of left and right views as a percentage of height above ground. 0 uses one footprint spacing."};
     result[S_SURV_BURST_HELP] = {"Distinct frames per target. Bursts are shortened at the slot deadline.", "Distinct frames per target. Bursts are shortened at the slot deadline.", "Distinct frames per target. Bursts are shortened at the slot deadline."};
     result[S_SURV_BURST_MS] = {"Burst interval (ms)", "Burst interval (ms)", "Burst interval (ms)"};
     result[S_SURV_BURST_MS_HELP] = {"Minimum interval between distinct exposures.", "Minimum interval between distinct exposures.", "Minimum interval between distinct exposures."};

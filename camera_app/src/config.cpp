@@ -55,6 +55,7 @@ void ca_config_defaults(struct ca_config *config)
     config->survey.overlap = 50;
     config->survey.fore_pct = 50;
     config->survey.aft_pct = 50;
+    config->survey.side_pct = 0;
     config->survey.burst = 1;
     config->survey.burst_ms = 100;
     config->survey.dwell_ms = 1200;

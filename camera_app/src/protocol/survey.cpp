@@ -107,10 +107,14 @@ bool ca_survey_grid::init(const ca_survey_pose &p, const ca_survey_config &c,
     if(c.pattern==CA_SURVEY_FORE_AFT) { slots[0]=1; slots[1]=7; }
     if(c.pattern==CA_SURVEY_FORE_ONLY) { slots[0]=9; slots[1]=10; slots[2]=11; }
     if(c.pattern==CA_SURVEY_FORE_WIDE) { slots[0]=0; slots[1]=1; slots[2]=2; }
+    if(c.pattern==CA_SURVEY_PORT) { slots[0]=0; slots[1]=5; slots[2]=6; }      // fore-left, left, rear-left
+    if(c.pattern==CA_SURVEY_STARBOARD) { slots[0]=2; slots[1]=3; slots[2]=8; } // fore-right, right, rear-right
     origin=p; course=atan2(p.ve,p.vn); start_ms=now;
     const double width=2*height*tan(hfov*rad/2), length=width/aspect;
     const double overlap=c.overlap*.01;
     cross_spacing=fmin(width,length)*(1-overlap);
+    // SURV_SIDE pushes left/right views out; 0 keeps one footprint spacing.
+    side=c.side_pct?c.side_pct*.01*height:cross_spacing;
     spacing=length*(1-overlap);
     // Budget only selected views, including the last-to-first slew and
     // acceleration to/from the configured rate limit.
@@ -121,7 +125,7 @@ bool ca_survey_grid::init(const ca_survey_pose &p, const ca_survey_config &c,
         for (unsigned k=0;k<slot_count;k++) {
             unsigned view=slots[k];
             double x=view_row(view,fore_rows,aft_rows)*spacing;
-            double y=view_column(view)*cross_spacing;
+            double y=view_column(view)*side;
             yaw[k]=(x==0 && y==0)?0:atan2(y,x);
             pitch[k]=atan2(-height,hypot(x,y));
         }
@@ -144,7 +148,7 @@ void ca_survey_grid::target(int64_t cycle, unsigned slot, int32_t &lat,
     slot=slots[slot];
     row=cycle+view_row(slot,fore_rows,aft_rows);
     column=view_column(slot);
-    const double x=row*spacing,y=column*cross_spacing;
+    const double x=row*spacing,y=column*side;
     const float north=x*cos(course)-y*sin(course), east=x*sin(course)+y*cos(course);
     lat=origin.lat; lon=origin.lon; float alt=origin.ground;
     (void)ca_targeting_predict_position(&lat,&lon,&alt,north,east,0,1);
@@ -161,7 +165,7 @@ void ca_survey_grid::target_ahead(const ca_survey_pose &p, double lead_m, double
     slot=slots[slot];
     column=view_column(slot);
     const int step=view_row(slot,1,1); // +1 fore, 0 down, -1 rear; 3/2/1 forward pitch
-    const double x=along(p)+lead_m+(step>0?step*fore_m:step*aft_m), y=column*cross_spacing;
+    const double x=along(p)+lead_m+(step>0?step*fore_m:step*aft_m), y=column*side;
     row=int64_t(floor(x/spacing+.5)); // nearest row, for metadata only
     const float north=x*cos(course)-y*sin(course), east=x*sin(course)+y*cos(course);
     lat=origin.lat; lon=origin.lon; float alt=origin.ground;

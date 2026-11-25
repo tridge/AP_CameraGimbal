@@ -174,6 +174,7 @@ private:
     inline static constexpr ca_config_option survey_patterns[] = {
         {"both", CA_SURVEY_BOTH}, {"left_right", CA_SURVEY_LEFT_RIGHT}, {"fore_aft", CA_SURVEY_FORE_AFT},
         {"fore_only", CA_SURVEY_FORE_ONLY}, {"fore_wide", CA_SURVEY_FORE_WIDE},
+        {"port", CA_SURVEY_PORT}, {"starboard", CA_SURVEY_STARBOARD},
     };
 
     inline static constexpr ca_config_option survey_aims[] = {
@@ -208,6 +209,7 @@ private:
         {"survey", "overlap", Kind::Uint, offsetof(ca_config, survey.overlap), sizeof(unsigned), NULL, 0, 0, 90, "SURV_OVERLAP"},
         {"survey", "fore_pct", Kind::Uint, offsetof(ca_config, survey.fore_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_FORE"},
         {"survey", "aft_pct", Kind::Uint, offsetof(ca_config, survey.aft_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_AFT"},
+        {"survey", "side_pct", Kind::Uint, offsetof(ca_config, survey.side_pct), sizeof(unsigned), NULL, 0, 0, 300, "SURV_SIDE"},
         {"survey", "burst", Kind::Uint, offsetof(ca_config, survey.burst), sizeof(unsigned), NULL, 0, 1, 25, "SURV_BURST"},
         {"survey", "burst_ms", Kind::Uint, offsetof(ca_config, survey.burst_ms), sizeof(unsigned), NULL, 0, 40, 2000, "SURV_BURST_MS"},
         {"survey", "dwell_ms", Kind::Uint, offsetof(ca_config, survey.dwell_ms), sizeof(unsigned), NULL, 0, 200, 10000, "SURV_DWELL_MS"},
