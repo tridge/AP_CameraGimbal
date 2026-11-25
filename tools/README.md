@@ -50,6 +50,9 @@ the camera's 140 MiB `/app` volume.
 
 - `build_thermal_codecs.sh host|aarch64` builds pinned minimal FFmpeg libraries
   for the MT11 FFV1 stream and the codec benchmark. Invoked by the camera Makefile.
+- `replay_raw_thermal.py FILE http://HOST:PORT/vN.mkv [--pw PASSWORD] [--loop]` publishes
+  a recorded raw thermal MKV to a SupportProxy video port as a camera does, paced by its
+  timestamps, for testing live viewers. Python standard library only.
 - `raw_thermal_probe.py URI --mavproxy PATH --output DIRECTORY` captures native
   16-bit FFV1 frames and paired JSON metadata from MT11 or SITL. See the
   [raw thermal testing guide](../camera_app/RAW_THERMAL.md).
