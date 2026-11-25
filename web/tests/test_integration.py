@@ -721,7 +721,7 @@ try:
         assert b'<option value="' + zone + b'">' + zone + b'</option>' in body
     replacement_parameters = {
         "survey_pattern": "both", "survey_lens": "thermal", "survey_overlap": "50", "survey_fore_pct": "50",
-        "survey_aft_pct": "50", "survey_burst": "1", "survey_burst_ms": "100",
+        "survey_aft_pct": "50", "survey_side_pct": "0", "survey_burst": "1", "survey_burst_ms": "100",
         "survey_dwell_ms": "1200", "survey_settle_ms": "200", "survey_error_cd": "100",
         "survey_rate_cd": "100", "survey_terrain_ms": "3000", "survey_terrain_m": "500",
         "survey_terrain_tol": "25", "survey_min_speed": "5", "survey_turn_deg": "15", "survey_aim": "rows",

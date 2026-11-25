@@ -145,6 +145,46 @@ int main()
         assert(g.deadline(1000,2)==1000+uint64_t(g.cycle_s*1000));
         config.survey.pattern=CA_SURVEY_BOTH;
     }
+    // Port and starboard scan fore to aft along one side: keypad 7-4-1 and 9-6-3.
+    for(unsigned pattern: {unsigned(CA_SURVEY_PORT),unsigned(CA_SURVEY_STARBOARD)}) {
+        ca_survey_pose p{-350000000,1490000000,1000,600,25,0}; // flying north
+        config.survey.pattern=pattern;
+        ca_survey_grid g{};
+        assert(g.init(p,config.survey,24.2,1.25,100,1000));
+        assert(g.slot_count==3);
+        const unsigned port[3]={0,5,6}, starboard[3]={2,3,8};
+        const int side=pattern==CA_SURVEY_PORT?-1:1;
+        int32_t lat[3],lon[3]; int64_t row[3]; int column[3];
+        for(unsigned k=0;k<3;k++) {
+            assert(g.slots[k]==(pattern==CA_SURVEY_PORT?port:starboard)[k]);
+            g.target(10,k,lat[k],lon[k],row[k],column[k]);
+            assert(column[k]==side && (side<0?lon[k]<p.lon:lon[k]>p.lon)); // all on one side
+        }
+        assert(row[0]==10+g.fore_rows && row[1]==10 && row[2]==10-g.aft_rows); // fore, abeam, aft
+        assert(lat[0]>lat[1] && lat[1]>lat[2]);
+        for(unsigned k=1;k<3;k++) assert(g.deadline(1000,k)>g.deadline(1000,k-1));
+        config.survey.pattern=CA_SURVEY_BOTH;
+    }
+    // SURV_SIDE pushes left/right views out to a fixed share of AGL;
+    // 0 keeps the original one-footprint offset.
+    for(unsigned pattern: {unsigned(CA_SURVEY_LEFT_RIGHT),unsigned(CA_SURVEY_PORT)}) {
+        ca_survey_pose p{-350000000,1490000000,1000,600,25,0}; // flying north, 400m AGL
+        config.survey.pattern=pattern;
+        ca_survey_grid near_grid{}, far_grid{};
+        assert(near_grid.init(p,config.survey,24.2,1.25,100,1000));
+        assert(near_grid.side==near_grid.cross_spacing);
+        config.survey.side_pct=100;
+        assert(far_grid.init(p,config.survey,24.2,1.25,100,1000));
+        assert(fabs(far_grid.side-400)<1e-6 && far_grid.cross_spacing==near_grid.cross_spacing);
+        for(unsigned k=0;k<far_grid.slot_count;k++) {
+            int32_t lat,lon; int64_t row; int column;
+            far_grid.target(10,k,lat,lon,row,column);
+            const double east=(lon-p.lon)*6378137.0*M_PI/180*1e-7*cos(p.lat*1e-7*M_PI/180);
+            assert(column!=0 && fabs(east-column*400)<.5);
+        }
+        config.survey.side_pct=0;
+        config.survey.pattern=CA_SURVEY_BOTH;
+    }
     {
         // Ahead aiming: targets follow the aircraft along the leg, offset by the
         // capture lead, rather than staying on rows fixed at the start of the leg.
@@ -165,7 +205,7 @@ int main()
             const double east=(lon-q.lon)*m_per_e7*cos(q.lat*1e-7*M_PI/180);
             assert(fabs(north-expect_north[k/3])<.5);
             assert(column==expect_column[k]);
-            assert(fabs(east-column*g.cross_spacing)<.5);
+            assert(fabs(east-column*g.side)<.5);
             assert(row==int64_t(floor((500+expect_north[k/3])/g.spacing+.5)));
         }
         config.survey.pattern=CA_SURVEY_FORE_ONLY;
@@ -180,7 +220,7 @@ int main()
     // A 5.4-degree departure never crosses the 15-degree turn threshold, but
     // previously left targets over 1km off a long leg. Both turn directions
     // and all patterns must reanchor before that error accumulates.
-    for(unsigned pattern: {0U,1U,2U,3U,4U}) for(float sign: {-1.0f,1.0f}) {
+    for(unsigned pattern: {0U,1U,2U,3U,4U,5U,6U}) for(float sign: {-1.0f,1.0f}) {
         ca_survey_pose p{-350000000,1490000000,1000,600,25,0};
         config.survey.pattern=pattern;
         ca_survey_grid g{};

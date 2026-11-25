@@ -655,6 +655,7 @@ static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {
 static const struct option survey_patterns[] = {
     {"both", S_SURV_BOTH}, {"left_right", S_SURV_LEFT_RIGHT}, {"fore_aft", S_SURV_FORE_AFT},
     {"fore_only", S_SURV_FORE_ONLY}, {"fore_wide", S_SURV_FORE_WIDE},
+    {"port", S_SURV_PORT}, {"starboard", S_SURV_STARBOARD},
 };
 
 static const struct option survey_aims[] = {
@@ -840,6 +841,7 @@ static const struct parameter replacement_parameters[] = {
     {"survey_overlap", "survey", "overlap", S_SURV_OVERLAP, S_SURV_OVERLAP_HELP, PARAM_INTEGER, 0, 90, 1, NULL, 0},
     {"survey_fore_pct", "survey", "fore_pct", S_SURV_FORE_PCT, S_SURV_FORE_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
     {"survey_aft_pct", "survey", "aft_pct", S_SURV_AFT_PCT, S_SURV_AFT_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
+    {"survey_side_pct", "survey", "side_pct", S_SURV_SIDE_PCT, S_SURV_SIDE_PCT_HELP, PARAM_INTEGER, 0, 300, 1, NULL, 0},
     {"survey_burst", "survey", "burst", S_SURV_BURST, S_SURV_BURST_HELP, PARAM_INTEGER, 1, 25, 1, NULL, 0},
     {"survey_burst_ms", "survey", "burst_ms", S_SURV_BURST_MS, S_SURV_BURST_MS_HELP, PARAM_INTEGER, 40, 2000, 1, NULL, 0},
     {"survey_dwell_ms", "survey", "dwell_ms", S_SURV_DWELL_MS, S_SURV_DWELL_MS_HELP, PARAM_INTEGER, 200, 10000, 1, NULL, 0},
@@ -918,7 +920,7 @@ static const char *replacement_defaults[] = {
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
     "",
 #endif
-    "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
+    "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "0", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
 
 

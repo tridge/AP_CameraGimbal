@@ -45,6 +45,17 @@ Choose **Survey pattern** before saving:
   front-right. Targets are at 1× the forward distance, one lateral spacing left,
   centred and right, rounded to common ground rows (with `SURV_AIM=rows`). The rear
   distance is unused.
+- **Port side** (`5`, `port`): front-left → left → rear-left, scanning fore to aft
+  along the left side. Forward and rear distances apply; the side offset is `SURV_SIDE`.
+- **Starboard side** (`6`, `starboard`): front-right → right → rear-right, the
+  mirror image of Port side.
+
+**Side distance** (`SURV_SIDE`, INI `side_pct`) sets how far out the left and
+right views look, as a percentage of AGL, for every pattern with side views. The
+default `0` keeps one lateral spacing (the footprint width less overlap), which
+looks nearly straight down from high altitude. It is fixed at the start of each
+leg. Larger values look further out; patterns that pitch between side views
+(Port, Starboard, Both) may need longer slews and a longer sweep.
 
 Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
 
@@ -122,12 +133,13 @@ parameters. The corresponding INI section is `[survey]`.
 
 | MAVLink parameter | INI key | Default | Meaning |
 | --- | --- | --- | --- |
-| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only, 4 fore-wide |
+| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only, 4 fore-wide, 5 port, 6 starboard |
 | SURV_AIM | aim | rows | 0 fixed ground rows, 1 ahead of the aircraft; INI uses names |
 | SURV_LENS | lens | thermal | 0 thermal, 1 wide, 2 zoom; INI uses names |
 | SURV_OVERLAP | overlap | 50 | Requested overlap percent, 0–90 |
 | SURV_FORE | fore_pct | 50 | Forward offset as percent of AGL; nearest offset for fore-only |
 | SURV_AFT | aft_pct | 50 | Rear offset as percent of AGL |
+| SURV_SIDE | side_pct | 0 | Sideways offset of left/right views as percent of AGL, 0–300; 0 uses one lateral spacing |
 | SURV_BURST | burst | 1 | Distinct frames per target, 1–25 |
 | SURV_BURST_MS | burst_ms | 100 | Minimum burst frame spacing in ms |
 | SURV_DWELL_MS | dwell_ms | 1200 | Per-view settling/capture budget after slew allowance |

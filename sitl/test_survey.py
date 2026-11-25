@@ -235,6 +235,8 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     views.setdefault((r['leg'],r['row'],r['column']),set()).add(r['slot'] if pattern=='fore_only' else r['slot']//3)
                 if pattern=='both':
                     assert any(len(v)==3 for v in views.values()), 'no target captured from front, middle and rear'
+                elif pattern in ('port','starboard'):
+                    assert any(len(v)==3 for v in views.values()), 'no side target captured from front, abeam and rear'
                 elif pattern=='fore_aft':
                     assert any(v=={0,2} for v in views.values()), 'no front/rear revisit'
                 elif pattern=='fore_wide':
@@ -244,10 +246,10 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     assert any(c=={-1,0,1} for c in sweeps.values()), 'no left/centre/right sweep on one row'
                 elif pattern=='fore_only':
                     assert any(v=={9,10,11} for v in views.values()), 'no far/middle/near revisit'
-            allowed={'both':set(range(9)), 'left_right':{5,3}, 'fore_aft':{1,7}, 'fore_only':{9,10,11}, 'fore_wide':{0,1,2}}[pattern]
+            allowed={'both':set(range(9)), 'left_right':{5,3}, 'fore_aft':{1,7}, 'fore_only':{9,10,11}, 'fore_wide':{0,1,2}, 'port':{0,5,6}, 'starboard':{2,3,8}}[pattern]
             assert {r['slot'] for r in records} == allowed, ('unexpected views',pattern)
             assert all(r['positions']==len(allowed) and 0<=r['position']<len(allowed) for r in records)
-            assert all(r['pattern']=={'both':0,'left_right':1,'fore_aft':2,'fore_only':3,'fore_wide':4}[pattern] for r in records)
+            assert all(r['pattern']=={'both':0,'left_right':1,'fore_aft':2,'fore_only':3,'fore_wide':4,'port':5,'starboard':6}[pattern] for r in records)
             if aim=='ahead' and not replay and not gentle_turn and not navigation:
                 # Straight north: each frame's target must sit its configured
                 # distance ahead of (or behind) the aircraft at capture.
@@ -338,7 +340,7 @@ if __name__ == '__main__':
     parser.add_argument('--terrain-root', type=Path)
     parser.add_argument('--terrain-variation', action='store_true')
     parser.add_argument('--replay', type=Path)
-    parser.add_argument('--pattern', choices=('both','left_right','fore_aft','fore_only','fore_wide'), default='both')
+    parser.add_argument('--pattern', choices=('both','left_right','fore_aft','fore_only','fore_wide','port','starboard'), default='both')
     parser.add_argument('--aim', choices=('rows','ahead'), default='rows')
     parser.add_argument('--gentle-turn', action='store_true', help='regress grid drift after a gentle 5.4-degree turn')
     parser.add_argument('--no-stream', action='store_true', help='verify SD capture with no thermal stream consumer')

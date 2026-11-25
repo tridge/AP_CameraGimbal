@@ -118,6 +118,7 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("SURV_OVERLAP", "Overlap (%)"),
     CONFIG("SURV_FORE", "Forward distance (% AGL)"),
     CONFIG("SURV_AFT", "Rear distance (% AGL)"),
+    CONFIG("SURV_SIDE", "Side distance (% AGL)"),
     CONFIG("SURV_BURST", "Images per position"),
     CONFIG("SURV_BURST_MS", "Burst interval (ms)"),
     CONFIG("SURV_DWELL_MS", "Capture dwell limit (ms)"),
