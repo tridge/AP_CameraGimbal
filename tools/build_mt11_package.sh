@@ -14,6 +14,7 @@ rootfs=$2
 config=$3
 output=$4
 camera_app=$5
+upload_worker=${APCAM_UPLOAD_WORKER:-$(dirname "$camera_app")/apcam-upload}
 web_app=$6
 timesync=$7
 app_init=$8
@@ -69,7 +70,7 @@ for command in awk grep install mktemp sed sha256sum tar unzip wc zip; do
         exit 1
     }
 done
-for input in "$kernel" "$rootfs" "$config" "$camera_app" "$web_app" \
+for input in "$kernel" "$rootfs" "$config" "$camera_app" "$upload_worker" "$web_app" \
              "$timesync" "$app_init" "$app_selection" "$camera_ini" \
              "$rsync_bin" "$strace_bin" "$tcpdump_bin" "$ltrace_bin" \
              "$dropbear_bin" "$dropbearkey_bin" "$dropbear_start" \
@@ -147,6 +148,8 @@ repacked_rootfs=$(sha256sum "$system/rootfs" | awk '{print $1}')
 }
 
 install -m 0755 "$camera_app" "$overlay/bin/camera-app"
+install -m 0755 "$upload_worker" "$overlay/bin/apcam-upload"
+install -m 0644 "$script_dir/../packaging/cloud-upload/upload-ca.pem" "$overlay/bin/upload-ca.pem"
 install -m 0755 "$web_app" "$overlay/bin/mt11-web"
 cp -R "$script_dir/../web/webroot" "$overlay/webroot"
 install -m 0755 "$timesync" "$overlay/bin/mt11-timesync.sh"

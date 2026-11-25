@@ -18,6 +18,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 platform=$1
 output=$2
 camera_app=$3
+upload_worker=${APCAM_UPLOAD_WORKER:-$(dirname "$camera_app")/apcam-upload}
 a8_uuid=$4
 web_app=$5
 app_init=$6
@@ -46,7 +47,7 @@ for command in mkfs.jffs2 sha256sum; do
         exit 1
     }
 done
-for input in "$platform/SHA256SUMS" "$camera_app" "$a8_uuid" "$web_app" \
+for input in "$platform/SHA256SUMS" "$camera_app" "$upload_worker" "$a8_uuid" "$web_app" \
              "$app_init" "$camera_ini" "$upgrade_script"; do
     [ -f "$input" ] || {
         echo "Missing input: $input" >&2
@@ -86,6 +87,10 @@ else
 fi
 chmod 0755 "$tree/camera-app/camera-app" "$tree/camera-app/a8-uuid" \
     "$tree/camera-app/a8-web"
+
+"$strip" -o "$tree/camera-app/apcam-upload" "$upload_worker"
+chmod 0755 "$tree/camera-app/apcam-upload"
+install -m 0644 "$root/packaging/cloud-upload/upload-ca.pem" "$tree/camera-app/upload-ca.pem"
 
 # an unpadded image gives the real occupancy; the flashed one is padded
 mkfs.jffs2 -U -r "$tree" -o "$work/unpadded.jffs2" -e "$erase_size" -l -q

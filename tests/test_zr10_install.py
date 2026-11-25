@@ -26,10 +26,10 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
             for before, after in replacements.items():
                 text = text.replace(before, after)
             (source / script.name).write_text(text)
-        for name in ('camera-app', 'zr10-web', 'zr10-uuid'):
+        for name in ('camera-app', 'apcam-upload', 'zr10-web', 'zr10-uuid'):
             (source / name).write_text('#!/bin/sh\nexit 0\n')
         for name in ('camera.ini.default', 'web.pass.default', 'VERSION', 'README.md',
-                     'COPYING.txt', 'THIRD_PARTY.md', 'OpenIPC-LICENSE.txt'):
+                     'COPYING.txt', 'THIRD_PARTY.md', 'OpenIPC-LICENSE.txt', 'upload-ca.pem'):
             (source / name).write_text('fixture\n')
         (source / 'webroot').mkdir()
         (source / 'webroot/app.js').write_text('/* packaged web UI */\n')
@@ -58,6 +58,8 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
                        env=env, check=True, stdout=subprocess.DEVNULL)
         assert (destination / 'webroot/app.js').read_bytes() == (source / 'webroot/app.js').read_bytes()
         assert not (destination / 'webroot/stale.js').exists()
+        assert (destination / 'apcam-upload').stat().st_mode & 0o111
+        assert (destination / 'upload-ca.pem').read_bytes() == (source / 'upload-ca.pem').read_bytes()
         subprocess.run(['sha256sum', '-c', 'SHA256SUMS'], cwd=destination,
                        check=True, stdout=subprocess.DEVNULL)
         assert (customer / 'zr10-uuid').read_bytes() == (source / 'zr10-uuid').read_bytes()

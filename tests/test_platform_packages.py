@@ -35,8 +35,10 @@ for target, filename, size in [('a8', 'SIYI_4K_MINI_UpgradeSD.bin', 0x600000),
         forbidden = ['boa', 'audio', 'osdpic', 'OSD_Path', 'wifi', 'sycamera.vendor', 'bin/cardv.vendor']
         assert not any((customer / name).exists() for name in forbidden)
         app = customer / 'camera-app'
-        for name in ('camera-app', target + '-web', target + '-uuid'):
+        for name in ('camera-app', 'apcam-upload', target + '-web', target + '-uuid'):
             assert (app / name).read_bytes().startswith(b'\x7fELF'), name
+        assert (app / 'upload-ca.pem').read_bytes() == (ROOT / 'packaging/cloud-upload/upload-ca.pem').read_bytes()
+        assert (app / 'apcam-upload').stat().st_mode & 0o111
         for asset in (ROOT / 'web/webroot').rglob('*'):
             if asset.is_file():
                 assert (app / 'webroot' / asset.relative_to(ROOT / 'web/webroot')).read_bytes() == asset.read_bytes()

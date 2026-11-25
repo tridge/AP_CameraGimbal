@@ -31,6 +31,8 @@ def arm_binary(path):
 def build(output, native_capture=None):
     payload = {
         'camera-app': arm_binary(ROOT / 'camera_app/build/z1mini/camera-app'),
+        'apcam-upload': arm_binary(ROOT / 'camera_app/build/z1mini/apcam-upload'),
+        'upload-ca.pem': (ROOT / 'packaging/cloud-upload/upload-ca.pem').read_bytes(),
         'z1mini-web': arm_binary(ROOT / 'web/z1mini-web'),
         'service.sh': (ROOT / 'packaging/z1mini/service.sh').read_bytes(),
         'camera.ini.default': (ROOT / 'packaging/z1mini/camera.ini').read_bytes(),
@@ -73,7 +75,7 @@ def build(output, native_capture=None):
             info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
-            executable = name.endswith(('.sh', '/camera-app', '/z1mini-web', '/ax-capture'))
+            executable = name.endswith(('.sh', '/camera-app', '/z1mini-web', '/ax-capture', '/apcam-upload'))
             info.external_attr = (0o100755 if executable else 0o100644) << 16
             archive.writestr(info, data)
     with zipfile.ZipFile(temporary) as archive:

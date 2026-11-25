@@ -20,7 +20,7 @@ fi
 }
 mkdir -p "$dest/config"
 if [ "$src" != "$dest" ]; then
-    for file in camera-app zr10-web zr10-uuid demo.sh service.sh boot.sh install.sh uninstall.sh camera.ini.default web.pass.default VERSION SDK_SHA256SUMS README.md COPYING.txt THIRD_PARTY.md OpenIPC-LICENSE.txt; do
+    for file in camera-app apcam-upload upload-ca.pem zr10-web zr10-uuid demo.sh service.sh boot.sh install.sh uninstall.sh camera.ini.default web.pass.default VERSION SDK_SHA256SUMS README.md COPYING.txt THIRD_PARTY.md OpenIPC-LICENSE.txt; do
         cp "$src/$file" "$dest/$file.new"
         mv "$dest/$file.new" "$dest/$file"
     done
@@ -32,7 +32,7 @@ if [ "$src" != "$dest" ]; then
     mv "$dest/webroot.new" "$dest/webroot"
     cp "$src/SHA256SUMS" "$dest/SHA256SUMS"
 fi
-chmod 755 "$dest/camera-app" "$dest/zr10-web" "$dest/zr10-uuid" "$dest/"*.sh
+chmod 755 "$dest/apcam-upload" "$dest/camera-app" "$dest/zr10-web" "$dest/zr10-uuid" "$dest/"*.sh
 [ -e "$dest/config/camera.ini" ] || cp "$dest/camera.ini.default" "$dest/config/camera.ini"
 [ -e "$dest/config/web.pass" ] || cp "$dest/web.pass.default" "$dest/config/web.pass"
 if [ "${1-}" = --enable-boot ]; then
