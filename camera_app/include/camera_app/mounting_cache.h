@@ -2,7 +2,9 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 /* The ZT30 gimbal MCU answers the mounting query with 0, not 1 (upright) or
@@ -20,16 +22,29 @@ static inline uint8_t ca_mounting_cache_load(const char *path)
 }
 
 /* Written only on a change, so flash is touched when the camera is remounted.
- * Replaced by rename: an interrupted write keeps the previous report. */
-static inline void ca_mounting_cache_save(const char *path, uint8_t direction)
+ * Replaced by rename: an interrupted write keeps the previous report.
+ * False if the direction could not be stored. */
+static inline bool ca_mounting_cache_save(const char *path, uint8_t direction)
 {
-    char temporary[512];
-    if ((direction != 1 && direction != 2) || ca_mounting_cache_load(path) == direction) return;
-    if (snprintf(temporary, sizeof(temporary), "%s.new", path) >= (int)sizeof(temporary)) return;
+    char temporary[512], directory[512];
+    if (direction != 1 && direction != 2) return false;
+    if (ca_mounting_cache_load(path) == direction) return true;
+    if (snprintf(temporary, sizeof(temporary), "%s.new", path) >= (int)sizeof(temporary)) return false;
     const int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) return;
+    if (fd < 0) return false;
     const char value = (char)('0' + direction);
     const bool written = write(fd, &value, 1) == 1 && fsync(fd) == 0;
-    if (close(fd) == 0 && written) (void)rename(temporary, path);
-    else (void)unlink(temporary);
+    if (close(fd) != 0 || !written || rename(temporary, path) != 0) {
+        (void)unlink(temporary);
+        return false;
+    }
+    // the rename itself must reach the flash
+    snprintf(directory, sizeof(directory), "%s", path);
+    char *slash = strrchr(directory, '/');
+    if (slash) {
+        slash[slash == directory ? 1 : 0] = '\0';
+        const int dir = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (dir >= 0) { (void)fsync(dir); close(dir); }
+    }
+    return true;
 }

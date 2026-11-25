@@ -128,6 +128,8 @@ struct ca_backend {
     bool mounting_direction_inferred;
     bool mounting_direction_cached;   // from the last report, not this MCU session
     bool mounting_unsupported;        // the reported direction could not be applied
+    uint8_t mounting_cache_pending;   // a direction still to be stored
+    uint64_t mounting_cache_retry_ms;
     uint64_t mounting_query_ms;
 #ifdef CAMERA_APP_ZT30_DEV
     uint64_t attitude_request_ms;
@@ -427,6 +429,22 @@ static void emit_zoom_value(struct ca_backend *backend, uint8_t opcode)
     emit_local(backend, opcode, payload, sizeof(payload));
 }
 
+#ifdef CAMERA_APP_ZT30_DEV
+static const char *mounting_cache_path()
+{
+    const char *cache = getenv("CAMERA_APP_ZT30_MOUNT_CACHE");
+    return cache && *cache ? cache : "/customer/camera-app/gimbal-mounting";
+}
+
+// A failed write is retried from ca_backend_periodic().
+static void remember_mounting_direction(struct ca_backend *backend, uint8_t direction)
+{
+    backend->mounting_cache_pending =
+        ca_mounting_cache_save(mounting_cache_path(), direction) ? 0U : direction;
+    backend->mounting_cache_retry_ms = monotonic_ms();
+}
+#endif
+
 static bool apply_mounting_direction(struct ca_backend *backend,
                                      uint8_t direction)
 {
@@ -488,6 +506,10 @@ static void update_attitude(struct ca_backend *backend, const uint8_t *values,
          v[1] > A8_INVERTED_PITCH_THRESHOLD)) {
         int16_t raw_pitch = v[1];
         backend->mounting_direction_cached = false;
+#ifdef CAMERA_APP_ZT30_DEV
+        // or a restart would bring back an upright report this contradicts
+        remember_mounting_direction(backend, 2U);
+#endif
         if (apply_mounting_direction(backend, 2U)) {
             backend->mounting_direction_inferred = true;
             ca_log("inferred inverted mounting from raw gimbal pitch %.1f deg",
@@ -625,17 +647,19 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
         if (payload_length == 1U && !backend->mounting_direction_inferred) {
 #endif
 #ifdef CAMERA_APP_ZT30_DEV
-            const char *cache = getenv("CAMERA_APP_ZT30_MOUNT_CACHE");
-            if (!cache || !*cache) cache = "/customer/camera-app/gimbal-mounting";
-            if (payload[0]) {
+            if (payload[0] == 1U || payload[0] == 2U) {
                 // a report from this MCU session replaces anything held
-                ca_mounting_cache_save(cache, payload[0]);
+                remember_mounting_direction(backend, payload[0]);
                 backend->mounting_direction_cached = false;
-                backend->mounting_unsupported = false;
-                apply_mounting_direction(backend, payload[0]);
-            } else if (!backend->mounting_direction_known && !backend->mounting_unsupported) {
+                // the same unsupported direction again changes nothing
+                if (!backend->mounting_unsupported || backend->mounting_direction != payload[0]) {
+                    backend->mounting_unsupported = false;
+                    apply_mounting_direction(backend, payload[0]);
+                }
+            } else if (!payload[0] && !backend->mounting_direction_known &&
+                       !backend->mounting_unsupported) {
                 // The MCU answers 0 while pitched away from level: use its last report.
-                const uint8_t direction = ca_mounting_cache_load(cache);
+                const uint8_t direction = ca_mounting_cache_load(mounting_cache_path());
                 if (apply_mounting_direction(backend, direction)) {
                     backend->mounting_direction_cached = true;
                     ca_log("gimbal mounting direction not reported; using its last report (upright)");
@@ -1340,6 +1364,11 @@ void ca_backend_periodic(struct ca_backend *backend)
         backend->zoom_query_ms=monotonic_ms();
         (void)send_public_command(backend, 0x18U, NULL, 0U);
     }
+#endif
+#ifdef CAMERA_APP_ZT30_DEV
+    if (backend && backend->mounting_cache_pending &&
+        monotonic_ms() - backend->mounting_cache_retry_ms >= 1000U)
+        remember_mounting_direction(backend, backend->mounting_cache_pending);
 #endif
     // a cached direction is still asked for, to get one from this session
     if (backend == NULL || backend->orientation != CA_MOUNT_AUTO ||
