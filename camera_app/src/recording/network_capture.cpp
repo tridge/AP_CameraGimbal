@@ -1,3 +1,4 @@
+#include "camera_app/directories.h"
 #include "camera_app/APC_NetworkCapture.h"
 #include "camera_app/log.h"
 #include "apcam/APC_Resource.h"
@@ -172,7 +173,7 @@ int APC_NetworkCapture::capture(uint64_t generation)
     int enabled = 1, buffer_size = 4 * 1024 * 1024;
     if (setsockopt(socket_fd.get(), SOL_SOCKET, SO_TIMESTAMP, &enabled, sizeof(enabled)) < 0) return -1;
     (void)setsockopt(socket_fd.get(), SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size));
-    if (mkdir(_root, 0755) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(_root, 0755) < 0) return -1;
     APC_FileDescriptor directory(open(_root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (directory.get() < 0) return -1;
     APC_FileDescriptor lock(openat(directory.get(), ".capture.lock", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600));

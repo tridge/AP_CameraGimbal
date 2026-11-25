@@ -3,6 +3,7 @@
 #endif
 #include <new>
 #include "pipeline.h"
+#include "camera_app/directories.h"
 #include "camera_app/overlay.h"
 
 #include "camera_app/live_video_server.h"
@@ -247,7 +248,7 @@ static int make_recording_path(struct APC_Media_ZR10_State *media)
 
     localtime_r(&now, &local);
     strftime(day, sizeof(day), "%Y-%m-%d", &local);
-    if (mkdir(media->config.record_root, 0700) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(media->config.record_root, 0700) < 0) return -1;
     if (snprintf(directory, sizeof(directory), "%s/%s",
                  media->config.record_root, day) >= (int)sizeof(directory)) {
         errno = ENAMETOOLONG;

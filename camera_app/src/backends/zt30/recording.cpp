@@ -1,4 +1,5 @@
 #include "recording.h"
+#include "camera_app/directories.h"
 #include "camera_app/log.h"
 #include "camera_app/video_metadata.h"
 #include <cerrno>
@@ -13,7 +14,7 @@ void Recording::configure(const char *directory,unsigned w,unsigned h,ca_thermal
 }
 int Recording::paths_for_capture() {
     if(root.empty() || !width || !height) { errno=EINVAL;return -1; }
-    if(mkdir(root.c_str(),0700) && errno!=EEXIST)return -1;
+    if(ca_mkdir_p(root.c_str(),0700)<0)return -1;
     struct statvfs space{};
     if(statvfs(root.c_str(),&space) || !space.f_frsize || uint64_t(space.f_bavail)*space.f_frsize<32U*1024*1024) {
         errno=ENOSPC;return -1;

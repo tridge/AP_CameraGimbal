@@ -2,6 +2,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "camera_app/directories.h"
 #include "camera_app/binlog.h"
 #include "camera_app/system_stats.h"
 #include "camera_app/config.h"
@@ -242,7 +243,7 @@ static int write_all(int fd,const void *data,size_t size)
 }
 static int open_log(void)
 {
-    if (mkdir(logger.root,0755)<0 && errno!=EEXIST) return -1;
+    if (ca_mkdir_p(logger.root,0755)<0) return -1;
     DIR *dir=opendir(logger.root);
     if (!dir) return -1;
     unsigned maximum=0;

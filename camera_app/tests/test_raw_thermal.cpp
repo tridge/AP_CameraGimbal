@@ -63,6 +63,19 @@ int main(void)
     assert(unlink(first) == 0);
     assert(unlink(second) == 0);
     assert(rmdir(directory) == 0);
+
+    // a card with no DCIM: the capture root's parents are made too
+    char nested[96], parent[64];
+    snprintf(parent, sizeof(parent), "%s/DCIM", root);
+    snprintf(nested, sizeof(nested), "%s/capture", parent);
+    assert(ca_raw_thermal_open(&capture, nested) == 0);
+    assert(ca_raw_thermal_write_at(capture, pixels, 2, 2, &captured_at) == 0);
+    strcpy(first, ca_raw_thermal_path(capture));
+    ca_raw_thermal_close(capture);
+    strcpy(directory, first);
+    *strrchr(directory, '/') = '\0';
+    assert(unlink(first) == 0 && rmdir(directory) == 0);
+    assert(rmdir(nested) == 0 && rmdir(parent) == 0);
     assert(rmdir(root) == 0);
     puts("raw thermal capture tests passed");
     return 0;
