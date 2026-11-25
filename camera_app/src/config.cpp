@@ -283,8 +283,10 @@ static int read_config(struct ca_config *config, FILE *file,
         errno = EINVAL;
         goto fail;
     }
-    if (parsed.video1_uri[0] && !apcam_video_uri_valid(parsed.video1_uri)) {
-        snprintf(error, error_size, "Video 1 URI must be blank or an rtsp:// or rtsps:// URI of at most 159 characters");
+    if ((parsed.video1_uri[0] && !apcam_video_uri_valid(parsed.video1_uri)) ||
+        (parsed.video2_uri[0] && !apcam_video_uri_valid(parsed.video2_uri)) ||
+        (parsed.video3_uri[0] && !apcam_video_uri_valid(parsed.video3_uri))) {
+        snprintf(error, error_size, "A video URI must be blank or an rtsp://, rtsps://, http:// or https:// URI of at most 159 characters");
         errno = EINVAL;
         goto fail;
     }

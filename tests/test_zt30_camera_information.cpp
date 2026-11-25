@@ -19,6 +19,12 @@ float ca_media_lens_zoom(const ca_media*,enum ca_media_lens) { return feedback; 
 float ca_media_lens_zoom_command(const ca_media*,enum ca_media_lens) { return commanded; }
 enum ca_media_lens ca_media_lens(const ca_media*) { return selected; }
 bool ca_media_thermal_main(const ca_media*) { return false; }
+unsigned ca_media_frame_rate(const ca_media*,bool thermal) { return thermal?15:30; }
+float ca_media_hfov(const ca_media*,bool) { return 60; }
+bool ca_thermal_stream_available() { return true; }
+bool ca_thermal_stream_enabled() { return true; }
+unsigned ca_thermal_stream_fps() { return 5; }
+unsigned ca_thermal_stream_port() { return 8556; }
 int ca_media_set_lens_zoom(ca_media*,enum ca_media_lens,float value) { commanded=value;return 0; }
 void ca_media_cancel_zoom(ca_media*) { ++stops;commanded=feedback; }
 int ca_backend_set_zoom_rate(ca_backend*,float) { assert(false);return -1; }
@@ -87,4 +93,21 @@ int main() {
             assert(info.resolution_v==(scope==CA_PHOTO_SCOPE_THERMAL?512:2160));
         }
     }
+    // A configured URI replaces the built one on every route; blank keeps it.
+    auto stream=[&](unsigned id) {
+        send_stream_information(&server,&destination,id);
+        assert(reply.msgid==MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION);
+        mavlink_video_stream_information_t v{};mavlink_msg_video_stream_information_decode(&reply,&v);
+        return v;
+    };
+    // this route is the SupportProxy link, with no proxy video ports set
+    assert(!stream(1).uri[0] && stream(1).type==VIDEO_STREAM_TYPE_MPEG_TS && !stream(3).uri[0]);
+    strcpy(server.settings.video1_uri,"rtsp://proxy.example.org:40011/view/v1");
+    strcpy(server.settings.video2_uri,"http://proxy.example.org:40012/v2.ts");
+    strcpy(server.settings.video3_uri,"http://proxy.example.org:40013/v3.mkv");
+    assert(!strcmp(stream(1).uri,"rtsp://proxy.example.org:40011/view/v1") && stream(1).type==VIDEO_STREAM_TYPE_RTSP);
+    assert(!strcmp(stream(2).uri,"http://proxy.example.org:40012/v2.ts") && stream(2).type==VIDEO_STREAM_TYPE_MPEG_TS);
+    assert(!strcmp(stream(3).uri,"http://proxy.example.org:40013/v3.mkv") && stream(3).type==CA_VIDEO_STREAM_TYPE_HTTP_MATROSKA);
+    server.settings.video1_uri[0]=0;
+    assert(!stream(1).uri[0] && !strcmp(stream(2).uri,"http://proxy.example.org:40012/v2.ts"));
 }

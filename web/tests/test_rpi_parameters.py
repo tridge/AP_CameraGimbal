@@ -152,7 +152,7 @@ try:
     # Hidden fields are not rewritten: the ignored legacy values stay as they were.
     assert "primary_address = 192.0.2.5/24" in saved, saved
 
-    for invalid in ("10.0.2.100", "http://10.0.2.100/video1", "rtsp://user:pw@10.0.2.100/video1",
+    for invalid in ("10.0.2.100", "ftp://10.0.2.100/video1", "rtsp://user:pw@10.0.2.100/video1",
                     "rtsp://10.0.2.100/has space", "rtsp://10.0.2.100:99999/video1",
                     "rtsp://h/" + "a" * 151):
         _, values = parameters()

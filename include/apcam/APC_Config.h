@@ -406,10 +406,18 @@ private:
         {"network", "capture", Kind::Bool,
          offsetof(struct ca_config, network_capture),
          sizeof(((struct ca_config *)0)->network_capture), NULL, 0U, 0, 1, NULL},
-#if !APCAM_HAVE_NETWORK_CONFIG
         {"network", "video1_uri", Kind::String,
          offsetof(struct ca_config, video1_uri),
          sizeof(((struct ca_config *)0)->video1_uri), NULL, 0U, 0, 159, NULL},
+#if APCAM_NUM_STREAMS >= 2
+        {"network", "video2_uri", Kind::String,
+         offsetof(struct ca_config, video2_uri),
+         sizeof(((struct ca_config *)0)->video2_uri), NULL, 0U, 0, 159, NULL},
+#endif
+#if APCAM_HAVE_RAW_THERMAL
+        {"network", "video3_uri", Kind::String,
+         offsetof(struct ca_config, video3_uri),
+         sizeof(((struct ca_config *)0)->video3_uri), NULL, 0U, 0, 159, NULL},
 #endif
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
         {"network", "uart_device_override", Kind::String, offsetof(struct ca_config, uart_device_override),

@@ -978,6 +978,26 @@ messages are rejected. Verified commands are forwarded to the selected flight
 controller over its local link with the proxy signature removed. The local
 flight-controller connection therefore does not require the proxy's key.
 
+A ground station is told where to find each stream in the camera's
+`VIDEO_STREAM_INFORMATION`. Normally that is the camera's own RTSP address,
+which a ground station connected through the proxy cannot reach when its
+request arrives by another route, such as the flight controller's own link.
+**Parameters → Network** has a URI for each stream (`[network] video1_uri`,
+`video2_uri` and, on thermal cameras, `video3_uri` for raw thermal). Set them
+to the proxy's viewer addresses to advertise those to every ground station:
+
+```ini
+[network]
+video1_uri = rtsp://support.example.org:40001/view/v1
+video2_uri = rtsp://support.example.org:40002/view/v2
+video3_uri = http://support.example.org:40003/v3.mkv
+```
+
+A URI is `rtsp://`, `rtsps://`, `http://` or `https://`, is sent as written,
+and applies without a restart; blank restores the automatic address. The
+MISB and APCG telemetry variants of streams 1 and 2 keep the camera's own
+address. A viewer password in a URI (`?pw=`) is sent to every ground station.
+
 Camera stream-information requests received through the proxy advertise the
 configured stream names and proxy HTTP viewer URLs (`/v1.ts`, `/v2.ts`, and
 `/v3.mkv` on their respective ports). Raw thermal uses experimental type 200. Viewer access remains subject to the proxy's access
