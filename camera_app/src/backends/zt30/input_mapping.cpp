@@ -27,7 +27,10 @@ bool new_input_mapping(const std::vector<InputMapping> &before,const std::vector
        before.empty() || leased.empty() || !first || !bytes || last>UINT64_C(0x100000000) ||
        uv<=first || uv>=last || !physical_y || physical_uv<=physical_y ||
        physical_uv-physical_y!=uv-first || physical_y>UINT64_MAX-bytes)return false;
-    for(const auto &m:before)if(first<m.last && m.first<last)return false;
+    // An SDK mapping already there has no provenance. Any other mapping seen
+    // before was freed by another thread since: the leased snapshot shows the
+    // whole range is now one SDK mapping, and mappings cannot overlap.
+    for(const auto &m:before)if(first<m.last && m.first<last && m.shared_zero)return false;
     unsigned matches=0;
     for(const auto &m:leased)if(m.first==first && m.last==last && m.shared_zero)++matches;
     return matches==1;

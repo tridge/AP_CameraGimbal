@@ -20,7 +20,11 @@ int main() {
     auto bad=leased;bad.back().shared_zero=false;assert(!new_input_mapping(before,bad,info));
     bad=leased;bad.back().last+=4096;assert(!new_input_mapping(before,bad,info));
     bad=leased;bad.push_back(bad.back());assert(!new_input_mapping(before,bad,info));
-    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,false});assert(!new_input_mapping(bad,leased,info));
+    // another thread freed a buffer between the snapshots and the SDK reused its address
+    bad=before;bad.push_back({info.plane_address[0]-0x29000,info.plane_address[0]+bytes,false});assert(new_input_mapping(bad,leased,info));
+    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,false});assert(new_input_mapping(bad,leased,info));
+    // but an SDK mapping that was already there is not a new lease
+    bad=before;bad.push_back({info.plane_address[0]-4096,info.plane_address[0]+4096,true});assert(!new_input_mapping(bad,leased,info));
     pu++;memcpy(raw+80,&pu,8);assert(!new_input_mapping(before,leased,info));
     assert(!parse("10000-20000 rw-s 0 00:00 0 /dev/zero (deleted)",bad));
     assert(!parse("20000-10000 rw-s 0 00:00 0 /dev/zero (deleted)\n",bad));
