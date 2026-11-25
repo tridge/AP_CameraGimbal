@@ -57,14 +57,16 @@ which is not implemented yet.
 On the Pi (Raspberry Pi OS Bookworm or later):
 
 ```sh
-sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config
+sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config curl cmake
 git submodule update --init --recursive
 make dependencies
 make rpi_libcam_caddx
 ```
 
 The binaries are `camera_app/build/rpi_libcam_caddx/camera-app` and
-`web/rpi_libcam_caddx-web`.
+`web/rpi_libcam_caddx-web`. The build also produces the small native HTTPS
+[cloud upload](#cloud-upload) worker and its CA trust store beside camera-app.
+CMake is required to build its pinned libcurl/mbedTLS dependencies.
 
 ## Install
 
@@ -72,9 +74,13 @@ The binaries are `camera_app/build/rpi_libcam_caddx/camera-app` and
 sudo install -m 755 camera_app/build/rpi_libcam_caddx/camera-app /usr/local/bin/ap-camera-app
 sudo install -m 755 web/rpi_libcam_caddx-web /usr/local/bin/ap-camera-web
 sudo install -D -m 644 -t /usr/local/share/ap_cameragimbal/webroot web/webroot/*.*
+sudo install -d /usr/local/share/ap_cameragimbal/webroot/licenses
+sudo install -m 644 web/webroot/licenses/* /usr/local/share/ap_cameragimbal/webroot/licenses/
 sudo install -D -m 644 packaging/rpi_libcam_caddx/camera.ini /etc/ap_cameragimbal/camera.ini
 sudo install -m 644 packaging/rpi_libcam_caddx/ap-cameragimbal.service \
     packaging/rpi_libcam_caddx/ap-cameragimbal-web.service /etc/systemd/system/
+sudo install -m 755 camera_app/build/rpi_libcam_caddx/apcam-upload /usr/local/bin/apcam-upload
+sudo install -m 644 packaging/cloud-upload/upload-ca.pem /usr/local/bin/upload-ca.pem
 sudo systemctl daemon-reload
 sudo systemctl enable --now ap-cameragimbal ap-cameragimbal-web
 journalctl -u ap-cameragimbal -f
@@ -83,7 +89,8 @@ journalctl -u ap-cameragimbal -f
 Only one process can use the camera, so leave Rpanion-server's video
 streaming stopped.
 
-To update, `git pull`, rebuild, repeat the first three install commands and run
+To update, `git pull`, rebuild, repeat the camera/web/asset install commands
+and the native worker/CA install commands, and run
 `sudo systemctl restart ap-cameragimbal ap-cameragimbal-web`. Installing
 `camera.ini` again replaces any settings changed from the GCS or web page.
 
@@ -176,6 +183,13 @@ protocol v2).
 - `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
 - `CAMERA_APP_UART`: gimbal link, a serial device, `udp://IPv4:PORT` or `tcp://IPv4:PORT`; used
   when `--uart` and the Gimbal link setting are not given.
+- `CAMERA_APP_UPLOAD_WORKER`: optional external transfer worker; defaults to
+  `apcam-upload` beside the camera executable. `CAMERA_APP_RCLONE` is a legacy
+  alias.
+- `CAMERA_APP_RCLONE_CONFIG`: credentials file (default
+  `/var/lib/ap_cameragimbal/rclone.conf`) used by cloud upload. If you change
+  `CAMERA_APP_RCLONE_CONFIG`, set it in both the camera and the web service
+  units: the web page saves the credentials to that file and the worker reads it.
 
 ## Defaults when upgrading
 
@@ -185,3 +199,63 @@ RPi installation can still listen on **14570**. A configuration without
 `mavlink.tracking_method` inherits the new **Rate** default; an explicit
 **Angle** setting is retained. Check Parameters for **MAV_TCP_PORT**,
 **MAV_UDP_PORT** and **TRACK_METHOD** before changing the controller connection.
+
+## Cloud upload
+
+The camera app can copy photos and recordings directly to your Google Drive
+with the bundled native HTTPS worker. Uploads are off by default. You provide your own Google credentials.
+See [native cloud uploads](../../docs/CLOUD_UPLOAD_NATIVE.md) for cross-camera
+behaviour, build dependencies and validation limits.
+
+Uploads run only while the camera is **not recording** and the vehicle is
+**not armed**, and the worker is stopped when either changes. With no flight controller connected the vehicle counts
+as disarmed, so a camera on the bench uploads; once a flight controller has
+been seen, a heartbeat lost for 5 s counts as armed. Photos go to
+`<folder>/photos` and recordings to `<folder>/recordings`; files being written
+(`*.part`, `*.tmp`) are skipped. A failed upload is retried after 30 s, then 60 s,
+then every 2 minutes. The camera app looks for new files every
+`scan_minutes`, when recording ends and when the vehicle disarms. The upload worker runs at
+the lowest CPU and disk priority.
+
+### Create the Google credentials
+
+1. In the [Google Cloud console](https://console.cloud.google.com/) create a
+   project (any name).
+2. **APIs & Services > Library**: search for "Google Drive API" and enable it.
+3. **APIs & Services > OAuth consent screen**: choose **External**, fill in the
+   app name and your email, and add your Google account as a test user. Then
+   click **Publish app** so its status is "In production". If it stays in
+   "Testing", Google expires the token after 7 days and uploads stop. An
+   unverified personal app shows a warning when you sign in; continue past it.
+4. **APIs & Services > Credentials > Create credentials > OAuth client ID**:
+   application type **Desktop app**. Copy the **Client ID** and **Client
+   secret**.
+5. On a computer with a web browser [install rclone](https://rclone.org/install/)
+   and run
+
+   ```sh
+   rclone authorize "drive" "CLIENT_ID" "CLIENT_SECRET"
+   ```
+
+   Sign in and allow access. rclone prints a line starting with `{` (the
+   token) between "Paste the following..." and "End paste". Copy that line.
+6. On the web Parameters page open the **Cloud Upload** tab, enter the client
+   ID, client secret and token under *Google Drive credentials* and click **Save
+   credentials**. They are stored in `/var/lib/ap_cameragimbal/rclone.conf`,
+   readable only by root, and are never shown again.
+7. Set *Remote and folder* to `gdrive:AP_CameraGimbal` (the folder is created),
+   choose what to upload and what happens to the local copy, set *Upload to
+   cloud* to Enabled and save. The settings apply without a restart, and the
+   *Upload status* on the same tab shows what is happening.
+
+The token allows whatever access you approved when signing in, which for
+rclone's default is all the files in that Google account's Drive. If that
+matters, use a Google account just for the camera. Remove the credentials on the
+same tab, or revoke access at <https://myaccount.google.com/permissions>.
+
+`after_upload` chooses what happens to a file once it is uploaded and checked:
+`keep` it, `delete` it, or `delete_when_low`: a check that starts with free space
+below `low_space_percent` deletes every file it uploads (not just enough to get
+back above the limit), and other checks keep them. Deleting is done by the worker
+only after Drive reports matching size/checksum and the local file is unchanged. `bandwidth_kib_s` limits the speed in
+KiB/s.
