@@ -37,6 +37,8 @@ def build(args):
         raise ValueError('version must be a bounded ASCII token')
     runtime_root = args.runtime_root.resolve()
     sources = {'camera-app': args.camera_app, 'zt30-web': args.web_app, 'encoder-sdk.so': args.sdk}
+    worker = getattr(args, 'upload_worker', None) or args.camera_app.with_name('apcam-upload')
+    sources['apcam-upload']=worker
     runtime = {}
     for name, path in sources.items():
         if path.is_symlink() or not path.is_file():
@@ -56,6 +58,7 @@ def build(args):
             runtime[item['name']] = item
     if not 1 <= len(runtime) <= 64:
         raise ValueError('invalid runtime dependency count')
+    sources['upload-ca.pem'] = ROOT / 'packaging/cloud-upload/upload-ca.pem'
     if args.webroot.is_symlink() or not args.webroot.is_dir():
         raise ValueError('webroot must be a real directory')
     for path in sorted(args.webroot.rglob('*')):
@@ -75,7 +78,7 @@ def build(args):
     files, payload = [], []
     for name, path in sorted(sources.items()):
         data = path.read_bytes()
-        binary = not name.startswith('webroot/')
+        binary = not name.startswith('webroot/') and name!='upload-ca.pem'
         if not 0 < len(data) <= (16 if binary else 2) * 1024 * 1024:
             raise ValueError('invalid payload size: ' + name)
         files.append({'path': name, 'mode': 0o755 if binary else 0o644, 'size': len(data), 'sha256': digest(data)})
@@ -113,6 +116,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--camera-app', type=Path, default=ROOT / 'camera_app/build/zt30-dev/camera-app')
     p.add_argument('--web-app', type=Path, default=ROOT / 'web/zt30-web')
+    p.add_argument('--upload-worker', type=Path, help='worker executable (default: beside camera-app)')
     p.add_argument('--sdk', type=Path, default=ROOT / 'build/zt30/encoder-sdk.so')
     p.add_argument('--webroot', type=Path, default=ROOT / 'web/webroot')
     p.add_argument('--runtime-root', type=Path, required=True)

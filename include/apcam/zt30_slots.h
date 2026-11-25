@@ -65,13 +65,17 @@ inline bool payload_valid(const std::string &path, std::string &error, bool flat
     if (!directory(path) || !regular(path + "/camera-app", true) ||
         !regular(path + "/zt30-web", true) || !regular(path + "/encoder-sdk.so"))
         return fail(error, "Incomplete or unsafe application payload: " + path);
+    struct stat worker{};
+    if(lstat((path+"/apcam-upload").c_str(),&worker)==0 &&
+        (!regular(path+"/apcam-upload",true) || !regular(path+"/upload-ca.pem")))
+        return fail(error,"Incomplete native upload payload");
     if (!flat) {
         DIR *d = opendir(path.c_str()); if (!d) return fail(error, "Cannot inspect slot");
         bool ok = true;
         while (auto *entry = readdir(d)) {
             const char *name = entry->d_name;
             if (!strcmp(name, ".") || !strcmp(name, "..") || !strcmp(name, "camera-app") ||
-                !strcmp(name, "zt30-web") || !strcmp(name, "encoder-sdk.so") || !strcmp(name, "webroot")) continue;
+                !strcmp(name, "zt30-web") || !strcmp(name, "encoder-sdk.so") || !strcmp(name, "apcam-upload") || !strcmp(name, "upload-ca.pem") || !strcmp(name, "webroot")) continue;
             if (strcmp(name, "manifest.json") || !regular(path + "/manifest.json")) { ok = false; break; }
         }
         closedir(d); if (!ok) return fail(error, "Unexpected slot payload entry");

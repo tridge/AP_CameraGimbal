@@ -18,7 +18,7 @@ class PackageTests(unittest.TestCase):
             (baseline/'demo.sh').write_text('#!/bin/sh\necho platform\nchmod a+x /customer/siyi_app_359\n/vendor/app\n')
             binary=root/'binary';binary.write_bytes(b'fixture')
             args=argparse.Namespace(output=root/'firmware.candidate',customer_root=baseline,
-                camera_app=binary,web_app=binary,sdk=binary,dropbear=binary,dropbearkey=binary,slot_tool=binary,
+                camera_app=binary,web_app=binary,sdk=binary,upload_worker=binary,dropbear=binary,dropbearkey=binary,slot_tool=binary,
                 authorized_keys=None,overlay_output=root/'overlay.tar.gz',mkfs='fixture-mkfs')
             def mkfs(cmd,check):
                 Path(cmd[cmd.index('-o')+1]).write_bytes(payload())

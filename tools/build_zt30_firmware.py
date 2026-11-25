@@ -54,8 +54,8 @@ def populate(customer, args, data=None):
     previous = ''
     for entry in manifest['files']:
         name, size, mode = entry['path'], entry['size'], entry['mode']
-        binary = name in ('camera-app', 'zt30-web', 'encoder-sdk.so')
-        if (name <= previous or (not binary and not asset(name)) or
+        binary = name in ('camera-app', 'zt30-web', 'encoder-sdk.so', 'apcam-upload')
+        if (name <= previous or (not binary and name != 'upload-ca.pem' and not asset(name)) or
                 mode != (0o755 if binary else 0o644) or not 0 < size <= (16 if binary else 2)*1024*1024):
             raise ValueError('invalid application file')
         payload = data[offset:offset+size]
@@ -69,8 +69,12 @@ def populate(customer, args, data=None):
                 'webroot/status-actions.html', 'webroot/parameters-form.html')
     if offset != len(data) or not all((slot/name).is_file() for name in required):
         raise ValueError('incomplete application bundle')
+    # The upload worker is optional, but needs its CA store beside it.
+    worker = (slot/'apcam-upload').is_file()
+    if worker and not (slot/'upload-ca.pem').is_file():
+        raise ValueError('incomplete native upload payload')
     (slot/'manifest.json').write_bytes(text); (slot/'manifest.json').chmod(0o644)
-    for name in ('camera-app', 'zt30-web', 'encoder-sdk.so'):
+    for name in ('camera-app', 'zt30-web', 'encoder-sdk.so') + (('apcam-upload',) if worker else ()):
         check(slot/name, args.readelf, args.runtime_root.resolve(), ('/config/lib', '/lib', '/usr/lib'),
               shared_library=name == 'encoder-sdk.so')
     (app/'active').symlink_to('slots/'+slot_id)

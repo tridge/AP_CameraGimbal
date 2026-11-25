@@ -102,6 +102,8 @@ def build(args):
         app.mkdir(exist_ok=True)
         app.chmod(0o755)
         sources={'camera-app':args.camera_app,'zt30-web':args.web_app,'encoder-sdk.so':args.sdk,
+            'apcam-upload':(getattr(args,'upload_worker',None) or args.camera_app.with_name('apcam-upload')),
+            'upload-ca.pem':ROOT/'packaging/cloud-upload/upload-ca.pem',
             'dropbear':args.dropbear,'dropbearkey':args.dropbearkey,
             'zt30-slot':getattr(args,'slot_tool',ROOT/'build/zt30/zt30-slot'),
             'app-init.sh':ROOT/'packaging/zt30/app-init.sh',
@@ -111,7 +113,7 @@ def build(args):
             'camera.ini.default':ROOT/'packaging/zt30/camera.ini.dev'}
         for name,source in sources.items():
             if not source.is_file():raise ValueError('missing input: '+str(source))
-            install_file(source,app/name,0o755 if name!='camera.ini.default' else 0o644)
+            install_file(source,app/name,0o644 if name in ('camera.ini.default','upload-ca.pem') else 0o755)
         # The common web server serves external assets, just like MT11/A8/ZR10.
         assets=app/'webroot'
         if assets.is_symlink():raise ValueError('webroot directory is a symlink')
@@ -177,6 +179,7 @@ def main():
     b=sub.add_parser('build')
     for name in ('customer-root','camera-app','web-app','sdk','dropbear','dropbearkey','output'):
         b.add_argument('--'+name,type=Path,required=True)
+    b.add_argument('--upload-worker',type=Path,help='worker executable (default: beside camera-app)')
     b.add_argument('--overlay-output',type=Path)
     b.add_argument('--authorized-keys',type=Path);b.add_argument('--mkfs',default='mkfs.ubifs')
     args=p.parse_args()

@@ -60,12 +60,13 @@ class Firmware(unittest.TestCase):
             self.assertNotIn(forbidden, script)
 
     def test_bootstrap_is_slot_based_and_contains_no_captured_unit_state(self):
-        files = {'camera-app': b'camera', 'zt30-web': b'web', 'encoder-sdk.so': b'sdk'}
+        files = {'camera-app': b'camera', 'zt30-web': b'web', 'encoder-sdk.so': b'sdk',
+                 'apcam-upload': b'worker', 'upload-ca.pem': b'ca'}
         for name in ('live.js', 'status-actions.html', 'parameters-form.html'): files['webroot/'+name] = b'asset'
         manifest = dict(schema='apcg.zt30.app.v1', board='SIYI_ZT30', launcher=1, version='test',
                         runtime=[dict(name='libc.so.6', path='/lib/libc.so.6', size=7,
                                       sha256=hashlib.sha256(b'runtime').hexdigest())],
-                        files=[dict(path=n, mode=0o644 if n.startswith('webroot/') else 0o755,
+                        files=[dict(path=n, mode=0o644 if n.startswith('webroot/') or n.endswith('.pem') else 0o755,
                                                size=len(b), sha256=hashlib.sha256(b).hexdigest())
                                            for n, b in sorted(files.items())])
         text = json.dumps(manifest, separators=(',', ':')).encode()
@@ -77,7 +78,14 @@ class Firmware(unittest.TestCase):
             binary = root/'binary'; binary.write_bytes(b'bootstrap')
             args = argparse.Namespace(bundle=bundle, slot_tool=binary, dropbear=binary, dropbearkey=binary,
                                       runtime_root=root, readelf='readelf')
-            with patch.object(builder, 'check'): slot = builder.populate(customer, args)
+            with patch.object(builder, 'check') as checker: slot = builder.populate(customer, args)
+            self.assertIn('apcam-upload', [c.args[0].name for c in checker.call_args_list])
+            orphan = dict(manifest, files=[f for f in manifest['files'] if f['path'] != 'upload-ca.pem'])
+            text2 = json.dumps(orphan, separators=(',', ':')).encode()
+            data2 = b'APCZT301'+struct.pack('<I', len(text2))+text2+b''.join(files[n] for n in sorted(files) if n != 'upload-ca.pem')
+            other = root/'other'; other.mkdir()
+            with patch.object(builder, 'check'), self.assertRaisesRegex(ValueError, 'native upload'):
+                builder.populate(other, args, data2)
             app = customer/'camera-app'
             self.assertEqual((app/'active').readlink().as_posix(), 'slots/'+slot)
             for n in files: self.assertEqual((app/'slots'/slot/n).read_bytes(), files[n])

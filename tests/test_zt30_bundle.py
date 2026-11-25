@@ -329,14 +329,14 @@ int statvfs(const char *path, struct statvfs *st) {
         inputs=self.base/'inputs';inputs.mkdir();assets=inputs/'webroot';assets.mkdir()
         for name,data in self.payload.items():
             path=inputs/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
-        args=argparse.Namespace(camera_app=inputs/'camera-app',web_app=inputs/'zt30-web',sdk=inputs/'encoder-sdk.so',
+        args=argparse.Namespace(camera_app=inputs/'camera-app',web_app=inputs/'zt30-web',sdk=inputs/'encoder-sdk.so',upload_worker=inputs/'camera-app',
                                 webroot=assets,runtime_root=self.runtime,readelf='readelf',version='test-1',output=self.base/'builder.apbundle')
         def checked(path,*args,**kwargs):
             return {'runtime_dependencies':[{'name':'libc.so.6','path':str(self.runtime/'lib/libc.so.6')}]}
         with patch.object(builder,'check',side_effect=checked) as checker:
             first=builder.build(args);data=args.output.read_bytes();second=builder.build(args)
             self.assertEqual(first,second);self.assertEqual(args.output.read_bytes(),data)
-            self.assertEqual(checker.call_count,6)
+            self.assertEqual(checker.call_count,8)
             self.assertEqual(self.call('stage',args.output),first['slot'])
         with patch.object(builder,'check',side_effect=ValueError('ABI incompatible')):
             with self.assertRaisesRegex(ValueError,'ABI incompatible'):builder.build(args)

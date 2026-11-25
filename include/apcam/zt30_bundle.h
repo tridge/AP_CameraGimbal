@@ -30,6 +30,7 @@ inline bool token(const std::string &s, size_t maximum = 128)
 }
 inline bool bundle_asset(const std::string &path)
 {
+    if (path == "upload-ca.pem") return true;
     if (path.compare(0, 8, "webroot/")) return false;
     size_t at = 8; unsigned components = 0;
     while (true) {
@@ -105,7 +106,7 @@ inline bool parse_bundle_manifest(BundleManifest &m, std::string &error)
             !j.number(f.size, bundle_limit) || !f.size || !j.take(",\"sha256\":") ||
             !j.string(f.hash) || !slot_id_valid(f.hash.c_str()) || !j.take("}") ||
             (!m.files.empty() && m.files.back().path >= f.path)) return fail(error, "Invalid or duplicate bundle file");
-        bool binary = f.path == "camera-app" || f.path == "zt30-web" || f.path == "encoder-sdk.so";
+        bool binary = f.path == "camera-app" || f.path == "zt30-web" || f.path == "encoder-sdk.so" || f.path == "apcam-upload";
         f.mode = unsigned(mode);
         if ((!binary && !bundle_asset(f.path)) || f.mode != unsigned(binary ? 0755 : 0644) ||
             f.size > (binary ? 16*1024*1024U : 2*1024*1024U) || f.size > bundle_limit-m.size)
@@ -279,7 +280,8 @@ inline bool stage_bundle(const std::string &root, const std::string &bundle, con
         if (!ok) fail(error, "Cannot store canonical slot manifest");
     }
     if (ok) ok = basic_elf(stage+"/camera-app", false, error) && basic_elf(stage+"/zt30-web", false, error) &&
-        basic_elf(stage+"/encoder-sdk.so", true, error) && payload_valid(stage, error) &&
+        basic_elf(stage+"/encoder-sdk.so", true, error) &&
+        (!regular(stage+"/apcam-upload") || basic_elf(stage+"/apcam-upload", false, error)) && payload_valid(stage, error) &&
         chmod(stage.c_str(), 0755) == 0 && sync_payload(stage, error);
     std::string destination = root+"/slots/"+m.id; struct stat existing{};
     if (ok && lstat(destination.c_str(), &existing) == 0) {
@@ -365,7 +367,8 @@ inline bool verify_bundle_slot(const std::string &root, const char *id, const st
         if (!file_digest(runtime, dep.size, dep.hash, true, error)) return false;
     }
     return basic_elf(path+"/camera-app", false, error) && basic_elf(path+"/zt30-web", false, error) &&
-        basic_elf(path+"/encoder-sdk.so", true, error);
+        basic_elf(path+"/encoder-sdk.so", true, error) &&
+        (!regular(path+"/apcam-upload") || basic_elf(path+"/apcam-upload", false, error));
 }
 inline bool activate_bundle(const std::string &root, const char *id, const std::string &runtime_root, std::string &error)
 {
