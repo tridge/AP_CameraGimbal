@@ -16,6 +16,7 @@ for backend in $(python3 -c 'import json; print(" ".join(name for name, target i
         SITL_ROOT=/portable/runtime SITL_BIN_ROOT=/portable/native \
         SITL_EXTRA_DEFINES="$defines"
 done
+if [ -f build/windows/native/apcam-upload ]; then mv build/windows/native/apcam-upload build/windows/native/apcam-upload.exe; fi
 cp /usr/bin/kill.exe build/windows/native/
 # Include every Cygwin runtime dependency alongside the services. No installed
 # Cygwin, compiler or shell is used by the finished package.

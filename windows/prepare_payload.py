@@ -14,7 +14,7 @@ def main():
     for name in ('native', 'fixtures', 'configs', 'licenses'):
         (PAYLOAD / name).mkdir(parents=True, exist_ok=True)
     for path in (ROOT / 'build/windows/native').iterdir():
-        if path.suffix.lower() in ('.exe', '.dll'):
+        if path.suffix.lower() in ('.exe', '.dll', '.pem'):
             shutil.copy2(path, PAYLOAD / 'native' / path.name)
     # Replace the tree to avoid shipping stale templates from an older build.
     shutil.rmtree(PAYLOAD / 'webroot', ignore_errors=True)
