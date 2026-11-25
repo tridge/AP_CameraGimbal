@@ -1,6 +1,6 @@
 # <img src="../../assets/camera-gimbal.svg" alt="" width="40" height="40"> Video flight review
 
-A local-file web viewer for reviewing AP_CameraGimbal imagery and investigating
+A local-file and live-stream web viewer for reviewing AP_CameraGimbal imagery and investigating
 thermal observations. It runs as a static site: videos, logs, raw thermal pixels
 and findings stay in the browser. There is no upload endpoint or video backend.
 A video alone supplies playback, embedded telemetry and its aircraft track.
@@ -54,6 +54,58 @@ page is using are deleted when the next download starts. The server must send
 `Access-Control-Allow-Origin`, and the page's Content-Security-Policy
 `connect-src` (in `index.html`) must allow the file's origin. An https page
 cannot download from http.
+
+## Live streams
+
+**Live** (beside Open video), or `?live=wss://HOST:PORT/`, plays a raw thermal
+stream as it arrives from a [SupportProxy](https://github.com/ArduPilot/SupportProxy)
+video port. A ZT30 or MT11 running AP_CameraGimbal publishes it when
+`PROXY_VID3_PORT` is set (see the camera's SupportProxy settings). The address
+is the proxy host and that video port; the viewer uses the port's TLS
+WebSocket. If the proxy entry has a viewer password, enter it in the Live
+dialog, or append `#pw=PASSWORD` to a `?live=` link (the fragment is not sent
+to the web server and is removed from the address bar).
+
+The image shows the newest frame and the map path grows as the flight goes
+on. Everything received since the page connected is kept in the browser
+(origin-private file storage, or up to 512 MiB of memory without it), so:
+
+- **Pause**, the seek bar, frame stepping, a finding, or a click on the map
+  path leave the live edge and show the earlier frame. The red **● LIVE**
+  button becomes **Go live · −m:ss**, the time behind the newest frame.
+- **Play** from an earlier point plays forward from there (Speed applies);
+  on reaching the newest frame it follows the stream again. **Go live** jumps
+  straight to the newest frame.
+- **Save recording** downloads what has been received so far as a raw thermal
+  MKV, which opens in this viewer like any other recording.
+- **End live** stops receiving. The recording stays open and is then an
+  ordinary indexed recording, so Create splat and everything else that needs a
+  complete file works.
+
+Palettes, pixel readings, findings, Project video, 2D/3D, Follow, flight logs
+and the thermal workbench work on a live stream as they do on a file. History
+starts when the page connects: the proxy sends a new viewer the newest frame,
+not the flight so far.
+
+If the connection drops the viewer reconnects and carries on; the gap stays
+in the timeline. If the camera or its publisher restarts (its timestamps start
+again), the new frames continue the timeline after the wall-clock gap, and the
+saved recording has those later Cluster timestamps rewritten to match; pixels
+and per-frame metadata are never changed. A stream that comes back with a
+different format, or browser storage running out, ends the live session with a
+message and keeps what was received. The status line reports what the browser
+can observe: connecting, waiting for the camera, live, or why a connection
+closed. A proxy closes a viewer with a wrong or missing password straight
+after connecting, which looks the same as a camera that has just stopped.
+
+Only raw thermal (FFV1 Matroska) streams are supported; the proxy's H.264 /
+HEVC MPEG-TS streams are not. The page's Content-Security-Policy `connect-src`
+(in `index.html`) must list the proxy as `wss://HOST:*`. A repeated recording
+replayed for testing repeats its telemetry UTC; a non-zero telemetry offset or
+projection yaw stabilisation may then pick a pose from an earlier pass.
+
+`tools/replay_raw_thermal.py FILE http://HOST:PORT/vN.mkv --loop` publishes a
+recorded raw thermal MKV to a proxy at its recorded pace, for testing.
 
 ## Supported recordings
 
@@ -358,12 +410,8 @@ boundaries. In brief:
 - `tests`: format golden vectors, domain tests, real-file opt-ins, and headed
   browser qualification with reproducible small generated fixtures.
 
-SupportProxy live ingestion is the next source adapter, not implemented yet.
-It should emit the same frame/track batches and `readPacket` API, with bounded
-packet retention, generation/cancellation, PTS discontinuity handling and explicit
-clock provenance. An HTTPS-hosted viewer will require an HTTPS/CORS-capable proxy
-endpoint; raw RTSP is not a browser transport. The playback, telemetry, thermal
-and map layers can then be reused.
+`src/media/live-source.js` is the live source adapter described below. A further
+adapter should emit the same frame/track batches and `readPacket` API.
 
 ## Checks
 
