@@ -3,6 +3,7 @@
 #endif
 #include "camera_app/metadata.h"
 #include "camera_app/still.h"
+#include "camera_app/directories.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -197,6 +198,27 @@ int main(void)
     *strrchr(directory, '/') = '\0';
     assert(unlink(path) == 0);
     assert(rmdir(directory) == 0);
+
+    // a card with no DCIM: every missing level of a capture root is made
+    char parent[64], nested[96], file[96];
+    snprintf(parent, sizeof(parent), "%s/DCIM", root);
+    snprintf(nested, sizeof(nested), "%s/capture", parent);
+    assert(ca_mkdir_p(nested, 0700) == 0 && ca_mkdir_p(nested, 0700) == 0);
+    assert(stat(nested, &status) == 0 && S_ISDIR(status.st_mode));
+    snprintf(file, sizeof(file), "%s/x", parent);
+    fd = open(file, O_WRONLY | O_CREAT, 0600);
+    assert(fd >= 0 && close(fd) == 0);
+    errno = 0;
+    assert(ca_mkdir_p(file, 0700) < 0 && errno == ENOTDIR);
+    assert(ca_mkdir_p("", 0700) < 0 && errno == EINVAL);
+    // the JPEG writer makes a capture root's missing parents
+    assert(rmdir(nested) == 0 && unlink(file) == 0 && rmdir(parent) == 0);
+    assert(ca_still_write_jpeg(nested, 'C', jpeg, sizeof(jpeg), &captured_at,
+                               path, sizeof(path)) == 0);
+    strcpy(directory, path);
+    *strrchr(directory, '/') = '\0';
+    assert(unlink(path) == 0 && rmdir(directory) == 0);
+    assert(rmdir(nested) == 0 && rmdir(parent) == 0);
     assert(rmdir(root) == 0);
     puts("still JPEG tests passed");
     return 0;

@@ -1,6 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "camera_app/directories.h"
 #include "camera_app/raw_thermal.h"
 
 #include <errno.h>
@@ -60,7 +61,7 @@ static int make_path(struct ca_raw_thermal *capture, int *fd,
         errno = EINVAL;
         return -1;
     }
-    if (mkdir(capture->root, 0700) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(capture->root, 0700) < 0) return -1;
     if (snprintf(directory, sizeof(directory), "%s/%s", capture->root,
                  day) >= (int)sizeof(directory)) {
         errno = ENAMETOOLONG;

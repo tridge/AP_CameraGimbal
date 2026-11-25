@@ -1,6 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "camera_app/directories.h"
 #include "camera_app/still.h"
 
 #include "camera_app/metadata.h"
@@ -61,7 +62,7 @@ int ca_still_write_jpeg(const char *root, char suffix,
         return -1;
     }
     milliseconds = (unsigned)(captured_at->tv_nsec / 1000000L);
-    if (mkdir(root, 0700) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(root, 0700) < 0) return -1;
     if (snprintf(directory, sizeof(directory), "%s/%s", root, day) >=
         (int)sizeof(directory)) {
         errno = ENAMETOOLONG;

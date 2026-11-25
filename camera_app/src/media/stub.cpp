@@ -3,6 +3,7 @@
 #endif
 #include <new>
 #include <vector>
+#include "camera_app/directories.h"
 #include "camera_app/still.h"
 #include "camera_app/APC_Media_Backend.h"
 #include "camera_app/binlog.h"
@@ -733,7 +734,7 @@ int APC_Media_SITL::set_recording(bool active)
         pthread_mutex_lock(&media->record_lock);
         if (active == atomic_load(&media->sitl_recording)) goto done;
         if (!active) { result = close_sitl_recording(media); goto done; }
-        if (mkdir(media->record_root, 0755) < 0 && errno != EEXIST) { result = -1; goto done; }
+        if (ca_mkdir_p(media->record_root, 0755) < 0) { result = -1; goto done; }
         /* Recording encoders always produce H.264, independently of live codecs. */
         for (unsigned i = 0U; i < media->record_channels; i++) {
             if (media->videos[i == 0U ? media->rgb_record_source : 4U].codec != CA_VIDEO_H264) { errno = ENOTSUP; result = -1; goto done; }
@@ -976,7 +977,7 @@ static int capture_sitl_photo(struct APC_Media_SITL_State *media, enum ca_photo_
     unsigned mask = media->has_thermal && scope == CA_PHOTO_SCOPE_THERMAL ? 4U :
                     (1U | (APCAM_HAVE_ZOOM_LENS ? 2U : 0U) | (media->has_thermal ? 4U : 0U));
     if(survey) mask=1U << (survey->request.lens-1);
-    if (mkdir(media->capture_root, 0755) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(media->capture_root, 0755) < 0) return -1;
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 5;
@@ -1041,7 +1042,7 @@ int APC_Media_SITL::capture_photo(enum ca_photo_scope scope)
     media->thermal_captures++;
     source = getenv("CAMERA_APP_SITL_PHOTO");
     if (source == NULL || media->capture_root == NULL) return 0;
-    if (mkdir(media->capture_root, 0755) < 0 && errno != EEXIST) return -1;
+    if (ca_mkdir_p(media->capture_root, 0755) < 0) return -1;
     first = scope == CA_PHOTO_SCOPE_ALL ? 0U : 2U;
     for (unsigned index = first; index < 3U; index++) {
         char path[4096];
