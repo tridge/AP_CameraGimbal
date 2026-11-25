@@ -90,7 +90,7 @@ mixed usable/unusable exposure rows, invalid-table fallback, SigmaStar field lay
 unknown fields, fragmented Z1 exposure/video IPC, invalid packet rejection and
 continued exposure polling during blocked thermal I/O.
 
-`make sitl-image-controls-test` changes live image controls on all four targets,
+`make -f tools/dev.mk sitl-image-controls-test` changes live image controls on all four targets,
 decodes actual BIN files with pymavlink, and verifies the AE source, validity,
 units, manual shutter/ISO changes, unsupported thermal feedback and sampling
 rate. Both targets run in the firmware CI workflow.

@@ -93,7 +93,7 @@ python3 tools/mt11_rate_sweep.py --host 192.168.144.25 --backend a8 --inverted \
     --pitch -10 --axis yaw --commands 10 --mavlink-rates --output yaw-mavlink.csv
 python3 tools/gimbal_tracking_bench.py --host 192.168.144.25 --backend a8 --inverted
 python3 tools/analyze_gimbal_rates.py sweep.BIN --settle .5 --window .3
-make a8_sitl-rate-test
+make -f tools/dev.mk a8_sitl-rate-test
 ```
 
 Do not fit short, high-speed samples with a settling window longer than their

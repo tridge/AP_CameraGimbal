@@ -76,6 +76,9 @@ public:
         return true;
     }
     // Only use with the separately pinned encoder dependency group.
+    bool resolve_zoom() {
+        return handle && symbol(api.scl_get_port,"libmi_scl.so","MI_SCL_GetOutputPortParam");
+    }
     bool resolve_encoder() {
         if(!handle)return false;
 #define LOAD(field,name) if(!symbol(encoder.field,"libmi_venc.so",name))return false

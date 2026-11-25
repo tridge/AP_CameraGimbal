@@ -6,7 +6,7 @@ executables, compressed individually with XZ. The initial bundle uses the same
 binaries previously built and included in MT11 firmware; it does not change their
 versions, options or runtime dependencies. Other camera targets do not use them.
 
-`make mt11_tools` verifies the compressed and decompressed SHA-256 checksums and
+`make -f tools/dev.mk mt11_tools` verifies the compressed and decompressed SHA-256 checksums and
 ELF architecture, then installs the tools in `build/deps/mt11-tools/bin/`.
 It requires only Make and Python 3 (including its standard `lzma` module), with
 no compiler, network access or build-environment installation. Repeated calls
@@ -29,7 +29,7 @@ python3 tools/install_build_environment.py --targets mt11 --with-tool-build-deps
 # Use a fresh directory so old configure results cannot affect the rebuild.
 tools/build_mt11_tools.sh build/mt11-tools-rebuild aarch64-linux-gnu-
 python3 tools/prebuilt_mt11_tools.py --refresh-from build/mt11-tools-rebuild
-make mt11_tools
+make -f tools/dev.mk mt11_tools
 python3 tests/test_prebuilt_tools.py
 ```
 

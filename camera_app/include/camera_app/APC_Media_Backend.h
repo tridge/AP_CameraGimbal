@@ -26,6 +26,10 @@ public:
     virtual float zoom() const = 0;
     virtual int set_lens_zoom(enum ca_media_lens lens, float zoom) { if (lens != CA_MEDIA_LENS_WIDE) { errno = EINVAL; return -1; } return set_zoom(zoom); }
     virtual float lens_zoom(enum ca_media_lens lens) const { return lens == CA_MEDIA_LENS_WIDE ? zoom() : NAN; }
+    // Asynchronous lenses report measured zoom separately from their accepted
+    // command, so moving feedback does not look like another owner's request.
+    virtual float lens_zoom_command(enum ca_media_lens lens) const { return lens_zoom(lens); }
+    virtual void cancel_zoom() {}
     virtual float hfov(bool thermal) const = 0;
     virtual unsigned frame_rate(bool thermal) const = 0;
     virtual int set_lens(enum ca_media_lens lens) = 0;

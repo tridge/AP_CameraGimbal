@@ -495,6 +495,15 @@ float APC_Media::lens_zoom(enum ca_media_lens lens) const
 }
 float APC_Media::hfov(bool thermal) const
 { return _backend ? _backend->hfov(thermal) : NAN; }
+float APC_Media::lens_zoom_command(enum ca_media_lens lens) const
+{
+    return _camera.has_independent_lens_zoom() && _backend ?
+        _backend->lens_zoom_command(lens) : lens_zoom(lens);
+}
+float ca_media_lens_zoom_command(const ca_media *media, enum ca_media_lens lens)
+{ return media ? media->lens_zoom_command(lens) : NAN; }
+void ca_media_cancel_zoom(ca_media *media)
+{ if (media) media->cancel_zoom(); }
 unsigned APC_Media::frame_rate(bool thermal) const
 { return _backend ? _backend->frame_rate(thermal) : 0; }
 int APC_Media::set_lens(enum ca_media_lens lens)

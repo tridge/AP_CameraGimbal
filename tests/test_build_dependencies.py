@@ -29,6 +29,7 @@ class BuildDependenciesTest(unittest.TestCase):
         tools = self.repo / 'tools'
         tools.mkdir()
         shutil.copyfile(ROOT / 'tools/build.mk', tools / 'build.mk')
+        shutil.copyfile(ROOT / 'tools/dev.mk', tools / 'dev.mk')
         shutil.copyfile(ROOT / 'tools/zt30_stream.mk', tools / 'zt30_stream.mk')
         bootstrap = tools / 'bootstrap_dependencies.sh'
         bootstrap.write_text('''#!/bin/sh
@@ -58,10 +59,10 @@ all:
 	@echo compile >> ../calls
 ''')
         # Like build_release.py, this child receives exported dependency roots.
-        (self.repo / 'recursive.mk').write_text('''include Makefile
+        (self.repo / 'recursive.mk').write_text('''include tools/dev.mk
 .PHONY: recursive
 recursive:
-	$(MAKE) all
+	$(MAKE) _mt11-binaries
 ''')
 
     def make(self, *args, extra_env=None, expect_success=True):
@@ -82,31 +83,34 @@ recursive:
         calls = self.repo / 'calls'
         return calls.read_text().splitlines() if calls.exists() else []
 
-    def test_plain_make_bootstraps_before_compiling(self):
-        self.assertEqual(self.make(), ['bootstrap', 'compile', 'compile'])
+    def test_camera_build_bootstraps_before_compiling(self):
+        self.assertEqual(self.make('_mt11-binaries'), ['bootstrap', 'compile', 'compile'])
+
+    def test_plain_make_only_prints_help(self):
+        (self.repo / 'build/environment.mk').unlink()
+        self.assertEqual(self.make(), [])
 
     def test_hardware_builds_require_environment_before_any_work(self):
         (self.repo / 'build/environment.mk').unlink()
-        for goal in [None, 'all', 'release', 'mt11_package', 'a8_package',
-                     'zr10_firmware', 'z1mini_native_package', 'recursive']:
+        for goal in ['release', 'mt11', 'a8', 'zr10', 'zt30', 'z1mini', 'recursive']:
             with self.subTest(goal=goal):
-                output = self.make(*([goal] if goal else []), expect_success=False)
+                output = self.make(goal, expect_success=False)
                 self.assertIn('python3 tools/install_build_environment.py', output)
                 self.assertFalse((self.repo / 'calls').exists())
 
     def test_source_setup_does_not_require_hardware_environment(self):
         (self.repo / 'build/environment.mk').unlink()
-        self.assertEqual(self.make('build-dependencies'), ['bootstrap'])
+        self.assertEqual(self.make('_build-dependencies'), ['bootstrap'])
 
     def test_recursive_make_bootstraps_inherited_default_paths(self):
         self.assertEqual(self.make('recursive'), ['bootstrap', 'compile', 'compile'])
 
     def test_custom_roots_are_not_downloaded(self):
-        self.assertEqual(self.make('build-dependencies', extra_env={
+        self.assertEqual(self.make('_build-dependencies', extra_env={
             'SS928_MPP_ROOT': '/custom/mpp', 'MINIMP4_ROOT': '/custom/minimp4'}), [])
 
     def test_one_default_root_still_bootstraps(self):
-        self.assertEqual(self.make('build-dependencies', 'SS928_MPP_ROOT=/custom/mpp'),
+        self.assertEqual(self.make('_build-dependencies', 'SS928_MPP_ROOT=/custom/mpp'),
                          ['bootstrap'])
 
     def test_custom_dependency_directory_survives_recursion(self):
@@ -143,7 +147,7 @@ sitl all:
 
     def test_parallel_camera_goals_generate_shared_inputs_once(self):
         self.prepare_sitl()
-        calls = self.make('dependencies', 'sitl', 'a8_sitl', 'zr10_sitl', 'z1mini_sitl')
+        calls = self.make('dependencies', 'sitl', 'CAMERA=mt11 a8 zr10 z1mini')
         self.assertEqual(calls[:3], ['bootstrap', 'generating-camera_app', 'generating-web'])
         self.assertEqual(calls.count('bootstrap'), 1)
         self.assertEqual(calls.count('generating-camera_app'), 1)
@@ -153,7 +157,7 @@ sitl all:
 
     def test_shared_generation_failure_stops_every_backend(self):
         self.prepare_sitl(fail=True)
-        self.make('sitl', 'a8_sitl', 'zr10_sitl', 'z1mini_sitl', expect_success=False)
+        self.make('sitl', 'CAMERA=mt11 a8 zr10 z1mini', expect_success=False)
         self.assertEqual((self.repo / 'calls').read_text().splitlines(),
                          ['bootstrap', 'generating-camera_app'])
 

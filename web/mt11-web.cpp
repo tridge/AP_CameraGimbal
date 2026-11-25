@@ -82,6 +82,9 @@
 #ifndef FIRMWARE_SUFFIX
 #define FIRMWARE_SUFFIX ".bin"
 #endif
+#ifndef FIRMWARE_ACCEPT
+#define FIRMWARE_ACCEPT FIRMWARE_SUFFIX
+#endif
 /* Targets keeping media on the root filesystem set this to 0. */
 #ifndef WEB_MEDIA_IS_MOUNT
 #define WEB_MEDIA_IS_MOUNT 1
@@ -651,8 +654,14 @@ static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {
 
 static const struct option survey_patterns[] = {
     {"both", S_SURV_BOTH}, {"left_right", S_SURV_LEFT_RIGHT}, {"fore_aft", S_SURV_FORE_AFT},
-    {"fore_only", S_SURV_FORE_ONLY},
+    {"fore_only", S_SURV_FORE_ONLY}, {"fore_wide", S_SURV_FORE_WIDE},
+    {"port", S_SURV_PORT}, {"starboard", S_SURV_STARBOARD},
 };
+
+static const struct option survey_aims[] = {
+    {"rows", S_SURV_AIM_ROWS}, {"ahead", S_SURV_AIM_AHEAD},
+};
+
 static const struct option survey_lenses[] = {
 #if WEB_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
     {"thermal", S_SURV_THERMAL},
@@ -667,6 +676,10 @@ static const struct option survey_lenses[] = {
 static const char *const UART_DEVICE_OVERRIDE_CHOICES[] = {
     "/dev/serial0", "/dev/ttyAMA0", "/dev/ttyAMA1", "/dev/ttyUSB0", "udp://192.168.144.15:15002",
 };
+#if APCAM_HAVE_VPN
+static const struct option vpn_provider_options[] = {{"zerotier", S_OPT_ZEROTIER}};
+#endif
+
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -801,6 +814,14 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 31, 1, NULL, 0},
     {"network_gateway", "network", "gateway", S_P_NETWORK_GATEWAY, S_H_NETWORK_GATEWAY,
      PARAM_TEXT, 0, 15, 1, NULL, 0},
+#if APCAM_HAVE_VPN
+    {"network_vpn_enabled", "network", "vpn_enabled", S_P_VPN_ENABLE, S_H_VPN_ENABLE,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"network_vpn_provider", "network", "vpn_provider", S_P_VPN_PROVIDER, S_H_VPN_PROVIDER,
+     PARAM_ENUM, 0, 0, 0, vpn_provider_options, 1},
+    {"network_vpn_network_id", "network", "vpn_network_id", S_P_VPN_NETWORK, S_H_VPN_NETWORK,
+     PARAM_TEXT, 0, 16, 0, NULL, 0},
+#endif
     {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
 #if !APCAM_HAVE_NETWORK_CONFIG
@@ -813,11 +834,14 @@ static const struct parameter replacement_parameters[] = {
 #endif
     {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
      PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
+    {"survey_aim", "survey", "aim", S_SURV_AIM, S_SURV_AIM_HELP,
+     PARAM_ENUM, 0, 0, 0, survey_aims, sizeof(survey_aims)/sizeof(survey_aims[0])},
     {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
      PARAM_ENUM, 0, 0, 0, survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0])},
     {"survey_overlap", "survey", "overlap", S_SURV_OVERLAP, S_SURV_OVERLAP_HELP, PARAM_INTEGER, 0, 90, 1, NULL, 0},
     {"survey_fore_pct", "survey", "fore_pct", S_SURV_FORE_PCT, S_SURV_FORE_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
     {"survey_aft_pct", "survey", "aft_pct", S_SURV_AFT_PCT, S_SURV_AFT_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
+    {"survey_side_pct", "survey", "side_pct", S_SURV_SIDE_PCT, S_SURV_SIDE_PCT_HELP, PARAM_INTEGER, 0, 300, 1, NULL, 0},
     {"survey_burst", "survey", "burst", S_SURV_BURST, S_SURV_BURST_HELP, PARAM_INTEGER, 1, 25, 1, NULL, 0},
     {"survey_burst_ms", "survey", "burst_ms", S_SURV_BURST_MS, S_SURV_BURST_MS_HELP, PARAM_INTEGER, 40, 2000, 1, NULL, 0},
     {"survey_dwell_ms", "survey", "dwell_ms", S_SURV_DWELL_MS, S_SURV_DWELL_MS_HELP, PARAM_INTEGER, 200, 10000, 1, NULL, 0},
@@ -885,14 +909,18 @@ static const char *replacement_defaults[] = {
 #if APCAM_HAVE_RAW_THERMAL
     "0", "Raw Thermal (16-bit)",
 #endif
-    "", "false", "false", "false", "eth0", "", "", "", "false",
+    "", "false", "false", "false", "eth0", "", "", "",
+#if APCAM_HAVE_VPN
+    "false", "zerotier", "",
+#endif
+    "false",
 #if !APCAM_HAVE_NETWORK_CONFIG
     "",
 #endif
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
     "",
 #endif
-    "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
+    "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "0", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
 
 
@@ -1868,6 +1896,13 @@ static bool span_equal(const char *start, const char *end, const char *text)
     return strlen(text) == length && memcmp(start, text, length) == 0;
 }
 
+#if APCAM_HAVE_VPN
+#include "APC_VPN.h"
+#if !defined(MT11_WEB_TEST)
+#include "build/vpn-runtime.h"
+#endif
+#endif
+
 static bool ini_get_value(const char *config, const char *wanted_section,
                           const char *wanted_key, char *output, size_t output_size)
 {
@@ -1924,6 +1959,43 @@ static bool ini_get_value(const char *config, const char *wanted_section,
     }
     return false;
 }
+
+#if APCAM_HAVE_VPN
+#ifndef VPN_DIRECTORY
+#define VPN_DIRECTORY APP_DIR "/vpn"
+#endif
+[[maybe_unused]] static bool read_vpn_config(ca_vpn_config &vpn)
+{
+    size_t size=0;
+    char *config=read_file(REPLACEMENT_CONFIG_PATH, MAX_CONFIG, &size);
+    if (!config) return false;
+    bool valid=APC_VPN::parse(config,vpn);
+    free(config);
+    return valid;
+}
+#endif
+
+#if APCAM_HAVE_VPN && !defined(MT11_WEB_TEST)
+static void ensure_vpn_worker()
+{
+    int lock=open(RUNTIME_DIR "/vpn.lock",O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
+    if (lock<0) return;
+    if (flock(lock,LOCK_EX|LOCK_NB)<0) {close(lock);return;}
+    pid_t parent=getpid(),worker=fork();
+    if (!worker) {
+        close(listen_fd); listen_fd=-1;
+        static const APC_VPN::Resources resources={vpn_client,sizeof(vpn_client),vpn_tun,sizeof(vpn_tun),
+            vpn_kernel_device,vpn_kernel_hashes,sizeof(vpn_kernel_hashes)/sizeof(vpn_kernel_hashes[0]),
+            vpn_kernel_offset,vpn_kernel_size};
+        APC_VPN service(RUNTIME_DIR,VPN_DIRECTORY,read_vpn_config,&resources);
+        // Inherit the held lock atomically; polling cannot spawn a second owner.
+        service.supervise(parent,lock);
+        _exit(0);
+    }
+    close(lock);
+    if (worker<0) log_message("Cannot start VPN supervisor: %s",strerror(errno));
+}
+#endif
 
 static struct ini_update *find_update(struct ini_update *updates, size_t count,
                                       const char *section,
@@ -2152,6 +2224,7 @@ static bool valid_text_parameter(const struct parameter *parameter,
         unsigned prefix;
         if (!strcmp(parameter->key, "interface"))
             return length && strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
+        if (!strcmp(parameter->key, "vpn_network_id")) return apcam_vpn_network_id_valid(text);
         if (!length) return true;
         if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
         if (!strcmp(parameter->key, "video1_uri"))
@@ -2339,12 +2412,19 @@ static bool collect_replacement_parameter_updates(
             request, replacement_parameters,
             sizeof(replacement_parameters) / sizeof(replacement_parameters[0]),
             updates, capacity, &count, error, error_size)) return false;
+    const char *vpn_enabled = "false", *vpn_id = "";
     const char *primary = "", *secondary = "", *gateway = "";
     for (size_t i = 0; i < count; i++) {
         if (strcmp(updates[i].section, "network")) continue;
+        if (!strcmp(updates[i].key, "vpn_enabled")) vpn_enabled = updates[i].value;
+        if (!strcmp(updates[i].key, "vpn_network_id")) vpn_id = updates[i].value;
         if (!strcmp(updates[i].key, "primary_address")) primary = updates[i].value;
         if (!strcmp(updates[i].key, "secondary_address")) secondary = updates[i].value;
         if (!strcmp(updates[i].key, "gateway")) gateway = updates[i].value;
+    }
+    if (!strcmp(vpn_enabled, "true") && !*vpn_id) {
+        snprintf(error, error_size, "%s", T(S_H_VPN_NETWORK));
+        return false;
     }
     if (!apcam_network_valid(primary, secondary, gateway)) {
         snprintf(error, error_size, "%s", T(S_E_NETWORK));
@@ -5014,7 +5094,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
 #endif
 #if WEB_HAVE_FIRMWARE_UPLOAD
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
-                      "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
+                      "<input id=firmware type=file accept=" FIRMWARE_ACCEPT " hidden>"
                       "<button id=select-firmware type=button>%s</button>"
                       "<progress id=firmware-progress value=0 max=100 hidden></progress>"
                       "<output id=firmware-status class=upload-status></output></form>"
@@ -5184,7 +5264,7 @@ static char *render_live_page(size_t *page_len)
     if (APCAM_NUM_STREAMS >= 2)
         snprintf(secondary, sizeof(secondary), "<option value=1>%s</option>", T(S_LIVE_SECONDARY));
     webroot.render(page, "live-video.html", {T(S_LIVE_STREAM), T(S_LIVE_MAIN), secondary, T(S_LIVE_STARTING), T(S_LIVE_HELP), T(S_LIVE_PTZ), T(S_LIVE_ENABLE_MANUAL), T(S_LIVE_MANUAL_NOTICE)});
-    webroot.render(page, "live-controls.html", {T(S_LIVE_CENTRE), T(S_LIVE_RATE), T(S_LIVE_ZOOM), APC_TemplateValue("%g", (double)APC_Camera::get_singleton().zoom_control_max()), T(S_LIVE_NO_COMMANDS), T(S_LIVE_ATTITUDE), T(S_LIVE_ATTITUDE_UNAVAILABLE), T(S_LIVE_YAW), T(S_LIVE_ROLL), T(S_LIVE_PITCH), T(S_LIVE_YAW), T(S_LIVE_ROLL_RATE), T(S_LIVE_PITCH_RATE), T(S_LIVE_YAW_RATE), T(S_LIVE_WAITING_GIMBAL), csrf_token});
+    webroot.render(page, "live-controls.html", {T(S_LIVE_CENTRE), T(S_LIVE_RATE), T(S_LIVE_ZOOM), APC_TemplateValue("%g", (double)APC_Camera::get_singleton().zoom_control_max()), T(S_LIVE_NO_COMMANDS), T(S_LIVE_ATTITUDE), T(S_LIVE_ATTITUDE_UNAVAILABLE), T(S_LIVE_YAW), T(S_LIVE_ROLL), T(S_LIVE_PITCH), T(S_LIVE_YAW), T(S_LIVE_ROLL_RATE), T(S_LIVE_PITCH_RATE), T(S_LIVE_YAW_RATE), T(S_LIVE_WAITING_GIMBAL), csrf_token, APCAM_TARGET == APCAM_TARGET_ZT30 ? "1" : "0"});
 #if !APCAM_HAVE_ZOOM
     page.append("<style>.zoom-row:has(#live-zoom){display:none}</style>");
 #endif
@@ -5371,6 +5451,9 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                     "Negative nominal overlap indicates gaps; check actual captured footprints in MAVProxy.</p>");
             }
             if (tab == TAB_NETWORK) {
+#if APCAM_HAVE_VPN
+                page.append("<pre id=vpn-status aria-live=polite>VPN: waiting for status</pre>");
+#endif
                 char capture_message[512];
                 bool failed;
                 bool available = network_capture_status(capture_message, sizeof(capture_message), &failed);
@@ -6120,6 +6203,22 @@ static bool sb_append_js(APC_StringBuffer *sb, const char *text)
     return true;
 }
 
+#if APCAM_HAVE_VPN
+static void send_vpn_status(int fd)
+{
+    const char *fallback="{\"message\":\"VPN service unavailable\",\"running\":false}";
+    size_t size=0;
+    struct stat st{};
+    char *json=nullptr;
+    const std::string path=std::string(RUNTIME_DIR)+"/vpn-status.json";
+    if (stat(path.c_str(),&st)==0 && time(nullptr)-st.st_mtime<=15)
+        json=read_file(path.c_str(),16384,&size);
+    send_response(fd,200,"OK","application/json; charset=utf-8",json?json:fallback,
+                  json?size:strlen(fallback),"Cache-Control: no-store\r\n");
+    free(json);
+}
+#endif
+
 static void send_network_capture_status(int fd)
 {
     char message[512];
@@ -6267,9 +6366,13 @@ static const char *upgrade_script = "upgrade.js";
 static void send_upgrade_script(int fd)
 {
     char bad_name[256];
+#ifdef ZT30_WEB_NATIVE
+    char max_size[32];
+    snprintf(max_size,sizeof(max_size),"%llu",(unsigned long long)apcam_zt30::firmware_limit);
+#endif
     const struct js_string items[] = {
 #ifdef ZT30_WEB_NATIVE
-        {"applicationUpdate", "true"}, {"maxSize", "33554432"}, {"appFailed", T(S_APP_UPDATE_FAILED)},
+        {"applicationUpdate", "true"}, {"maxSize", max_size}, {"appFailed", T(S_APP_UPDATE_FAILED)},
         {"confirmRollback", T(S_APP_ROLLBACK)},
 #endif
         {"mediaRoot", UPGRADE_WRITE_ROOT}, {"reboots", WEB_UPGRADE_REBOOTS_JS},
@@ -7520,7 +7623,7 @@ static void handle_request(int fd, const char *peer)
             send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
                    (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/upgrade-result") == 0 ||
-                    strcmp(request.path, "/network-capture-status") == 0)) {
+                    strcmp(request.path, "/network-capture-status") == 0 || strcmp(request.path, "/vpn-status") == 0)) {
             /* Reboot polling must reach its onload handler when the cookie
              * expires. A Basic challenge can instead block on a browser auth
              * dialog. No status/token is disclosed to this unauthenticated request. */
@@ -7569,6 +7672,10 @@ static void handle_request(int fd, const char *peer)
         } else
 #endif
         send_page(fd, NULL, false);
+#if APCAM_HAVE_VPN
+    } else if (!strcmp(request.method,"GET") && !strcmp(request.path,"/vpn-status")) {
+        send_vpn_status(fd);
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/network-capture-status") == 0) {
         send_network_capture_status(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
@@ -8095,6 +8202,13 @@ int main(int argc, char **argv)
 #endif
     log_message("%s listening on 0.0.0.0:%u", SERVER_NAME, port);
     while (listen_fd >= 0) {
+#if APCAM_HAVE_VPN && !defined(MT11_WEB_TEST)
+        ensure_vpn_worker();
+        struct pollfd incoming={listen_fd,POLLIN,0};
+        int ready=poll(&incoming,1,1000);
+        if (ready==0 || (ready<0 && errno==EINTR)) continue;
+        if (ready<0 || (incoming.revents&(POLLERR|POLLHUP|POLLNVAL))) break;
+#endif
         struct sockaddr_in peer_address;
         socklen_t peer_length = sizeof(peer_address);
         char peer[INET_ADDRSTRLEN] = "unknown";

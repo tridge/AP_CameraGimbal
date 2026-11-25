@@ -30,6 +30,10 @@ typedef int (*ca_thermal_palette_set_fn)(void *opaque, uint8_t palette);
 typedef int (*ca_inverted_set_fn)(void *opaque, bool inverted);
 
 struct ca_backend;
+#ifdef CAMERA_APP_ZT30_DEV
+// Stop both lens and gimbal on the UART before a synchronous photo operation.
+int ca_backend_prepare_photo(struct ca_backend *backend);
+#endif
 struct ca_private_frame;
 typedef void (*ca_private_emit_fn)(void *opaque, const ca_private_frame *frame);
 

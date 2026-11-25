@@ -79,7 +79,7 @@ int main() {
     assert(!std::isfinite(zoom.get(999)));zoom.reset();assert(!std::isfinite(zoom.get(1000)));
 
     static_assert(APCAM_NUM_STREAMS==2 && APCAM_HAVE_THERMAL_VIDEO && APCAM_STREAM1_LENS_MASK==3);
-    static_assert(APCAM_HAVE_PHOTO && !APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && !APCAM_HAVE_OPTICAL_ZOOM && APCAM_HAVE_IMAGE_CONTROLS);
+    static_assert(APCAM_HAVE_PHOTO && APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && APCAM_HAVE_OPTICAL_ZOOM && APCAM_HAVE_IMAGE_CONTROLS);
     for (unsigned i=0;i<9;i++) {
         assert(apcam_feedback[0].matrix[i]==(i==8?-1:i%4==0?1:0));
         assert(apcam_angle_command[0].matrix[i]==(i==8?-1:i%4==0?1:0));
@@ -99,6 +99,7 @@ int main() {
     auto *b=static_cast<ca_backend*>(calloc(1,sizeof(ca_backend)));assert(b);
     b->uart_fd=fds[0];b->datagram_transport=true;b->emit=emit;b->inverted_set=mounting;b->orientation=CA_MOUNT_AUTO;
     assert(send_startup(b)==0 && !std::isfinite(ca_zt30::zoom_feedback().get(monotonic_ms())));
+    {auto v=take(fds[1]);assert(v[1]==8 && v[10]==4 && v[11]==0);}
     {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && p.payload_length==2 && !p.payload[0] && !p.payload[1]);}
     {auto v=take(fds[1]);assert(sdk(v).opcode==1);}
     assert(take(fds[1])[10]==0x15);assert(take(fds[1])[10]==0x17);
@@ -157,7 +158,8 @@ int main() {
     reply(b,fds[1],0x17,&one,1);attitude(b,fds[1]);assert(ca_backend_has_gimbal(b));
     uint8_t changed_mount=2;reply(b,fds[1],0x17,&changed_mount,1);
     assert(!ca_backend_has_gimbal(b));reply(b,fds[1],0x17,&one,1);assert(ca_backend_has_gimbal(b));
-    assert(command(b,0x18)==0);{auto v=take(fds[1]);assert(sdk(v).opcode==0x18);}
+    b->zoom_get=[](void*) { return 2.5f; };
+    assert(command(b,0x18)==0);expect_local(0x18,{2,5});
     const uint8_t raw_zoom[2]={2,5};uint8_t zoom_packet[32];
     size_t zoom_length=ca_siyi_build(zoom_packet,sizeof(zoom_packet),1,991,0x18,raw_zoom,2);
     reply(b,fds[1],0x16,zoom_packet,zoom_length);assert(!std::isfinite(ca_zt30::zoom_feedback().get(monotonic_ms())));
@@ -172,6 +174,32 @@ int main() {
     b->attitude_request_ms=0;ca_backend_periodic(b);
     {auto v=take(fds[1]);assert(sdk(v).opcode==0x0d);}
     {auto v=take(fds[1]);assert(sdk(v).opcode==0x18);}assert(empty(fds[1]));
+
+    // Absolute SDK requests queue the lens motor; only periodic owns its wire.
+    b->zoom_set=[](void*,float value) { return ca_zt30::optical_zoom().request(value,monotonic_ms())?0:-1; };
+    assert(command(b,0x16)==0);expect_local(0x16,{30,0});
+    for(auto invalid : {std::vector<uint8_t>{30,1},{31,0},{180,0}})
+        assert(command(b,0x0f,invalid.data(),invalid.size())<0 && empty(fds[1]));
+    const uint8_t zoom_target[2]={3,5};
+    assert(command(b,0x0f,zoom_target,2)==0);expect_local(0x0f,{1});assert(empty(fds[1]));
+    b->attitude_request_ms=b->zoom_query_ms=monotonic_ms();ca_backend_periodic(b);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[9]==0x6b && v[10]==4 && v[11]==1);}
+    assert(empty(fds[1]));
+    // An unchanged direction must be refreshed to sustain physical motion.
+    ca_zt30::optical_zoom().sent(1,monotonic_ms()-80);
+    b->attitude_request_ms=b->zoom_query_ms=monotonic_ms();ca_backend_periodic(b);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[10]==4 && v[11]==1);}
+    assert(empty(fds[1]));
+    assert(ca_backend_prepare_photo(b)==0);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[10]==4 && v[11]==0);}
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && !p.payload[0] && !p.payload[1]);}
+    assert(!ca_zt30::optical_zoom().active() && empty(fds[1]));
+    // Explicit cancellation also stops a subsequent accepted request.
+    assert(ca_zt30::optical_zoom().request(4,monotonic_ms()));
+    ca_zt30::optical_zoom().sent(1,monotonic_ms());
+    ca_zt30::optical_zoom().cancel();ca_backend_periodic(b);
+    {auto v=take(fds[1]);assert(v.size()==14 && v[1]==8 && v[10]==4 && v[11]==0);}
+    assert(empty(fds[1]));
 
     uint8_t follow=4;assert(command(b,0x0c,&follow,1)==0);{auto v=take(fds[1]);assert(v[10]==0x15 && v[11]==1);}
     // Absolute targets use the declared physical envelope, independent of the
@@ -265,6 +293,41 @@ int main() {
         assert(first_length==15 && wire[pos+1]==8 && wire[pos+10]==6);
         assert(wire[pos+11]==(pos?0:5) && !wire[pos+12]);
     }
+    // A partially written zoom start must arm a stop even when no complete
+    // start was reported. Flush the original frame before sending the zero.
+    short_prefix=0;write_blocked=true;
+    ca_zt30::zoom_feedback().observe(2,0,monotonic_ms());
+    ca_zt30::optical_zoom().request(3,monotonic_ms());
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();
+    ca_backend_periodic(u);
+    assert(ca_zt30::optical_zoom().current()==1 && u->tx_offset==5);
+    // A failed synchronous zoom stop must abort photo capture, retaining the
+    // stop obligation for the main loop after the UART becomes writable.
+    assert(ca_backend_prepare_photo(u)<0 && ca_zt30::optical_zoom().current()==1);
+    write_blocked=false;u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(!ca_zt30::optical_zoom().active() && !u->tx_length);
+    count=read(pipefds[0],wire,sizeof(wire));assert(count==28);
+    for(size_t pos:{size_t(0),size_t(14)}) {
+        assert(wire[pos+1]==8 && wire[pos+10]==4 && wire[pos+11]==(pos?0:1));
+        assert(ca_crc16(wire+pos,12)==(wire[pos+12]|(uint16_t(wire[pos+13])<<8)));
+    }
+    // A partial refresh of an already running motor has the same stop
+    // obligation as a partial start, and cannot silently keep the move alive.
+    assert(ca_zt30::optical_zoom().request(10,monotonic_ms()));
+    ca_zt30::optical_zoom().sent(1,monotonic_ms()-80);
+    short_prefix=0;write_blocked=true;
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(ca_zt30::optical_zoom().current()==1 && u->tx_offset==5);
+    write_blocked=false;
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(!ca_zt30::optical_zoom().active() && !u->tx_length);
+    count=read(pipefds[0],wire,sizeof(wire));assert(count==28);
+    for(size_t pos:{size_t(0),size_t(14)}) {
+        assert(wire[pos+10]==4 && wire[pos+11]==(pos?0:1));
+        assert(ca_crc16(wire+pos,12)==(wire[pos+12]|(uint16_t(wire[pos+13])<<8)));
+    }
+    u->attitude_request_ms=u->zoom_query_ms=monotonic_ms();ca_backend_periodic(u);
+    assert(read(pipefds[0],wire,sizeof(wire))<0 && errno==EAGAIN);
     short_fd=-1;ca_backend_close(u);close(pipefds[0]);
     // Exercise real UART open/flock/reopen; configured upright is still untrusted.
     char device[128];assert(openpty(&master,&slave,device,nullptr,nullptr)==0);close(slave);

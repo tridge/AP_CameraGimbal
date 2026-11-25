@@ -36,11 +36,45 @@ Choose **Survey pattern** before saving:
   or lateral views. Forward/rear distances use the configured AGL percentages.
 - **Fore-only (three pitch angles)** (`3`, `fore_only`): far → middle → near,
   all straight ahead along the flight path. Targets are at 3×, 2× and 1× the
-  forward distance, rounded to common ground rows. The rear distance is unused.
-  At the default 50% AGL, the nominal distances are 150%, 100% and 50% AGL
+  forward distance, rounded to common ground rows (with `SURV_AIM=rows`). The
+  rear distance is unused. At the default 50% AGL, the nominal distances are 150%, 100% and 50% AGL
   (approximately 34°, 45° and 63° down), before row rounding and aircraft motion.
   Successive sweeps revisit each ground row at all three pitch angles, without
   a lateral sweep or a deliberate 180° yaw reversal.
+- **Fore-wide (three yaw angles)** (`4`, `fore_wide`): front-left → front-centre →
+  front-right. Targets are at 1× the forward distance, one lateral spacing left,
+  centred and right, rounded to common ground rows (with `SURV_AIM=rows`). The rear
+  distance is unused.
+- **Port side** (`5`, `port`): front-left → left → rear-left, scanning fore to aft
+  along the left side. Forward and rear distances apply; the side offset is `SURV_SIDE`.
+- **Starboard side** (`6`, `starboard`): front-right → right → rear-right, the
+  mirror image of Port side.
+
+**Side distance** (`SURV_SIDE`, INI `side_pct`) sets how far out the left and
+right views look, as a percentage of AGL, for every pattern with side views. The
+default `0` keeps one lateral spacing (the footprint width less overlap), which
+looks nearly straight down from high altitude. It is fixed at the start of each
+leg. Larger values look further out; patterns that pitch between side views
+(Port, Starboard, Both) may need longer slews and a longer sweep.
+
+Choose **Survey aiming** (`SURV_AIM`, INI `aim`) for any pattern:
+
+- **Fixed ground rows** (`0`, `rows`, default): targets lie on rows fixed at the
+  start of the leg, so successive sweeps revisit the same ground from different views.
+- **Ahead of aircraft** (`1`, `ahead`): each view plans its first frame for after
+  its slew allowance and settling time, and places the target at its forward or rear
+  distance from where the aircraft will be at the middle of the burst. The first
+  frame is held until the planned time even if the gimbal settles sooner; a gimbal
+  slower than the allowance captures late, so the view falls slightly short.
+  A capture interval (IMAGE_START_CAPTURE) longer than the view cadence delays
+  the plan, and a view whose burst no longer fits before its deadline is skipped.
+  Targets are not rounded to rows, so views do not revisit common ground; `row` in
+  capture metadata is the nearest row, for reference only. Each target stays fixed
+  for its burst, and the gimbal holds it while the aircraft moves. At low altitude
+  the left and right views are close abeam and can need more yaw rate than the
+  gimbal has (100 deg/s on the MT11, 60 on the ZR10); those views are captured
+  late, behind the planned point. Flying higher spreads these views wider and
+  avoids this.
 
 Both remains the default for existing configurations. The reduced patterns budget
 only their selected views, giving shorter sweeps and closer ground rows. Saving a
@@ -99,11 +133,13 @@ parameters. The corresponding INI section is `[survey]`.
 
 | MAVLink parameter | INI key | Default | Meaning |
 | --- | --- | --- | --- |
-| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only |
+| SURV_PATTERN | pattern | both | 0 both, 1 left/right, 2 fore/aft, 3 fore-only, 4 fore-wide, 5 port, 6 starboard |
+| SURV_AIM | aim | rows | 0 fixed ground rows, 1 ahead of the aircraft; INI uses names |
 | SURV_LENS | lens | thermal | 0 thermal, 1 wide, 2 zoom; INI uses names |
 | SURV_OVERLAP | overlap | 50 | Requested overlap percent, 0–90 |
 | SURV_FORE | fore_pct | 50 | Forward offset as percent of AGL; nearest offset for fore-only |
 | SURV_AFT | aft_pct | 50 | Rear offset as percent of AGL |
+| SURV_SIDE | side_pct | 0 | Sideways offset of left/right views as percent of AGL, 0–300; 0 uses one lateral spacing |
 | SURV_BURST | burst | 1 | Distinct frames per target, 1–25 |
 | SURV_BURST_MS | burst_ms | 100 | Minimum burst frame spacing in ms |
 | SURV_DWELL_MS | dwell_ms | 1200 | Per-view settling/capture budget after slew allowance |
@@ -116,7 +152,7 @@ parameters. The corresponding INI section is `[survey]`.
 | SURV_MIN_SPEED | min_speed | 5 | Minimum ground speed in m/s |
 | SURV_TURN_DEG | turn_deg | 15 | Course departure that ends the current leg |
 
-Overlap determines lateral spacing from the selected lens footprint. Fore/aft
+Overlap determines lateral spacing from the selected lens footprint. With `SURV_AIM=rows`, fore/aft
 positions are quantised to common ground rows to permit repeat views. Row spacing
 increases when the slew and capture cycle cannot keep up with the requested
 along-track overlap. Thus realised offsets can exceed the requested AGL factors.
@@ -240,12 +276,12 @@ geometry, not a quality or sharpness guarantee.
 make -j8 sitl
 make -C camera_app -j8 test
 make -C web -j8 test
-make camera-definition-test
+make -f tools/dev.mk camera-definition-test
 python3 sitl/test_survey_controls.py
 python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 25 --duration 110 --output /tmp/survey25
 python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 18 --duration 100 --terrain-dropout --output /tmp/survey18
 python3 tests/test_survey_plane.py --arduplane /path/to/ardupilot/build/sitl/bin/arduplane --output /tmp/survey-plane
-make -j8
+make -j8 mt11
 ```
 
 The Plane test requires a rebuilt ArduPlane SITL binary, selected with
@@ -285,7 +321,7 @@ flight before tuning burst size, overlap and settle thresholds.
 The installable test image is built with:
 
 ```
-make -j8 mt11_package MT11_PACKAGE_OUT=build/MT11_FW_ArduPilot_survey_test.bin
+make -j8 mt11 MT11_PACKAGE_OUT=build/MT11_FW_ArduPilot_survey_test.bin
 ```
 
 This is a working-tree test build, not a published release. The matching

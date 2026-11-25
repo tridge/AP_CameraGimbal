@@ -370,6 +370,11 @@ def test_login_and_languages(csrf):
                                  headers={"Accept": "text/html"})
     assert status == 401 and "WWW-Authenticate" in dict(headers)
 
+    # Polling with an expired session must let the UI show its login page,
+    # without a browser-native Basic authentication prompt.
+    status, _, headers = raw_request("GET", "/vpn-status", {"Cookie": "session=expired"})
+    assert status == 401 and "WWW-Authenticate" not in dict(headers)
+
     status, body, headers = raw_request("GET", "/login")
     assert status == 200 and b"<html lang=en>" in body
     assert b"name=token value=" in body and b"id=lang-login" in body
@@ -716,10 +721,10 @@ try:
         assert b'<option value="' + zone + b'">' + zone + b'</option>' in body
     replacement_parameters = {
         "survey_pattern": "both", "survey_lens": "thermal", "survey_overlap": "50", "survey_fore_pct": "50",
-        "survey_aft_pct": "50", "survey_burst": "1", "survey_burst_ms": "100",
+        "survey_aft_pct": "50", "survey_side_pct": "0", "survey_burst": "1", "survey_burst_ms": "100",
         "survey_dwell_ms": "1200", "survey_settle_ms": "200", "survey_error_cd": "100",
         "survey_rate_cd": "100", "survey_terrain_ms": "3000", "survey_terrain_m": "500",
-        "survey_terrain_tol": "25", "survey_min_speed": "5", "survey_turn_deg": "15",
+        "survey_terrain_tol": "25", "survey_min_speed": "5", "survey_turn_deg": "15", "survey_aim": "rows",
         "timezone": "Asia/Kathmandu",
         "photo_scope": "all",
         "orientation": "auto",
@@ -766,6 +771,9 @@ try:
         "proxy_video3_name": "Raw Thermal",
         "proxy_video2_name": "video2",
         "proxy_publish_password": "",
+        "network_vpn_enabled": "false",
+        "network_vpn_provider": "zerotier",
+        "network_vpn_network_id": "",
         "network_capture": "false",
         "network_interface": "eth0",
         "network_primary_address": "",

@@ -17,7 +17,7 @@ if [[ -f "$HOME/venv-ardupilot/bin/activate" ]]; then
     source "$HOME/venv-ardupilot/bin/activate"
 fi
 
-make -C "$repo_root" sitl
+make -C "$repo_root" sitl CAMERA=mt11
 (
     cd "$ardupilot"
     ./waf configure --board sitl

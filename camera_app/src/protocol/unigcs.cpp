@@ -756,8 +756,10 @@ void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual,ca_mavlink_se
         s->zoom_tick=now_ms();
         // MT11/A8 have absolute zoom only. Match the public SDK's 0.1x steps
         // at 20 Hz; never accumulate catch-up steps after a stalled loop.
-        const float target=std::max(1.0f,std::min(float(APCAM_ZOOM_CONTROL_MAX),
-            ca_media_zoom(s->media)+0.1f*s->zoom_direction));
+        const float observed=ca_media_zoom(s->media);
+        // Unknown feedback must not clamp NaN to a full-telephoto request.
+        const float target=isfinite(observed) ? std::max(1.0f,std::min(float(APCAM_ZOOM_CONTROL_MAX),
+            observed+0.1f*s->zoom_direction)) : NAN;
         const int result=APCAM_ZOOM_NATIVE_RATE
             ? ca_backend_set_zoom_rate(s->backend,s->zoom_direction)
             : ca_backend_set_zoom(s->backend,target);

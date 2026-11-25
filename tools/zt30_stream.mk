@@ -8,7 +8,7 @@ ZT30_STREAM_FLAGS := -std=gnu++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-m
 .PHONY: zt30_stream_probe
 zt30_stream_probe: build/zt30/encoder-sdk.so
 	$(MAKE) -C camera_app build/xop_rtsp_connection.cpp build/xop_rtp_connection.cpp
-	$(MAKE) build/zt30/stream-probe
+	$(MAKE) -f tools/dev.mk build/zt30/stream-probe
 camera_app/build/xop/.prepared camera_app/build/xop_rtsp_connection.cpp camera_app/build/xop_rtp_connection.cpp:
 	$(MAKE) -C camera_app build/xop_rtsp_connection.cpp build/xop_rtp_connection.cpp
 build/zt30/stream-probe: $(ZT30_STREAM_OBJECTS)
@@ -39,7 +39,7 @@ ZT30_H264_OBJECTS := $(patsubst %.cpp,build/zt30/h264-web/%.o,$(ZT30_STREAM_SRC)
 .PHONY: zt30_h264_web_probe
 zt30_h264_web_probe: build/zt30/encoder-sdk.so
 	$(MAKE) -C camera_app build/minimp4.h build/xop_rtsp_connection.cpp build/xop_rtp_connection.cpp
-	$(MAKE) build/zt30/h264-web-probe
+	$(MAKE) -f tools/dev.mk build/zt30/h264-web-probe
 build/zt30/h264-web-probe: $(ZT30_H264_OBJECTS)
 	$(ZT30_CROSS_COMPILE)g++ $^ -lpthread -ldl -lm -o $@
 	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
@@ -53,7 +53,7 @@ ZT30_NATIVE_OBJECTS := $(patsubst %.cpp,build/zt30/native-media/%.o,$(ZT30_STREA
 .PHONY: zt30_native_media_probe
 zt30_native_media_probe: build/zt30/encoder-sdk.so
 	$(MAKE) -C camera_app build/minimp4.h build/xop_rtsp_connection.cpp build/xop_rtp_connection.cpp
-	$(MAKE) build/zt30/native-media-probe
+	$(MAKE) -f tools/dev.mk build/zt30/native-media-probe
 build/zt30/native-media-probe: $(ZT30_NATIVE_OBJECTS)
 	$(ZT30_CROSS_COMPILE)g++ $^ -lpthread -ldl -lm -o $@
 	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf

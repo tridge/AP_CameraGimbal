@@ -18,7 +18,7 @@ fi
 
 make -C "$repo_root/camera_app" tests/test_mavlink
 "$repo_root/camera_app/tests/test_mavlink"
-make -C "$repo_root" sitl
+make -C "$repo_root" sitl CAMERA=mt11
 (
     cd "$ardupilot"
     ./waf configure --board sitl

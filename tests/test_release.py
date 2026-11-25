@@ -59,7 +59,7 @@ if Path('fail').exists():
 
     def test_make_selects_highest_reachable_version(self):
         for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk',
-                     'tools/build.mk', 'tools/zt30_stream.mk'):
+                     'tools/build.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)
@@ -89,7 +89,7 @@ if Path('fail').exists():
         check('v1.1')
 
     def test_make_default_release_targets(self):
-        for name in ('Makefile', 'tools/build.mk', 'tools/zt30_stream.mk'):
+        for name in ('Makefile', 'tools/build.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)
@@ -105,7 +105,7 @@ if Path('fail').exists():
             'SIYI_A8': 'SIYI_4K_MINI_UpgradeSD.bin',
             'SIYI_MT11': f'MT11_FW_ArduPilot_v1.0_{self.revision[:6]}.bin',
             'SIYI_ZR10': 'ZR10_UpgradeSD.bin',
-            'SIYI_ZT30': f'ZT30_AP_v1.0_{self.revision[:6]}.apbundle',
+            'SIYI_ZT30': 'SIYI_ZT30_UpgradeSD.bin',
             'XFRobot_Z1-Mini': f'Z1Mini_AP_native_v1.0_{self.revision[:6]}.gcu',
         }
         for name, firmware in expected.items():

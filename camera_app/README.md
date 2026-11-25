@@ -1136,9 +1136,8 @@ leave the new init script without its companion.
 
 Use the web UI action buttons to switch owners. The switch is deliberately
 exclusive because the two applications cannot share UDP/TCP 37260, UART3 or the
-raw-thermal TCP port. The web supervisor stops the external `thermal_socket`
-for the ArduPilot camera app and starts it for the vendor app. A failed ArduPilot
-camera app start is rolled back to the vendor application and helper. Successful switches
+raw-thermal TCP port. A failed ArduPilot
+camera app start is rolled back to the vendor application. Successful switches
 are written atomically to `/app/app_selection.txt`, so reboot starts the last
 selected app. Missing or invalid selection defaults to vendor, while an
 unavailable selected executable causes `app_selection.sh` to use and remember
@@ -1146,17 +1145,12 @@ the available alternative. Once the ArduPilot camera app owns the hardware, the 
 UI's Restart action performs a graceful media teardown and starts the newly
 installed binary.
 
-The external `thermal_socket` is only a transitional compatibility service for
-the vendor application. It is not needed by `camera-app` and should be removed
-from the startup and firmware package once migration is complete and vendor-app
-fallback is retired.
-
 ## Build an MT11 SD-card update
 
 From the repository root, build an update image with:
 
 ```sh
-make mt11_package
+make mt11
 ```
 
 The default output is
@@ -1165,10 +1159,9 @@ The default output is
 six characters of the current commit hash. For example, latest reachable tag `v1.0` with
 `HEAD` at `49f5727...` produces `build/MT11_FW_ArduPilot_v1.0_49f572.bin`.
 The builder validates the reviewed kernel and rootfs inputs included under
-`packaging/mt11/base`, builds both static applications and the vendor-mode
-raw-thermal helper, and creates an `/app` overlay containing:
+`packaging/mt11/base`, builds both static applications, and creates an `/app` overlay containing:
 
-- `/app/bin/camera-app`, `/app/bin/mt11-web`, `/app/bin/thermal_socket`,
+- `/app/bin/camera-app`, `/app/bin/mt11-web`,
   `/app/bin/mt11-timesync.sh`, and static `rsync`, `strace`, `ltrace` and
   `tcpdump` support utilities;
 - static `/app/bin/dropbear` and `/app/bin/dropbearkey`, plus the
@@ -1184,7 +1177,7 @@ Both the web and root accounts default to `ardupilot`, so no password arguments
 are required. For camera-specific credentials, use:
 
 ```sh
-make mt11_package \
+make mt11 \
     MT11_WEB_PASSWORD='a-camera-specific-password' \
     MT11_ROOT_PASSWORD='a-camera-specific-root-password'
 ```
@@ -1246,7 +1239,7 @@ the exported files; `camera select` alone does not change the FTP module's targe
 When connecting through an autopilot, forwarding must be enabled on its camera
 link (`MAVn_OPTIONS` must not have the `NO_FORWARD` bit set).
 
-`make camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
+`make -f tools/dev.mk camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
 for inspection or loading into a GCS. `make release` also generates these files.
 The exporter and firmware use the same C metadata in
 `src/protocol/camera_definition.cpp`, with resolution/codec options from the
@@ -1329,7 +1322,7 @@ custom` opens the settings dialog; the CLI commands exercise the same controls.
 `camera definition build/camera-definitions/mt11.xml` can load a generated local
 copy instead of downloading it.
 
-Run `make camera-definition-test` for XML capability and FTP protocol checks.
+Run `make -f tools/dev.mk camera-definition-test` for XML capability and FTP protocol checks.
 After building the four SITL targets, `python3 sitl/test_camera_definition.py`
 checks downloads, get/list/set, live state and persistent settings using both
 pymavlink and the installed MAVProxy CLI. It uses isolated ports and runtime
@@ -1374,7 +1367,7 @@ SITL uses the same C geometry as hardware and caches its sparse overlay pixels.
 Separate RGB/thermal recording encoders run only while recording, so stream
 overlays can be selected independently without changing the live image.
 The hardware/SITL raster comparison is `tests/test_overlay.py`; live encoded
-video checks are included in `make sitl-image-controls-test`.
+video checks are included in `make -f tools/dev.mk sitl-image-controls-test`.
 
 ### MAVLink control BIN logging
 

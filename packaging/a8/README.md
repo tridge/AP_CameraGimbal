@@ -1,6 +1,6 @@
 # SIYI A8 mini packaging
 
-`make a8_package` builds an SD-card update for the SIYI A8 mini that
+`make a8` builds an SD-card update for the SIYI A8 mini that
 replaces the vendor application partition with `camera-app`.
 
 For a package ready for end users, use `make release RELEASE_TARGETS=A8`.
@@ -82,7 +82,7 @@ Existing toolchains can still be selected with `A8_CROSS_COMPILE` or
 The builder reads the checked-in files under `packaging/a8/platform`, checks
 their SHA-256 values and constructs a new customer filesystem. It does not
 read or download a vendor firmware image. `A8_PLATFORM_DIR` overrides the
-platform directory. `make a8_package` produces
+platform directory. `make a8` produces
 `build/A8_FW_ArduPilot_<tag>_<hash>.bin` with a checksum; `make release` uses
 the bootloader's filename directly.
 

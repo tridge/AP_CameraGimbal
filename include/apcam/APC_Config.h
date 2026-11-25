@@ -173,7 +173,12 @@ private:
 
     inline static constexpr ca_config_option survey_patterns[] = {
         {"both", CA_SURVEY_BOTH}, {"left_right", CA_SURVEY_LEFT_RIGHT}, {"fore_aft", CA_SURVEY_FORE_AFT},
-        {"fore_only", CA_SURVEY_FORE_ONLY},
+        {"fore_only", CA_SURVEY_FORE_ONLY}, {"fore_wide", CA_SURVEY_FORE_WIDE},
+        {"port", CA_SURVEY_PORT}, {"starboard", CA_SURVEY_STARBOARD},
+    };
+
+    inline static constexpr ca_config_option survey_aims[] = {
+        {"rows", CA_SURVEY_AIM_ROWS}, {"ahead", CA_SURVEY_AIM_AHEAD},
     };
 
     inline static constexpr ca_config_option survey_lenses[] = {
@@ -186,6 +191,8 @@ private:
 #endif
     };
 
+    inline static constexpr ca_config_option vpn_options[] = {{"zerotier", CA_VPN_ZEROTIER}};
+
     inline static constexpr Field _fields[] = {
         {"video", "telemetry", Kind::Enum, offsetof(ca_config, video_telemetry_format),
          sizeof(ca_video_telemetry_format), telemetry_options,
@@ -195,11 +202,14 @@ private:
 #endif
         {"survey", "pattern", Kind::Enum, offsetof(ca_config, survey.pattern), sizeof(unsigned),
          survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0]), 0, 0, "SURV_PATTERN"},
+        {"survey", "aim", Kind::Enum, offsetof(ca_config, survey.aim), sizeof(unsigned),
+         survey_aims, sizeof(survey_aims)/sizeof(survey_aims[0]), 0, 0, "SURV_AIM"},
         {"survey", "lens", Kind::Enum, offsetof(ca_config, survey.lens), sizeof(unsigned),
          survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0]), 0, 0, "SURV_LENS"},
         {"survey", "overlap", Kind::Uint, offsetof(ca_config, survey.overlap), sizeof(unsigned), NULL, 0, 0, 90, "SURV_OVERLAP"},
         {"survey", "fore_pct", Kind::Uint, offsetof(ca_config, survey.fore_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_FORE"},
         {"survey", "aft_pct", Kind::Uint, offsetof(ca_config, survey.aft_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_AFT"},
+        {"survey", "side_pct", Kind::Uint, offsetof(ca_config, survey.side_pct), sizeof(unsigned), NULL, 0, 0, 300, "SURV_SIDE"},
         {"survey", "burst", Kind::Uint, offsetof(ca_config, survey.burst), sizeof(unsigned), NULL, 0, 1, 25, "SURV_BURST"},
         {"survey", "burst_ms", Kind::Uint, offsetof(ca_config, survey.burst_ms), sizeof(unsigned), NULL, 0, 40, 2000, "SURV_BURST_MS"},
         {"survey", "dwell_ms", Kind::Uint, offsetof(ca_config, survey.dwell_ms), sizeof(unsigned), NULL, 0, 200, 10000, "SURV_DWELL_MS"},
@@ -385,6 +395,14 @@ private:
         {"network", "gateway", Kind::String,
          offsetof(struct ca_config, network.gateway),
          sizeof(((struct ca_config *)0)->network.gateway), NULL, 0U, 0, 15, NULL},
+#if APCAM_HAVE_VPN
+        {"network", "vpn_enabled", Kind::Bool, offsetof(ca_config, vpn.enabled),
+         sizeof(((ca_config *)0)->vpn.enabled), NULL, 0U, 0, 1, NULL},
+        {"network", "vpn_provider", Kind::Enum, offsetof(ca_config, vpn.provider),
+         sizeof(((ca_config *)0)->vpn.provider), vpn_options, 1U, 0, 0, NULL},
+        {"network", "vpn_network_id", Kind::String, offsetof(ca_config, vpn.network_id),
+         sizeof(((ca_config *)0)->vpn.network_id), NULL, 0U, 0, 16, NULL},
+#endif
         {"network", "capture", Kind::Bool,
          offsetof(struct ca_config, network_capture),
          sizeof(((struct ca_config *)0)->network_capture), NULL, 0U, 0, 1, NULL},
@@ -497,6 +515,7 @@ private:
                 unsigned prefix;
                 if (!apcam_ipv4_prefix(value, &address, &prefix)) return -1;
             }
+            if (!strcmp(field->key, "vpn_network_id") && !apcam_vpn_network_id_valid(value)) return -1;
             memcpy(destination, value, length + 1U);
             return 0;
         }

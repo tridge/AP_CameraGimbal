@@ -5,6 +5,7 @@
  */
 #include "owned_media.h"
 #include "zoom_feedback.h"
+#include "zoom_control.h"
 #include "thermal_file_test.h"
 #include "thermal_live.h"
 #include "photo_owner.h"
@@ -91,12 +92,15 @@ static bool vendor_stopped() {
 struct Context {
     NativeSdk sdk; // context destroyed only after MediaBackend joins/unwinds
     Api &api=sdk.api;EncoderApi &encoder=sdk.encoder;
+    DigitalZoom digital_zoom{api};
     ImageControls image{sdk.image};
     Overlay overlay{sdk};
     std::unique_ptr<VideoOutput> main_output,sub_output,record_output;
     Recording recordings;
     std::string record_root;
     std::atomic<unsigned> thermal_hfov_cd{0};
+    std::atomic<float> zoom_command{NAN};
+    uint64_t next_zoom_log_ms=0;
     bool external_main=false,external_sub=false;
     std::mutex route_lock;bool thermal_primary=false,waiting_key[2]{true,true};
     PacketMemory memory{pointer_slot,copy_packet};
@@ -360,9 +364,40 @@ public:
     }
     // SIYI/UniGCS use background module zoom even when wide is selected;
     // MAVLink selected-source geometry uses lens_zoom() and hfov().
-    float zoom() const override { return zoom_feedback().get(monotonic_ns()/1000000); }
+    float zoom() const override { return zoom_feedback().combined(monotonic_ns()/1000000); }
+    int set_zoom(float value) override { return set_lens_zoom(CA_MEDIA_LENS_ZOOM,value); }
+    int set_lens_zoom(enum ca_media_lens selected,float value) override {
+        if(selected==CA_MEDIA_LENS_WIDE && value==1)return 0;
+        if(selected!=CA_MEDIA_LENS_ZOOM || !std::isfinite(value) || value<1 || value>APCAM_ZOOM_MAX) { errno=EINVAL;return -1; }
+        const uint64_t now_ms=monotonic_ns()/1000000;
+        if(!optical_zoom().request(value,now_ms)) { errno=EBUSY;return -1; }
+        unsigned ports=2U|8U|(context->photo_opened?1U:0U)|
+            (context->external_main?4U:0U)|(context->external_sub?16U:0U);
+        // Always use the full sensor: the public ZT30 range is optical only.
+        if(context->digital_zoom.set(1,ports)) {
+            optical_zoom().cancel();
+            ca_log("ZT30 digital zoom crop failed errno=%d",errno);
+            if(errno==EOWNERDEAD)_exit(28);
+            return -1;
+        }
+        zoom_feedback().digital(context->digital_zoom.get());
+        context->zoom_command=value;
+        if(now_ms>=context->next_zoom_log_ms) {
+            context->next_zoom_log_ms=now_ms+1000;
+            ca_log("ZT30 optical zoom target %.1fx",value);
+        }
+        return 0;
+    }
     float lens_zoom(enum ca_media_lens value) const override {
         return value==CA_MEDIA_LENS_WIDE ? 1 : value==CA_MEDIA_LENS_ZOOM ? zoom() : NAN;
+    }
+    float lens_zoom_command(enum ca_media_lens value) const override {
+        float command=context->zoom_command.load();
+        return value==CA_MEDIA_LENS_ZOOM && std::isfinite(command) ? command : lens_zoom(value);
+    }
+    void cancel_zoom() override {
+        optical_zoom().cancel();
+        context->zoom_command=zoom();
     }
     float hfov(bool thermal) const override {
         return thermal ? context->thermal_hfov_cd.load()*.01f : zoom_feedback().hfov(lens()==CA_MEDIA_LENS_WIDE,monotonic_ns()/1000000);
@@ -524,7 +559,8 @@ std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_conf
     const char *sdk=std::getenv("CAMERA_APP_ZT30_SDK");
     if(!sdk || !*sdk)sdk="/customer/camera-app/encoder-sdk.so";
     // Partial dlopen/init can retain SDK callbacks: terminate without dlclose.
-    if(!c->sdk.open(sdk) || !c->sdk.resolve_encoder() || !c->sdk.resolve_h264_getter() || !c->sdk.resolve_clock() || !c->sdk.resolve_image() || !c->sdk.resolve_rgn())_exit(4);
+    if(!c->sdk.open(sdk) || !c->sdk.resolve_encoder() || !c->sdk.resolve_h264_getter() || !c->sdk.resolve_clock() || !c->sdk.resolve_image() || !c->sdk.resolve_rgn() || !c->sdk.resolve_zoom())_exit(4);
+    zoom_feedback().digital(1);
     auto backend=std::unique_ptr<Backend>(new(std::nothrow) Backend(std::move(c)));
     if(!backend)_exit(20);
     if(backend->start(source)) {

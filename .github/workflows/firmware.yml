@@ -42,21 +42,21 @@ jobs:
       - name: Build all camera release packages
         run: make -j8 release
       - name: Build and test ZT30 bring-up tools
-        run: make zt30_abi_probe zt30_vendor_exec zt30_uart_trace zt30_control_probe zt30_owned_sys_probe zt30_kmsg_capture zt30_ioctl_trace zt30_usb_trace zt30_usb_header_trace zt30_usb_setup_trace zt30_usb_iso_private_probe zt30_thermal_pixels_private_probe zt30_buffer_abi_private_probe zt30_input_buffer_private_probe zt30_input_metadata_private_probe build/zt30/input-metadata-probe zt30_usb_iso_probe zt30_usb_memory_probe zt30_usb_control_probe zt30_self_read_probe zt30_ioctl_payload_trace zt30_payload_probe zt30_abi_probe-test zt30_ram_watchdog-test zt30_uart_trace-test zt30_control_probe-test zt30_focus-test zt30_owned_sys_probe-test zt30_kmsg_capture-test zt30_ioctl_trace-test zt30_usb_trace-test zt30_usb_header_trace-test zt30_usb_setup_trace-test zt30_usb_iso-test zt30_thermal_pixels-test zt30_buffer_abi-test zt30_input_buffer-test zt30_input_metadata-test zt30_usb_iso_probe-test zt30_usb_memory-test zt30_usb_control-test zt30_self_read_probe-test zt30_payload_probe-test zt30_ioctl_payload_trace-test zt30_media_abi-test zt30_rgb_owner-test zt30_rgb_sdk-test zt30_encoder_owner-test zt30_pts_clock-test zt30_vui_sdk-test zt30_media_backend-test zt30_ram_frontend-test
+        run: make -f tools/dev.mk zt30_abi_probe zt30_vendor_exec zt30_uart_trace zt30_control_probe zt30_owned_sys_probe zt30_kmsg_capture zt30_ioctl_trace zt30_usb_trace zt30_usb_header_trace zt30_usb_setup_trace zt30_usb_iso_private_probe zt30_thermal_pixels_private_probe zt30_buffer_abi_private_probe zt30_input_buffer_private_probe zt30_input_metadata_private_probe build/zt30/input-metadata-probe zt30_usb_iso_probe zt30_usb_memory_probe zt30_usb_control_probe zt30_self_read_probe zt30_ioctl_payload_trace zt30_payload_probe zt30_abi_probe-test zt30_ram_watchdog-test zt30_uart_trace-test zt30_control_probe-test zt30_focus-test zt30_owned_sys_probe-test zt30_kmsg_capture-test zt30_ioctl_trace-test zt30_usb_trace-test zt30_usb_header_trace-test zt30_usb_setup_trace-test zt30_usb_iso-test zt30_thermal_pixels-test zt30_buffer_abi-test zt30_input_buffer-test zt30_input_metadata-test zt30_usb_iso_probe-test zt30_usb_memory-test zt30_usb_control-test zt30_self_read_probe-test zt30_payload_probe-test zt30_ioctl_payload_trace-test zt30_media_abi-test zt30_rgb_owner-test zt30_rgb_sdk-test zt30_encoder_owner-test zt30_pts_clock-test zt30_vui_sdk-test zt30_media_backend-test zt30_ram_frontend-test
       - name: Test native ZT30 controls, media and packaging
-        run: make zt30_unigcs_encoder-test zt30_image-test zt30_recording-test zt30_overlay-test zt30_thermal_controls-test zt30_native_control-test zt30_camera_information-test zt30_jpeg_owner-test zt30_input_mapping-test zt30_thermal_start_budget-test zt30_dev_package-test
+        run: make -f tools/dev.mk zt30_unigcs_encoder-test zt30_image-test zt30_recording-test zt30_overlay-test zt30_thermal_controls-test zt30_native_control-test zt30-zoom-test zt30_camera_information-test zt30_jpeg_owner-test zt30_input_mapping-test zt30_thermal_start_budget-test zt30_dev_package-test
       - name: Test native ZT30 web parameters
         run: make -C web zt30-parameters-test zt30-process-test
       - name: Test native ZT30 thermal metadata
         run: make -C camera_app zt30-thermal-metadata-test
       - name: Build and test ZT30 application slots and bundle failures
-        run: make build/zt30/zt30-slot zt30_slots-test zt30_bundle-test zt30_update-test
+        run: make -f tools/dev.mk build/zt30/zt30-slot zt30_slots-test zt30_bundle-test zt30_update-test zt30-firmware-test
       - name: Compile and link both native ZT30 applications
-        run: make zt30_ram_camera_build zt30_dev_camera_build
+        run: make -f tools/dev.mk zt30_ram_camera_build zt30_dev_camera_build
       - name: Check packaging and UUID helpers
-        run: make release-test platform-test camera-definition-test targets-test survey-runtime-test
+        run: make -f tools/dev.mk release-test platform-test camera-definition-test targets-test survey-runtime-test
       - name: Test native Z1-Mini overlay failures and request ordering
-        run: make z1mini-overlay-test
+        run: make -f tools/dev.mk z1mini-overlay-test
       - name: Test Z1-Mini web firmware updates
         run: python3 web/tests/test_z1mini_upgrade.py
       - uses: actions/upload-artifact@v4
@@ -77,7 +77,8 @@ jobs:
 
   exposure:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Cold package installation alone has taken 20 minutes on hosted runners.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,9 +96,9 @@ jobs:
       - name: Fetch pinned build sources
         run: make dependencies
       - name: Build all five simulators concurrently
-        run: make -j8 sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl
+        run: make -j8 sitl CAMERA=all
       - name: Test ZT30 module zoom, lens scenes, FOV and protocol contracts
-        run: make zt30_sitl-test
+        run: make sitl-test CAMERA=zt30
       - name: Test RTSP buffer ownership and TCP socket options
         run: make -C camera_app xop-test
       - name: Test both telemetry formats on every simulator
@@ -105,7 +106,7 @@ jobs:
           make -C camera_app tests/test_misb
           camera_app/tests/test_misb
           make -C camera_app rtsp-demand-test
-          make sitl-misb-telemetry-test
+          make -f tools/dev.mk sitl-misb-telemetry-test
       - name: Test C++ web buffer ownership and escaping
         run: |
           make -C web tests/test_string_buffer
@@ -125,7 +126,7 @@ jobs:
         run: |
           make -C camera_app tests/test_gimbal_rate
           camera_app/tests/test_gimbal_rate
-          make sitl-rate-default-test
+          make -f tools/dev.mk sitl-rate-default-test
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
       - name: Test Raspberry Pi image controls, CADDX gimbal and JPEG stills, and build against libcamera 0.2
@@ -160,10 +161,10 @@ jobs:
       - name: Test exposure BIN logs and live controls on all four simulated cameras
         run: |
           python3 tests/test_overlay.py
-          make sitl-image-controls-test
+          make -f tools/dev.mk sitl-image-controls-test
       - name: Test quantised MT11 optical zoom and continuous rate control
         run: |
-          make camera-definitions
+          python3 tools/build_camera_definitions.py
           python3 sitl/test_camera_definition.py --targets mt11 --zoom-only
       - name: Test UniGCS discovery and private SIYI camera control
         run: |
@@ -180,6 +181,7 @@ jobs:
       - name: Test network capture and A8 web download
         run: |
           make -C camera_app network-capture-test
+          make -f tools/dev.mk vpn-test
           make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
           sudo unshare -n "$(command -v python3)" sitl/test_network_capture.py
       - name: Test bounded video fixture catch-up

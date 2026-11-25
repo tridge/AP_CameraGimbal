@@ -55,6 +55,7 @@ void ca_config_defaults(struct ca_config *config)
     config->survey.overlap = 50;
     config->survey.fore_pct = 50;
     config->survey.aft_pct = 50;
+    config->survey.side_pct = 0;
     config->survey.burst = 1;
     config->survey.burst_ms = 100;
     config->survey.dwell_ms = 1200;
@@ -66,6 +67,7 @@ void ca_config_defaults(struct ca_config *config)
     config->survey.terrain_tol = 25;
     config->survey.min_speed = 5;
     config->survey.turn_deg = 15;
+    config->survey.aim = CA_SURVEY_AIM_ROWS;
     config->raw_stream_fps = 5;
     config->raw_record_fps = 5;
     config->main_resolution = (enum ca_video_resolution)APCAM_DEFAULT_MAIN_RESOLUTION;
@@ -271,6 +273,11 @@ static int read_config(struct ca_config *config, FILE *file,
         }
     }
 #endif
+    if (parsed.vpn.enabled && !parsed.vpn.network_id[0]) {
+        snprintf(error, error_size, "VPN needs a 16-digit ZeroTier network ID");
+        errno = EINVAL;
+        goto fail;
+    }
     if (!apcam_network_valid(parsed.network.primary_address, parsed.network.secondary_address, parsed.network.gateway)) {
         snprintf(error, error_size, "Network needs distinct host addresses and a gateway reachable through either configured subnet");
         errno = EINVAL;

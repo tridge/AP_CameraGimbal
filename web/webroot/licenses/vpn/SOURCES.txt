@@ -1,0 +1,26 @@
+Optional VPN components distributed with the MT11 and ZT30 web payloads
+
+ZeroTier One 1.16.2 (client only; controller and SSO disabled), MPL-2.0:
+https://codeload.github.com/zerotier/ZeroTierOne/tar.gz/refs/tags/1.16.2
+SHA256 2c607f573c6e38815433af289d364a689a203b18b51125f06c4472014d0657f0
+See LICENSE-MPL.txt, LICENSE-ZeroTier.txt and the bundled third-party notices.
+The bundled http-parser and nlohmann JSON code use the MIT license; libnatpmp
+and miniupnpc use their included BSD notices.
+
+External TUN/TAP modules, GPL-2.0:
+ZT30: upstream Linux 4.9.227
+https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.9.227.tar.xz
+SHA256 38c485b411a14e825f8a66a5c2e64f1480397325a5f692b4929f68d228070c5f
+MT11: upstream Linux 4.19.90
+https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.19.90.tar.xz
+SHA256 29d86c0a6daf169ec0b4b42a12f8d55dc894c52bd901f876f52a05906a5cf7fd
+See LICENSE-GPL-2.0.txt.
+
+Corresponding local configurations, compatibility patches, ABI assertions,
+export allowlists, artifact hashes and reproducible build instructions for
+these exact pinned binaries are in the AP_CameraGimbal source tree:
+https://github.com/ArduPilot/AP_CameraGimbal/tree/92a446143f8dd8731b557c120c6d3f494931d0d5/packaging/vpn
+https://github.com/ArduPilot/AP_CameraGimbal/blob/92a446143f8dd8731b557c120c6d3f494931d0d5/tools/build_zerotier.sh
+
+The web executable embeds the pinned tools. Runtime extraction is private and
+does not remove these notices from the installed webroot/licenses/vpn folder.

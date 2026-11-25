@@ -27,7 +27,10 @@ inline unsigned ca_survey_positions(unsigned pattern)
     case CA_SURVEY_BOTH: return 9;
     case CA_SURVEY_LEFT_RIGHT:
     case CA_SURVEY_FORE_AFT: return 2;
-    case CA_SURVEY_FORE_ONLY: return 3;
+    case CA_SURVEY_FORE_ONLY:
+    case CA_SURVEY_FORE_WIDE:
+    case CA_SURVEY_PORT:
+    case CA_SURVEY_STARBOARD: return 3;
     default: return 0;
     }
 }
@@ -36,6 +39,7 @@ inline unsigned ca_survey_positions(unsigned pattern)
 struct ca_survey_grid {
     ca_survey_pose origin;
     double course, spacing, cross_spacing, speed, height, cycle_s;
+    double side; // sideways offset of left/right columns in metres
     double budget[9];
     unsigned slots[9], slot_count; // view IDs: original grid 0..8, forward pitch views 9..11
     int fore_rows, aft_rows;
@@ -45,6 +49,8 @@ struct ca_survey_grid {
               float aspect, float rate_deg_s, uint64_t now);
     void target(int64_t cycle, unsigned slot, int32_t &lat, int32_t &lon,
                 int64_t &row, int &column) const;
+    void target_ahead(const ca_survey_pose &, double lead_m, double fore_m, double aft_m,
+                      unsigned slot, int32_t &lat, int32_t &lon, int64_t &row, int &column) const;
     double along(const ca_survey_pose &) const;
     double cross_track(const ca_survey_pose &) const;
     double alignment_error(const ca_survey_pose &) const;
