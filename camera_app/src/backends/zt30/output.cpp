@@ -51,7 +51,9 @@ void VideoOutput::consume() {
             for(unsigned i=1;i<frame.packets;i++)if(frame.pts[i]!=frame.pts[0])valid=false;
             if(sample.skipped && !(skipped_samples++%100))ca_log("ZT30 auxiliary video port=%u slow PTS samples=%llu",port,(unsigned long long)skipped_samples);
             if(late && !(late_frames++%100))ca_log("ZT30 auxiliary video port=%u late frames=%llu",port,(unsigned long long)late_frames);
-            if(unclocked) { last=now();continue; }
+            // bounded: a clock that never qualifies must still fail the output
+            if(unclocked && ++unclocked_frames<=150) { last=now();continue; }
+            if(!unclocked)unclocked_frames=0;
             size_t offset=0,nal=0,length=0;bool key=false;
             while(ca_annexb_next(frame.data,frame.bytes,&offset,&nal,&length))if(length) {
                 unsigned type=codec==EncoderCodec::H264 ? frame.data[nal]&31 : (frame.data[nal]>>1)&63;
