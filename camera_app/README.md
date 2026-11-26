@@ -545,7 +545,10 @@ queue passes 64 MiB), whole frames are dropped and the recording resumes at
 the next IDR; the app log reports the start of the gap and the number of
 frames lost. The raw thermal recording uses the same writer and drops whole
 frames in the same way. Photos and survey images are written at once, and
-their `fsync` is done by a background thread in batches every five seconds.
+their `fsync` is done by a background thread in batches every five seconds;
+a write error found then is only logged, as the photo was already reported
+saved. A failed write to a recording truncates the file back to the last
+whole frame.
 
 So an app crash can lose about the last second of video, and a power cut can
 lose the last five to ten seconds of video and leave the newest photos
@@ -1002,7 +1005,8 @@ video2_uri = rtsp://support.example.org:40002/view/v2
 video3_uri = http://support.example.org:40003/v3.mkv
 ```
 
-A URI is `rtsp://`, `rtsps://`, `http://` or `https://`, is sent as written,
+A URI is `rtsp://`, `rtsps://`, `http://` or `https://` (the raw thermal one
+only `http://` or `https://`, as that stream is Matroska over HTTP), is sent as written,
 and applies without a restart; blank restores the automatic address. The
 MISB and APCG telemetry variants of streams 1 and 2 keep the camera's own
 address. A viewer password in a URI (`?pw=`) is sent to every ground station.
