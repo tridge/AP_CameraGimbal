@@ -45,6 +45,7 @@ struct ca_mp4_file {
     ca_misb_ts misb;
     int fd;
     ca_card_writer *out;   /* all appends go to the card through this */
+    bool broken;           /* a frame failed part way; nothing more may be written */
     bool dropping;         /* the card stalled; skipping until the next IDR */
     unsigned dropped;
     MP4E_mux_t *mux;
@@ -164,6 +165,7 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
     const uint8_t *data = (const uint8_t*)(buffer);
 
     if (offset < 0) { errno = EINVAL; return 1; }
+    if (writer->broken) { errno = EIO; return 1; }
     uint64_t at = (uint64_t)offset;
     if (writer->shift && at >= writer->index_at) at += writer->shift;
     if (at > writer->hard_limit || size > writer->hard_limit - at) {
@@ -206,7 +208,8 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
  * give the headers the final duration. */
 static int write_index(struct ca_mp4_file *writer)
 {
-    if (!writer->shift || writer->index_failed || writer->keyframe_count == 0) return 0;
+    /* after a failed frame the offsets no longer describe the file */
+    if (!writer->shift || writer->index_failed || writer->broken || writer->keyframe_count == 0) return 0;
     size_t max_refs = (CA_MP4_INDEX_RESERVE - 8U - CA_MP4_SIDX_HEADER) / CA_MP4_SIDX_ENTRY;
     size_t stride = (writer->keyframe_count + max_refs - 1) / max_refs;
     size_t count = (writer->keyframe_count + stride - 1) / stride;
@@ -415,6 +418,7 @@ static int write_h264(mp4_h26x_writer_t *h264, unsigned frame_duration,
 static int write_ts(void *opaque,const void *data,size_t length)
 {
     auto *writer=static_cast<ca_mp4_file *>(opaque);
+    if(writer->broken) { errno=EIO; return -1; }
     if(length>writer->hard_limit-writer->bytes) { errno=EFBIG; return -1; }
     if(writer->out->append(data,length)<0) return -1;
     writer->bytes+=length;
@@ -462,7 +466,7 @@ static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *anne
     return 1;
 }
 
-/* bit 0: IDR slice, bit 1: SPS, bit 2: PPS */
+/* bit 0: IDR slice, bit 1: SPS, bit 2: PPS, bit 3: any picture slice */
 static unsigned nal_kinds(const uint8_t *annex_b, size_t length)
 {
     size_t offset = 0U, nal, nal_length;
@@ -470,7 +474,8 @@ static unsigned nal_kinds(const uint8_t *annex_b, size_t length)
     while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length)) {
         if (nal_length == 0U) continue;
         unsigned type = annex_b[nal] & 31U;
-        if (type == 5U) kinds |= 1U;
+        if (type == 5U) kinds |= 9U;
+        else if (type >= 1U && type <= 4U) kinds |= 8U;
         else if (type == 7U) kinds |= 2U;
         else if (type == 8U) kinds |= 4U;
     }
@@ -495,25 +500,33 @@ static int file_write_h264(struct ca_mp4_file *writer, const uint8_t *annex_b,
         unsigned kinds = nal_kinds(annex_b, length);
         if (stalled || (kinds & 1U) == 0U) {
             if ((kinds & 6U) != 0U) {
-                /* a unit of parameter sets alone updates the muxer and adds no sample */
-                std::vector<uint8_t> headers;
-                size_t offset = 0U, nal, nal_length;
-                while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length)) {
+                /* a unit of parameter sets alone updates the muxer and adds no
+                 * sample. Best effort if memory is short. A four-byte start
+                 * code can at most double a one-byte NAL with a three-byte one. */
+                uint8_t *headers = length <= SIZE_MAX / 2U ? (uint8_t*)(malloc(length * 2U)) : NULL;
+                size_t used = 0U, offset = 0U, nal, nal_length;
+                while (headers != NULL && ca_annexb_next(annex_b, length, &offset, &nal, &nal_length)) {
                     unsigned type = nal_length ? annex_b[nal] & 31U : 0U;
                     if (type != 7U && type != 8U) continue;
-                    static const uint8_t start[4] = {0, 0, 0, 1};
-                    headers.insert(headers.end(), start, start + 4);
-                    headers.insert(headers.end(), annex_b + nal, annex_b + nal + nal_length);
+                    memcpy(headers + used, "\0\0\0\1", 4); used += 4U;
+                    memcpy(headers + used, annex_b + nal, nal_length); used += nal_length;
                 }
-                if (write_recording_frame(writer, headers.data(), headers.size(), pts, false, hfov_deg) < 0) {
+                int result = used ? write_recording_frame(writer, headers, used, pts, false, hfov_deg) : 0;
+                int saved_errno = errno;
+                free(headers);
+                if (result < 0) {
                     writer->out->rollback();
+                    writer->broken = true;
+                    errno = saved_errno;
                     return -1;
                 }
                 writer->out->commit();
             }
-            writer->dropped++;
-            /* MPEG-TS keeps real time across the gap; MP4 samples stay contiguous */
-            if (writer->format == CA_VIDEO_TELEMETRY_MISB) writer->next_pts90k += writer->frame_duration;
+            if ((kinds & 8U) != 0U) {
+                writer->dropped++;
+                /* MPEG-TS keeps real time across the gap; MP4 samples stay contiguous */
+                if (writer->format == CA_VIDEO_TELEMETRY_MISB) writer->next_pts90k += writer->frame_duration;
+            }
             return 0;
         }
         fprintf(stderr, "recording: resumed after dropping %u frames\n", writer->dropped);
@@ -523,7 +536,7 @@ static int file_write_h264(struct ca_mp4_file *writer, const uint8_t *annex_b,
     int result = write_recording_frame(writer, annex_b, length, pts, key_frame, hfov_deg);
     int saved_errno = errno;
     /* part of a failed frame must not reach the file */
-    if (result < 0) writer->out->rollback();
+    if (result < 0) { writer->out->rollback(); writer->broken = true; }
     else writer->out->commit();
     errno = saved_errno;
     return result < 0 ? -1 : 0;
@@ -692,7 +705,8 @@ int ca_mp4_write_h264(struct ca_mp4 *writer, const uint8_t *annex_b,
     uint64_t bound = (uint64_t)length * 2U + CA_VIDEO_METADATA_SEI_MAX +
                      CA_MP4_HEADERS_MAX + 4096U;
     /* a frame the stalled card will make us drop adds nothing */
-    if (bound > writer->file->hard_limit - writer->file->bytes && !writer->file->out->stalled()) {
+    if (bound > writer->file->hard_limit - writer->file->bytes &&
+        !writer->file->dropping && !writer->file->out->stalled()) {
         errno = EFBIG;
         goto fail;
     }
