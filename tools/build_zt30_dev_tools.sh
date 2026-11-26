@@ -31,6 +31,29 @@ prefix = """        struct stat log_stat;
 """
 p.write_text(s.replace(needle, prefix + needle))
 CAP_LOG
+# glibc's getpwnam()/getpwuid() load libnss_files at run time, which the
+# camera's root filesystem does not have: every login then fails as a
+# "nonexistent user". Read /etc/passwd directly instead.
+cat >> src/dbutil.c <<'PASSWD'
+
+static struct passwd *apcg_passwd(const char *name, uid_t uid)
+{
+	struct passwd *pw = NULL;
+	FILE *f = fopen("/etc/passwd", "r");
+	if (!f) {
+		return NULL;
+	}
+	while ((pw = fgetpwent(f)) != NULL) {
+		if (name ? strcmp(pw->pw_name, name) == 0 : pw->pw_uid == uid) {
+			break;
+		}
+	}
+	fclose(f);
+	return pw;
+}
+struct passwd *getpwnam(const char *name) { return apcg_passwd(name, 0); }
+struct passwd *getpwuid(uid_t uid) { return apcg_passwd(NULL, uid); }
+PASSWD
 set -- PROGRAMS='dropbear dropbearkey'
 # Configure/link options may change while all source/object mtimes remain
 # unchanged. Do not return stale dynamically linked tools from that rebuild.
@@ -40,5 +63,10 @@ if [ -n "${MAKEFLAGS:-}" ]; then
 else
     make -j4 "$@"
 fi
+# The lookups above must be the ones linked in, not glibc's.
+for symbol in getpwnam getpwuid; do
+    "${cross}nm" -D --defined-only dropbear | grep -q " T $symbol\$" ||
+        { echo "dropbear does not define $symbol" >&2; exit 1; }
+done
 mkdir -p "$output/bin"
 install -m 0755 dropbear dropbearkey "$output/bin/"

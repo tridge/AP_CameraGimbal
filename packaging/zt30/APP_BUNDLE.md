@@ -33,7 +33,10 @@ once to install the web support for combined images. `ZT30_PACKAGE_OUT`
 overrides the bridge path and `ZT30_FIRMWARE_OUT` the combined output. Initial SD installation also includes the stable launchers,
 slot helper and recovery SSH tools, built from pinned source.
 After a fresh SD install, log in to the web UI and add your public SSH key on
-Users before using recovery SSH (`root`, port2222). Password SSH is disabled;
+Users before using recovery SSH (`root`, port2222). The SSH server reads
+`/etc/passwd` itself, as the camera has no `libnss_files` for glibc's lookup;
+an installer built before that change refuses every login as a nonexistent
+user. Password SSH is disabled;
 no operator key is included in release images. Application updates preserve
 these keys and the camera's SSH host identity.
 
