@@ -216,7 +216,9 @@ int ca_thermal_stream_capture(ca_thermal_stream *s, const char *root,
         if(mono_us()/1000>request.deadline_ms+delivery_ms) { errno=ETIMEDOUT; return -1; }
         {
             std::lock_guard<std::mutex> g(s->lock);
-            if(s->capture_us/1000>request.eligible_ms && s->capture_us/1000<=request.deadline_ms && !s->json.empty()) {
+            // a frame from after the slot means every later one is too
+            if(s->capture_us/1000>=request.deadline_ms) { errno=ETIMEDOUT; return -1; }
+            if(s->capture_us/1000>request.eligible_ms && !s->json.empty()) {
                 frame={s->pixels,s->json,s->capture_us,s->sequence};
                 result.pose=s->pose; result.captured_at=s->captured_at;
                 result.frame_ms=s->capture_us/1000;
