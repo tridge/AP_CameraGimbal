@@ -26,6 +26,7 @@ public:
     ~MediaBackend() override;
     int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom,MediaRun run=MediaRun::Qualification,unsigned scaler_mask=3);
     int stop_video();
+    unsigned main_bitrate=1570000; // bits/s for the built-in 720p H.264 stream; set before initialize()
     int select_source(EncoderSource selected);
     int shutdown(); // join first, then encoder/RGB; caller must not unload SDK on error
     bool finished() const { return done.load(); }

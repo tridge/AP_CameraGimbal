@@ -36,7 +36,8 @@ int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity
     if(iq) { unsafe_sdk_failure=true;return init_failed(7); }
     if(stopping() || !hooks.gate(hooks.opaque,true))return init_failed(8);
     if(!hooks.open_sink(hooks.opaque))return init_failed(26);
-    const int opened=encoder.open(EncoderCodec::H264,H264Timing::ReadOnly,source);
+    EncoderOptions options;options.bitrate=main_bitrate;
+    const int opened=encoder.open(EncoderCodec::H264,H264Timing::ReadOnly,source,options);
     unsafe_sdk_failure=opened!=0; // same process-recovery fence as the qualified probe
     if(encoder.have_default_vui() && !hooks.vui(hooks.opaque,"pre-start",encoder.default_vui()))return init_failed(21);
     if(opened)return init_failed(21);

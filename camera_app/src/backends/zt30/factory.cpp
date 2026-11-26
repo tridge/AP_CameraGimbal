@@ -470,6 +470,10 @@ public:
         context->external_main=main_width!=1280 || main_height!=720 || context->settings.main_codec!=CA_VIDEO_H264;
         ca_video_resolution_size(context->settings.sub_resolution,&main_width,&main_height);
         context->external_sub=main_width!=1280 || main_height!=720 || context->settings.sub_codec!=CA_VIDEO_H264;
+        // The setting is for the stream published as video1: the built-in
+        // encoder, or the separate one when another format is selected.
+        const unsigned main_bps=context->settings.main_bitrate_kbps*1000U;
+        if(!context->external_main)main_bitrate=main_bps;
         const int rc=initialize(h,context->buffer.get(),4U*1024*1024,source,MediaRun::Continuous,31);
         if(rc)return rc;
         if(ca_raw_thermal_open(&context->raw_photo,context->capture_root.c_str()))
@@ -509,7 +513,7 @@ public:
         if(context->external_main) {
             context->main_output.reset(new(std::nothrow) VideoOutput(context->sdk,context->memory));
             const auto codec=context->settings.main_codec==CA_VIDEO_H265?EncoderCodec::H265:EncoderCodec::H264;
-            if(!context->main_output || context->main_output->start(source,2,3,codec,width,height,1570000,Context::main_frame,context.get())) {
+            if(!context->main_output || context->main_output->start(source,2,3,codec,width,height,context->settings.main_bitrate_kbps*1000U,Context::main_frame,context.get())) {
                 ca_log("ZT30 main format initialization failed");return EIO;
             }
         }
