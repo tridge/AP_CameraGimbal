@@ -1,6 +1,7 @@
 #include "photo_owner.h"
 #include "camera_app/log.h"
 #include "pts_clock.h"
+#include "camera_app/card_writer.h"
 #include <cerrno>
 #include <cstring>
 #include <new>
@@ -136,8 +137,9 @@ static int raw_sidecar(const char *path,const timespec &at) {
         if(n<0 && errno==EINTR)continue;
         if(n<=0) { if(!n)errno=EIO;result=-1;break; }offset+=size_t(n);
     }
-    if(!result && fsync(fd))result=-1;
-    int saved=errno;if(::close(fd) && !result) { result=-1;saved=errno; }
+    int saved=errno;
+    if(!result)ca_sync_later(fd);
+    else ::close(fd);
     if(!result && rename(temporary,filename)) { result=-1;saved=errno; }
     if(result)unlink(temporary);errno=saved;return result;
 }
