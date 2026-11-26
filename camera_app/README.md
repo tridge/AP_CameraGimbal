@@ -1005,8 +1005,7 @@ video2_uri = rtsp://support.example.org:40002/view/v2
 video3_uri = http://support.example.org:40003/v3.mkv
 ```
 
-A URI is `rtsp://`, `rtsps://`, `http://` or `https://` (the raw thermal one
-only `http://` or `https://`, as that stream is Matroska over HTTP), is sent as written,
+A URI is `rtsp://`, `rtsps://`, `http://` or `https://`, is sent as written,
 and applies without a restart; blank restores the automatic address. The
 MISB and APCG telemetry variants of streams 1 and 2 keep the camera's own
 address. A viewer password in a URI (`?pw=`) is sent to every ground station.
