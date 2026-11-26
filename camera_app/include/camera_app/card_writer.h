@@ -36,6 +36,7 @@ public:
         w->fd = fd;
         w->directory_fd = directory_fd;
         w->written = w->queued_end = offset;
+        w->marks.reserve(4096);   // never grown: no allocation on the producer's path
         pthread_condattr_t attr;
         int result = pthread_mutex_init(&w->lock, nullptr);
         if (result != 0) { delete w; errno = result; return nullptr; }
@@ -85,6 +86,16 @@ public:
     {
         pthread_mutex_lock(&lock);
         commit_locked();
+        pthread_mutex_unlock(&lock);
+    }
+
+    /* Discard what was appended since the last commit(): a unit that failed
+     * part way must not reach the file. */
+    void rollback()
+    {
+        pthread_mutex_lock(&lock);
+        queued_end -= queue.size - committed;
+        queue.size = committed;
         pthread_mutex_unlock(&lock);
     }
 
@@ -181,8 +192,9 @@ private:
         {
             if (length > capacity - size) {
                 // grow in steps: doubling could reserve far more than is queued
+                if (length > SIZE_MAX - size - CHUNK_BYTES) return false;
                 const size_t wanted = size + length + CHUNK_BYTES;
-                uint8_t *grown = wanted > size ? static_cast<uint8_t *>(realloc(data, wanted)) : nullptr;
+                uint8_t *grown = static_cast<uint8_t *>(realloc(data, wanted));
                 if (grown == nullptr) return false;
                 data = grown;
                 capacity = wanted;
@@ -204,6 +216,9 @@ private:
         }
     };
     Bytes queue;
+    // ends of committed units within queue, so a failed write can be cut
+    // back to a whole unit; best effort if this cannot grow
+    std::vector<size_t> marks;
     size_t committed = 0;       // leading bytes of queue the worker may write
     uint64_t committed_us = 0;  // when the oldest unwritten committed byte was committed
     bool patched = false;       // patch() wrote since the last sync
@@ -225,6 +240,7 @@ private:
     {
         const size_t before = committed;
         committed = queue.size;
+        if (committed != before && marks.size() < marks.capacity()) marks.push_back(committed);
         if (committed != before && before == 0) committed_us = now_us();
         if (committed != before && (before == 0 || (before < CHUNK_BYTES && committed >= CHUNK_BYTES)))
             pthread_cond_signal(&wake);
@@ -244,9 +260,10 @@ private:
 #endif
     }
 
-    static int write_all(int fd, const uint8_t *data, size_t size, uint64_t at)
+    static int write_all(int fd, const uint8_t *data, size_t size, uint64_t at, size_t *written_bytes = nullptr)
     {
         size_t done = 0;
+        struct Report { size_t *out, &done; ~Report() { if (out) *out = done; } } report{written_bytes, done};
         while (done < size) {
             const ssize_t n = pwrite(fd, data + done, size - done, off_t(at + done));
             if (n > 0) done += size_t(n);
@@ -272,6 +289,8 @@ private:
     void work()
     {
         Bytes chunk;
+        std::vector<size_t> units;
+        units.reserve(4096);
         uint64_t write_at = 0, sync_at = 0;
         bool dirty = false, synced = false;
         pthread_mutex_lock(&lock);
@@ -279,10 +298,13 @@ private:
             const uint64_t now = now_us();
             if (patched) { patched = false; dirty = true; }
             // an overdue sync goes first: steady writes must not postpone it
-            const bool overdue = synced && dirty && !stopping && now >= sync_at;
+            // (the first sync follows the first write directly)
+            const bool overdue = dirty && !stopping && (!synced || now >= sync_at);
             // the first data goes out at once so the new file is on the card early
             if (!overdue && committed != 0 &&
                 (!synced || stopping || flushing != 0 || committed >= CHUNK_BYTES || now >= write_at)) {
+                units.swap(marks);
+                marks.clear();
                 if (committed == queue.size) {
                     chunk.swap(queue);
                 } else {
@@ -293,26 +315,34 @@ private:
                 }
                 committed = 0;
                 const uint64_t at = written;
+                size_t kept = 0;
                 pthread_mutex_unlock(&lock);
                 // Files downloads take this lock to snapshot a size between units
                 int result = lock_file();
                 if (result == 0) {
-                    result = write_all(fd, chunk.data, chunk.size, at);
-                    // a full card must not leave part of a unit at the end
-                    if (result != 0 && ftruncate(fd, off_t(at)) < 0) { /* the write error is what is reported */ }
+                    size_t done = 0;
+                    result = write_all(fd, chunk.data, chunk.size, at, &done);
+                    if (result != 0) {
+                        // a full card must not leave part of a unit at the end:
+                        // keep the whole units that did get written
+                        kept = 0;
+                        for (const size_t end : units) if (end <= done && end > kept) kept = end;
+                        if (ftruncate(fd, off_t(at + kept)) < 0) { /* the write error is what is reported */ }
+                    }
                     (void)flock(fd, LOCK_UN);
                 }
-                const size_t size = chunk.size;
+                const size_t size = result != 0 ? kept : chunk.size;
+                units.clear();
                 chunk.clear();
                 dirty = true;
                 write_at = now_us() + WRITE_INTERVAL_US;
                 pthread_mutex_lock(&lock);
+                written = at + size;
                 if (result != 0) failure = result;
-                else written = at + size;
                 pthread_cond_broadcast(&progress);
                 continue;
             }
-            if (overdue || (!synced ? (dirty || stopping) : (dirty && stopping))) {
+            if (overdue || (stopping && (dirty || !synced))) {
                 pthread_mutex_unlock(&lock);
                 int result = fdatasync(fd) < 0 ? errno : 0;
                 if (result == 0 && directory_fd >= 0) {
@@ -358,7 +388,7 @@ inline void ca_sync_later(int fd)
         bool started = false;
     };
     static State state;
-    static const size_t MAX_PENDING = 64;
+    static const size_t MAX_PENDING = 256;
     pthread_mutex_lock(&state.lock);
     if (!state.started) {
         pthread_t thread;
@@ -383,12 +413,19 @@ inline void ca_sync_later(int fd)
             state.started = true;
         }
     }
-    // no worker, or the card is far behind: sync here, as before batching
-    const bool queue = state.started && state.pending.size() < MAX_PENDING;
+    const bool started = state.started;
+    const bool queue = started && state.pending.size() < MAX_PENDING;
     if (queue) {
         state.pending.push_back(fd);
         pthread_cond_signal(&state.wake);
     }
     pthread_mutex_unlock(&state.lock);
-    if (!queue) ca_sync_close(fd);
+    if (queue) return;
+    if (!started) {
+        ca_sync_close(fd);   // no worker: sync here, as before batching
+    } else {
+        // the card is far behind: a sync here would hold up the next capture
+        fprintf(stderr, "card: too many files awaiting sync; one left to the kernel\n");
+        (void)::close(fd);
+    }
 }
