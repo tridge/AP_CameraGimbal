@@ -118,11 +118,12 @@ int main(int argc, char **argv)
     pthread_mutex_lock(&lock);
     assert(sync_calls == 1);
     pthread_mutex_unlock(&lock);
-    /* Files downloads can snapshot a complete fragment even during slow sync. */
+    /* Files downloads can snapshot the file even during slow sync; the frames
+     * since then wait in memory, not in the frame producer. */
     int snapshot = open(path, O_RDONLY);
     assert(snapshot >= 0 && flock(snapshot, LOCK_SH | LOCK_NB) == 0);
-    assert(fstat(snapshot, &st) == 0 && st.st_size > (off_t)(60 * frame_length));
-    close(snapshot);
+    assert(fstat(snapshot, &st) == 0 && st.st_size > 0 && st.st_size < (off_t)(30 * frame_length));
+    assert(flock(snapshot, LOCK_UN) == 0);
     pthread_t closer;
     assert(pthread_create(&closer, NULL, close_writer, writer) == 0);
     nanosleep(&delay, NULL);
@@ -131,6 +132,8 @@ int main(int argc, char **argv)
     assert(pthread_join(closer, NULL) == 0);
     assert(close_result == 0 && atomic_load(&closed));
     assert(sync_calls == 2); /* in-flight flush, then one final flush; no backlog */
+    assert(fstat(snapshot, &st) == 0 && st.st_size > (off_t)(60 * frame_length));
+    close(snapshot);
     unlink(path);
 
     /* Rollover must keep video moving even when the old file's final sync is
@@ -149,14 +152,40 @@ int main(int argc, char **argv)
     char part2[256], part3[256];
     snprintf(part2, sizeof(part2), "%s/video_part0002.mp4", directory);
     snprintf(part3, sizeof(part3), "%s/video_part0003.mp4", directory);
-    assert(stat(part2, &st) == 0 && st.st_size > 65536);
+    assert(stat(part2, &st) == 0);
     assert(access(part3, F_OK) < 0 && errno == ENOENT);
     release_sync();
     assert(ca_mp4_close(writer) == 0);
+    assert(stat(part2, &st) == 0 && st.st_size > 65536);
     unlink(path); unlink(part2);
     fat = false;
     hold_first_only = false;
     unsetenv("CAMERA_APP_RECORD_SEGMENT_BYTES");
+
+    /* A card that stalls for longer than the limit costs frames, not the
+     * recording: the producer never waits and writing resumes at an IDR. */
+    hold_sync = true;
+    sync_calls = 0;
+    assert(setenv("CAMERA_APP_RECORD_STALL_MS", "1500", 1) == 0);
+    assert(ca_mp4_open(&writer, path, 320, 240, 10) == 0);
+    assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+    wait_for_sync();
+    for (unsigned i = 0; i < 150; i++) {
+        assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+        nanosleep(&delay, NULL);
+    }
+    release_sync();
+    /* the queue drains within a write interval; frames then record again */
+    const struct timespec settle = {.tv_sec = 1, .tv_nsec = 300000000};
+    nanosleep(&settle, NULL);
+    for (unsigned i = 0; i < 5; i++)
+        assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+    assert(ca_mp4_close(writer) == 0);
+    /* about 1.5 s of the 3 s stall was kept, then the last five frames */
+    assert(stat(path, &st) == 0 && st.st_size > (off_t)(60 * frame_length) &&
+           st.st_size < (off_t)(120 * frame_length));
+    unlink(path);
+    unsetenv("CAMERA_APP_RECORD_STALL_MS");
 
     /* An asynchronous I/O failure must still reach the caller at close. */
     sync_calls = 0;
@@ -178,6 +207,6 @@ int main(int argc, char **argv)
     unlink(path);
     rmdir(directory);
     free(data);
-    puts("PASS blocked background sync: frame progress, bounded requests, download locks, close and I/O failure");
+    puts("PASS blocked background sync: frame progress, bounded requests, download locks, stall drops, close and I/O failure");
     return 0;
 }

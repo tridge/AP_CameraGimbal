@@ -10,6 +10,7 @@
 #include "minimp4.h"
 
 #include "camera_app/mp4.h"
+#include "camera_app/card_writer.h"
 #include "camera_app/video_metadata.h"
 #include "camera_app/misb.h"
 
@@ -43,14 +44,9 @@ struct ca_mp4_file {
     ca_video_telemetry_format format;
     ca_misb_ts misb;
     int fd;
-    int directory_fd;
-    pthread_t sync_thread;
-    pthread_mutex_t sync_lock;
-    pthread_cond_t sync_changed;
-    bool sync_started;
-    bool sync_dirty;
-    bool sync_stopping;
-    atomic_int sync_error;
+    ca_card_writer *out;   /* all appends go to the card through this */
+    bool dropping;         /* the card stalled; skipping until the next IDR */
+    unsigned dropped;
     MP4E_mux_t *mux;
     mp4_h26x_writer_t h264;
     unsigned frame_duration;
@@ -187,9 +183,16 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
         errno = EFBIG;
         return 1;
     }
-    if (pwrite_all(writer->fd, data, size, at) < 0) return 1;
     uint64_t end = at + size;
-    if (end > writer->bytes) writer->bytes = end;
+    if (at == writer->bytes) {
+        if (writer->out->append(data, size) < 0) return 1;
+        writer->bytes = end;
+    } else if (end > writer->bytes) {
+        errno = EINVAL;
+        return 1;
+    } else if (writer->out->flush() < 0 || pwrite_all(writer->fd, data, size, at) < 0) {
+        return 1;
+    }
     if (size >= 8 && !memcmp(data + 4, "moof", 4) && writer->pending_key) {
         note_keyframe(writer, at);
     } else if (size >= 8 && !memcmp(data + 4, "moov", 4) && !writer->shift) {
@@ -198,7 +201,10 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
         put32(box, CA_MP4_INDEX_RESERVE);
         memcpy(box + 4, "free", 4);
         if (end + CA_MP4_INDEX_RESERVE > writer->hard_limit) { errno = EFBIG; return 1; }
-        if (pwrite_all(writer->fd, box, sizeof(box), end) < 0) return 1;
+        /* the queue is append-only, so the reserve is written as zeros */
+        static const uint8_t zeros[CA_MP4_INDEX_RESERVE - 8U] = {};
+        if (writer->out->append(box, sizeof(box)) < 0 ||
+            writer->out->append(zeros, sizeof(zeros)) < 0) return 1;
         locate_headers(writer, data, size, at);
         writer->index_at = end;
         writer->shift = CA_MP4_INDEX_RESERVE;
@@ -214,6 +220,7 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
 static int write_index(struct ca_mp4_file *writer)
 {
     if (!writer->shift || writer->index_failed || writer->keyframe_count == 0) return 0;
+    if (writer->out->flush() < 0) return -1;
     size_t max_refs = (CA_MP4_INDEX_RESERVE - 8U - CA_MP4_SIDX_HEADER) / CA_MP4_SIDX_ENTRY;
     size_t stride = (writer->keyframe_count + max_refs - 1) / max_refs;
     size_t count = (writer->keyframe_count + stride - 1) / stride;
@@ -278,96 +285,6 @@ static int recording_directory(const char *path)
     return fd;
 }
 
-/* The worker never holds the frame-write flock or sync mutex during I/O.
- * Dirty notifications coalesce; a slow card cannot build a queue of flushes.
- * Wait a full interval after completion before starting another background
- * flush. Only normal close waits for this worker and its final flush. */
-static void *sync_recording(void *opaque)
-{
-    struct ca_mp4_file *writer = (struct ca_mp4_file*)(opaque);
-    struct timespec next_sync = {};
-    bool have_synced = false;
-    pthread_mutex_lock(&writer->sync_lock);
-    for (;;) {
-        while (!writer->sync_stopping && !writer->sync_dirty)
-            pthread_cond_wait(&writer->sync_changed, &writer->sync_lock);
-        if (!writer->sync_stopping && have_synced) {
-            struct timespec now;
-            if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
-                atomic_store(&writer->sync_error, errno);
-                break;
-            }
-            if (now.tv_sec < next_sync.tv_sec ||
-                (now.tv_sec == next_sync.tv_sec && now.tv_nsec < next_sync.tv_nsec)) {
-#ifdef __APPLE__
-                // Darwin condition variables have no selectable clock. Relative
-                // waits preserve the monotonic interval through clock changes.
-                struct timespec remaining = {next_sync.tv_sec - now.tv_sec,
-                                             next_sync.tv_nsec - now.tv_nsec};
-                if (remaining.tv_nsec < 0) { remaining.tv_sec--; remaining.tv_nsec += 1000000000; }
-                int result = pthread_cond_timedwait_relative_np(&writer->sync_changed,
-                                                               &writer->sync_lock, &remaining);
-#else
-                int result = pthread_cond_timedwait(&writer->sync_changed,
-                                                    &writer->sync_lock, &next_sync);
-#endif
-                if (result != 0 && result != ETIMEDOUT) {
-                    atomic_store(&writer->sync_error, result);
-                    break;
-                }
-                continue;
-            }
-        }
-        bool stopping = writer->sync_stopping;
-        writer->sync_dirty = false;
-        pthread_mutex_unlock(&writer->sync_lock);
-        int error = 0;
-        if (fdatasync(writer->fd) < 0) error = errno;
-        if (error == 0 && writer->directory_fd >= 0) {
-            if (fsync(writer->directory_fd) < 0) error = errno;
-            else {
-                close(writer->directory_fd);
-                writer->directory_fd = -1;
-            }
-        }
-        if (error == 0 && clock_gettime(CLOCK_MONOTONIC, &next_sync) < 0)
-            error = errno;
-        next_sync.tv_sec++;
-        have_synced = true;
-        pthread_mutex_lock(&writer->sync_lock);
-        if (error != 0) atomic_store(&writer->sync_error, error);
-        if (error != 0 || stopping) break;
-    }
-    pthread_mutex_unlock(&writer->sync_lock);
-    return NULL;
-}
-
-static int start_recording_sync(struct ca_mp4_file *writer)
-{
-    pthread_condattr_t attr;
-    int result = pthread_mutex_init(&writer->sync_lock, NULL);
-    if (result != 0) { errno = result; return -1; }
-    result = pthread_condattr_init(&attr);
-    if (result != 0) goto fail_mutex;
-#ifndef __APPLE__
-    result = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
-#endif
-    if (result == 0) result = pthread_cond_init(&writer->sync_changed, &attr);
-    pthread_condattr_destroy(&attr);
-    if (result != 0) goto fail_mutex;
-    result = pthread_create(&writer->sync_thread, NULL, sync_recording, writer);
-    if (result != 0) {
-        pthread_cond_destroy(&writer->sync_changed);
-        goto fail_mutex;
-    }
-    writer->sync_started = true;
-    return 0;
-fail_mutex:
-    pthread_mutex_destroy(&writer->sync_lock);
-    errno = result;
-    return -1;
-}
-
 static int file_open(struct ca_mp4_file **result, const char *path,
                      unsigned width, unsigned height, unsigned frame_rate)
 {
@@ -380,28 +297,32 @@ static int file_open(struct ca_mp4_file **result, const char *path,
     }
     writer = new (std::nothrow) ca_mp4_file{};
     if (writer == NULL) return -1;
-    atomic_init(&writer->sync_error, 0);
-    writer->directory_fd = recording_directory(path);
-    if (writer->directory_fd < 0) {
+    int directory_fd = recording_directory(path);
+    if (directory_fd < 0) {
         delete writer;
         return -1;
     }
     writer->fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (writer->fd < 0) {
-        close(writer->directory_fd);
+        close(directory_fd);
         delete writer;
         return -1;
     }
     struct statfs fs;
-    if (fstatfs(writer->fd, &fs) < 0) {
+    if (fstatfs(writer->fd, &fs) < 0 ||
+        (writer->out = ca_card_writer::open(writer->fd, 0, directory_fd)) == NULL) {
         int saved_errno = errno;
         close(writer->fd);
-        close(writer->directory_fd);
+        close(directory_fd);
         unlink(path);
         delete writer;
         errno = saved_errno;
         return -1;
     }
+    /* Tests shorten the time a stalled card is tolerated before frames drop. */
+    const char *stall = getenv("CAMERA_APP_RECORD_STALL_MS");
+    if (stall && *stall >= '1' && *stall <= '9')
+        writer->out->set_stall_us(strtoull(stall, NULL, 10) * 1000U);
 #ifdef __APPLE__
     writer->hard_limit = !strcmp(fs.f_fstypename, "msdos") ? CA_FAT_MAX_BYTES : INT64_MAX;
 #else
@@ -414,14 +335,13 @@ static int file_open(struct ca_mp4_file **result, const char *path,
      * after a crash; the movie header is emitted with the first video frame. */
     if(writer->format!=CA_VIDEO_TELEMETRY_MISB)
         writer->mux = MP4E_open(1, 1, writer, write_at);
-    if ((writer->format!=CA_VIDEO_TELEMETRY_MISB && (writer->mux == NULL ||
+    if (writer->format!=CA_VIDEO_TELEMETRY_MISB && (writer->mux == NULL ||
         mp4_h26x_write_init(&writer->h264, writer->mux,
-                            (int)width, (int)height, 0) != MP4E_STATUS_OK)) ||
-        start_recording_sync(writer) < 0) {
+                            (int)width, (int)height, 0) != MP4E_STATUS_OK)) {
         int saved_errno = errno != 0 ? errno : EIO;
         if (writer->mux != NULL) (void)MP4E_close(writer->mux);
+        (void)writer->out->close();
         close(writer->fd);
-        close(writer->directory_fd);
         unlink(path);
         delete writer;
         errno = saved_errno;
@@ -509,7 +429,7 @@ static int write_ts(void *opaque,const void *data,size_t length)
 {
     auto *writer=static_cast<ca_mp4_file *>(opaque);
     if(length>writer->hard_limit-writer->bytes) { errno=EFBIG; return -1; }
-    if(pwrite_all(writer->fd,static_cast<const uint8_t *>(data),length,writer->bytes)<0) return -1;
+    if(writer->out->append(data,length)<0) return -1;
     writer->bytes+=length;
     return 0;
 }
@@ -555,26 +475,41 @@ static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *anne
     return 1;
 }
 
+static bool has_idr(const uint8_t *annex_b, size_t length)
+{
+    size_t offset = 0U, nal, nal_length;
+    while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length))
+        if (nal_length != 0U && (annex_b[nal] & 31U) == 5U) return true;
+    return false;
+}
+
+/* Never blocks on the card. If the card stalls for long enough, whole frames
+ * are dropped and the recording picks up again at an IDR. */
 static int file_write_h264(struct ca_mp4_file *writer, const uint8_t *annex_b,
                       size_t length, uint64_t pts, bool key_frame, float hfov_deg)
 {
     if (writer == NULL) { errno = EINVAL; return -1; }
-    int sync_error = atomic_load(&writer->sync_error);
-    if (sync_error != 0) { errno = sync_error; return -1; }
-    /* The Files endpoint shares this lock only while taking its size snapshot,
-     * so downloads end at a complete fragment without delaying recording. */
-    if (flock(writer->fd, LOCK_EX) < 0) return -1;
+    int error = writer->out->error();
+    if (error != 0) { errno = error; return -1; }
+    bool stalled = writer->out->stalled();
+    if (stalled || writer->dropping) {
+        if (!writer->dropping) {
+            writer->dropping = true;
+            fprintf(stderr, "recording: card is not keeping up, dropping frames\n");
+        }
+        if (stalled || !has_idr(annex_b, length)) {
+            writer->dropped++;
+            /* MPEG-TS keeps real time across the gap; MP4 samples stay contiguous */
+            if (writer->format == CA_VIDEO_TELEMETRY_MISB) writer->next_pts90k += writer->frame_duration;
+            return 0;
+        }
+        fprintf(stderr, "recording: resumed after dropping %u frames\n", writer->dropped);
+        writer->dropping = false;
+        writer->dropped = 0;
+    }
     int result = write_recording_frame(writer, annex_b, length, pts, key_frame, hfov_deg);
     int saved_errno = errno;
-    if (flock(writer->fd, LOCK_UN) < 0 && result >= 0) return -1;
-    if (result > 0) {
-        pthread_mutex_lock(&writer->sync_lock);
-        if (!writer->sync_dirty) {
-            writer->sync_dirty = true;
-            pthread_cond_signal(&writer->sync_changed);
-        }
-        pthread_mutex_unlock(&writer->sync_lock);
-    }
+    writer->out->commit();
     errno = saved_errno;
     return result < 0 ? -1 : 0;
 }
@@ -590,19 +525,11 @@ static int file_close(struct ca_mp4_file *writer)
     }
     free(writer->keyframes);
     writer->keyframes = NULL;
-    if (writer->sync_started) {
-        pthread_mutex_lock(&writer->sync_lock);
-        writer->sync_stopping = true;
-        pthread_cond_signal(&writer->sync_changed);
-        pthread_mutex_unlock(&writer->sync_lock);
-        pthread_join(writer->sync_thread, NULL);
-        pthread_cond_destroy(&writer->sync_changed);
-        pthread_mutex_destroy(&writer->sync_lock);
-    }
-    int sync_error = atomic_load(&writer->sync_error);
+    int saved_errno = errno;
+    int sync_error = writer->out->close() < 0 ? errno : 0;
     if (sync_error != 0) result = -1;
+    else errno = saved_errno;
     if (close(writer->fd) < 0) result = -1;
-    if (writer->directory_fd >= 0) close(writer->directory_fd);
     delete writer;
     if (sync_error != 0) errno = sync_error;
     return result;
