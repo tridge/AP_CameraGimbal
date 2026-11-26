@@ -208,12 +208,15 @@ int ca_thermal_stream_capture(ca_thermal_stream *s, const char *root,
         ~Pending() { --n; }
     } pending(s->survey_pending);
     ca_thermal_stream::SurveyFrame frame;
+    // The deadline is for when the frame is captured. It reaches here later:
+    // 60 to 175 ms was measured in flight on a loaded ZT30.
+    const uint64_t delivery_ms=300;
     while(true) {
         if(generation.load()!=request.generation) { errno=ECANCELED; return -1; }
-        if(mono_us()/1000>request.deadline_ms) { errno=ETIMEDOUT; return -1; }
+        if(mono_us()/1000>request.deadline_ms+delivery_ms) { errno=ETIMEDOUT; return -1; }
         {
             std::lock_guard<std::mutex> g(s->lock);
-            if(s->capture_us/1000>request.eligible_ms && !s->json.empty()) {
+            if(s->capture_us/1000>request.eligible_ms && s->capture_us/1000<=request.deadline_ms && !s->json.empty()) {
                 frame={s->pixels,s->json,s->capture_us,s->sequence};
                 result.pose=s->pose; result.captured_at=s->captured_at;
                 result.frame_ms=s->capture_us/1000;
