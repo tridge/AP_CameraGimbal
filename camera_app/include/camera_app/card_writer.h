@@ -36,7 +36,10 @@ public:
         w->fd = fd;
         w->directory_fd = directory_fd;
         w->written = w->queued_end = offset;
-        w->marks.reserve(4096);   // never grown: no allocation on the producer's path
+        // fixed size: nothing here allocates once the recording runs
+        w->marks.data = static_cast<size_t *>(malloc(Marks::CAPACITY * sizeof(size_t)));
+        w->units.data = static_cast<size_t *>(malloc(Marks::CAPACITY * sizeof(size_t)));
+        if (w->marks.data == nullptr || w->units.data == nullptr) { delete w; errno = ENOMEM; return nullptr; }
         pthread_condattr_t attr;
         int result = pthread_mutex_init(&w->lock, nullptr);
         if (result != 0) { delete w; errno = result; return nullptr; }
@@ -192,7 +195,7 @@ private:
         {
             if (length > capacity - size) {
                 // grow in steps: doubling could reserve far more than is queued
-                if (length > SIZE_MAX - size - CHUNK_BYTES) return false;
+                if (size > SIZE_MAX - CHUNK_BYTES || length > SIZE_MAX - CHUNK_BYTES - size) return false;
                 const size_t wanted = size + length + CHUNK_BYTES;
                 uint8_t *grown = static_cast<uint8_t *>(realloc(data, wanted));
                 if (grown == nullptr) return false;
@@ -218,7 +221,19 @@ private:
     Bytes queue;
     // ends of committed units within queue, so a failed write can be cut
     // back to a whole unit; best effort if this cannot grow
-    std::vector<size_t> marks;
+    struct Marks {
+        static constexpr size_t CAPACITY = 4096;
+        size_t *data = nullptr, count = 0;
+        ~Marks() { free(data); }
+        // when full the last entry moves on: every entry stays a unit end
+        void add(size_t end) { if (count < CAPACITY) data[count++] = end; else data[CAPACITY - 1] = end; }
+        void swap(Marks &other)
+        {
+            size_t *d = data; data = other.data; other.data = d;
+            const size_t n = count; count = other.count; other.count = n;
+        }
+    };
+    Marks marks, units;   // units: the worker's copy for the chunk being written
     size_t committed = 0;       // leading bytes of queue the worker may write
     uint64_t committed_us = 0;  // when the oldest unwritten committed byte was committed
     bool patched = false;       // patch() wrote since the last sync
@@ -240,7 +255,7 @@ private:
     {
         const size_t before = committed;
         committed = queue.size;
-        if (committed != before && marks.size() < marks.capacity()) marks.push_back(committed);
+        if (committed != before) marks.add(committed);
         if (committed != before && before == 0) committed_us = now_us();
         if (committed != before && (before == 0 || (before < CHUNK_BYTES && committed >= CHUNK_BYTES)))
             pthread_cond_signal(&wake);
@@ -289,8 +304,6 @@ private:
     void work()
     {
         Bytes chunk;
-        std::vector<size_t> units;
-        units.reserve(4096);
         uint64_t write_at = 0, sync_at = 0;
         bool dirty = false, synced = false;
         pthread_mutex_lock(&lock);
@@ -304,7 +317,7 @@ private:
             if (!overdue && committed != 0 &&
                 (!synced || stopping || flushing != 0 || committed >= CHUNK_BYTES || now >= write_at)) {
                 units.swap(marks);
-                marks.clear();
+                marks.count = 0;
                 if (committed == queue.size) {
                     chunk.swap(queue);
                 } else {
@@ -326,13 +339,14 @@ private:
                         // a full card must not leave part of a unit at the end:
                         // keep the whole units that did get written
                         kept = 0;
-                        for (const size_t end : units) if (end <= done && end > kept) kept = end;
+                        for (size_t i = 0; i < units.count; i++)
+                            if (units.data[i] <= done && units.data[i] > kept) kept = units.data[i];
                         if (ftruncate(fd, off_t(at + kept)) < 0) { /* the write error is what is reported */ }
                     }
                     (void)flock(fd, LOCK_UN);
                 }
                 const size_t size = result != 0 ? kept : chunk.size;
-                units.clear();
+                units.count = 0;
                 chunk.clear();
                 dirty = true;
                 write_at = now_us() + WRITE_INTERVAL_US;
@@ -387,7 +401,8 @@ inline void ca_sync_later(int fd)
         std::vector<int> pending;
         bool started = false;
     };
-    static State state;
+    // never destroyed: the detached worker may outlive static destructors at exit
+    static State &state = *new State;
     static const size_t MAX_PENDING = 256;
     pthread_mutex_lock(&state.lock);
     if (!state.started) {
@@ -425,7 +440,8 @@ inline void ca_sync_later(int fd)
         ca_sync_close(fd);   // no worker: sync here, as before batching
     } else {
         // the card is far behind: a sync here would hold up the next capture
-        fprintf(stderr, "card: too many files awaiting sync; one left to the kernel\n");
-        (void)::close(fd);
+        const int closed = ::close(fd) < 0 ? errno : 0;
+        fprintf(stderr, "card: too many files awaiting sync; one left to the kernel%s%s\n",
+                closed ? ": " : "", closed ? strerror(closed) : "");
     }
 }

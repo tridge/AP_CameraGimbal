@@ -170,7 +170,8 @@ int main(int argc, char **argv)
     assert(setenv("CAMERA_APP_RECORD_STALL_MS", "1500", 1) == 0);
     /* The encoder may deliver SPS/PPS apart from the IDR that needs them:
      * recording must still resume, so split the access unit that way. */
-    uint8_t *headers = (uint8_t*)(malloc(frame_length)), *picture = (uint8_t*)(malloc(frame_length + 16));
+    /* a three-byte start code grows to four: at most twice the input */
+    uint8_t *headers = (uint8_t*)(malloc(frame_length * 2)), *picture = (uint8_t*)(malloc(frame_length * 2));
     size_t headers_length = 0, picture_length = 0;
     assert(headers && picture);
     scan = 0;
