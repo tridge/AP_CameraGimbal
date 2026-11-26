@@ -14,6 +14,7 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 #include "camera_app/support_video.h"
 #include "thermal_matroska.h"
 #include "camera_app/log.h"
+#include "camera_app/card_writer.h"
 #include "camera_app/metadata.h"
 #include "camera_app/video_metadata.h"
 #include "camera_app/raw_thermal.h"
@@ -69,6 +70,8 @@ struct ca_thermal_stream {
     Bytes header;
     std::mutex record_lock;
     int record_fd = -1;
+    ca_card_writer *record_out = nullptr;   // queues Clusters for the card
+    bool record_stalled = false;
     unsigned record_fps = 5;
     bool recording = false;
     std::string video_path, record_path;
@@ -267,8 +270,9 @@ static int write_all(int fd, const Bytes &data)
 static int close_recording(ca_thermal_stream *s)
 {
     if (s->record_fd < 0) return 0;
-    int result = fdatasync(s->record_fd);
+    int result = s->record_out ? s->record_out->close() : fdatasync(s->record_fd);
     int saved = errno;
+    s->record_out = nullptr;
     if (close(s->record_fd) < 0 && result == 0) { result = -1; saved = errno; }
     s->record_fd = -1;
     s->record_open = false;
@@ -293,7 +297,8 @@ static int open_recording(ca_thermal_stream *s)
         if (errno != EEXIST) return -1;
     }
     if (s->record_fd < 0) return -1;
-    if (write_all(s->record_fd, s->header) < 0) {
+    if (write_all(s->record_fd, s->header) < 0 ||
+        !(s->record_out = ca_card_writer::open(s->record_fd, s->header.size()))) {
         int saved = errno;
         close(s->record_fd); s->record_fd = -1;
         unlink(s->record_path.c_str()); errno = saved;
@@ -301,6 +306,7 @@ static int open_recording(ca_thermal_stream *s)
     }
     ++s->record_generation;
     s->record_open = true;
+    s->record_stalled = false;
     s->record_start = mono_us();
     s->record_epoch = s->record_previous = s->next_record = 0;
     ca_log("raw thermal recording started: %s (%u fps)", s->record_path.c_str(), s->record_fps);
@@ -498,8 +504,18 @@ static void *thermal_worker(void *opaque)
             // A stop/restart or rate change can occur while encoding.
             if (s->record_fd >= 0 && generation == s->record_generation && now >= s->next_record) {
                 if (!s->record_epoch) s->record_epoch=capture;
-                Bytes data=thermal_mkv::frame(encoded,json.c_str(),(capture-s->record_epoch)/1000);
-                if (write_all(s->record_fd,data) < 0) {
+                // a stalled card costs Clusters, never time in this thread
+                const bool stalled=s->record_out->stalled();
+                if (stalled != s->record_stalled) {
+                    s->record_stalled=stalled;
+                    ca_log(stalled ? "raw thermal recording: card is not keeping up, dropping frames"
+                                   : "raw thermal recording resumed");
+                }
+                Bytes data;
+                if (!stalled) data=thermal_mkv::frame(encoded,json.c_str(),(capture-s->record_epoch)/1000);
+                if (!stalled && s->record_out->append(data.data(),data.size()) == 0) s->record_out->commit();
+                if (s->record_out->error() != 0) {
+                    errno=s->record_out->error();
                     ca_log("raw thermal recording write failed: %s",strerror(errno));
                     (void)close_recording(s);
                 } else {

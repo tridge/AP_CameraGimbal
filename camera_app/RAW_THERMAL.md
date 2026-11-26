@@ -232,6 +232,7 @@ header and payload of a later frame in an actual MT11 file were tested with
 PyAV: the preceding complete frames still decoded as gray16le.
 
 This is a container property, not a power-loss guarantee for the filesystem.
-The camera calls `fdatasync` at recording stop; unsynchronised kernel/card
-buffers can be lost if power is removed. Stopping before power-off remains
+The camera writes queued frames from a background thread, calls `fdatasync`
+about every five seconds and again at recording stop; newer data can be lost
+if power is removed. Stopping before power-off remains
 safest. The amount of lost tail data is not bounded by this format.
