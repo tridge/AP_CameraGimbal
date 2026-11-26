@@ -58,7 +58,12 @@ public:
             if (!late || receipt_us-mapped>MaxLateUs) return fail();
             *late=true;
         }
-        if (have_frame && mapped<=last_frame_us) return fail();
+        // After a run of skipped observations a fresh anchor can map the next
+        // frame slightly earlier than the last one; keep the output ordered.
+        if (have_frame && mapped<=last_frame_us) {
+            if (!late) return fail();
+            mapped=last_frame_us+1;
+        }
         last_frame_pts=pts;last_frame_us=mapped;have_frame=true;
         mapped_us=mapped;
         return true;
