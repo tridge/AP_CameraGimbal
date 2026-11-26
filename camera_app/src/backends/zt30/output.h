@@ -35,5 +35,6 @@ private:
     void *opaque=nullptr;
     PtsClock clock;
     uint64_t skipped_samples=0,late_frames=0;
+    unsigned unclocked_frames=0;
 };
 }

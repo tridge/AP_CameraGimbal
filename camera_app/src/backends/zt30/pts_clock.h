@@ -50,7 +50,10 @@ public:
         if (!failed && !initialized && late) return false;
         if (failed || !initialized || (have_frame && pts<=last_frame_pts) ||
             !translate(pts,last_pts,last_us,mapped)) return fail();
-        if (mapped>receipt_us && mapped-receipt_us>2000) return fail();
+        // 2ms, plus the 1000ppm drift budget since the anchor: observations
+        // can be skipped for a while under load.
+        const uint64_t anchor_age=receipt_us>last_us?receipt_us-last_us:0;
+        if (mapped>receipt_us && mapped-receipt_us>2000+anchor_age/1000) return fail();
         if (mapped<=receipt_us && receipt_us-mapped>StaleUs) {
             if (!late || receipt_us-mapped>MaxLateUs) return fail();
             *late=true;

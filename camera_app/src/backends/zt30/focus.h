@@ -48,8 +48,9 @@ static inline bool ca_zt30_pack_focus_centre(const uint8_t *block,size_t size,
         const size_t stride=field==5?3:5;
         uint64_t sum=0;
         for(unsigned region:centre) {
+            // as the vendor does: only the low 32 bits of the third value
             uint64_t value=0;
-            for(size_t byte=0;byte<stride;byte++)
+            for(size_t byte=0;byte<widths[field];byte++)
                 value|=uint64_t(block[offsets[field]+region*stride+byte])<<(8*byte);
             sum+=value;
         }

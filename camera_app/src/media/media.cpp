@@ -550,8 +550,17 @@ int APC_Media::manual_focus(int direction)
 int APC_Media::set_focus_percent(float percent)
 { REQUIRE_IMPL; return _backend->set_focus_percent(percent); }
 bool APC_Media::thermal_range(struct ca_thermal_range *range)
-{ return _backend && _backend->thermal_range(range) &&
-         ca_thermal_range_fresh(range, ca_binlog_time_us()); }
+{
+#ifdef CAMERA_APP_ZT30_DEV
+    // measured at 5 Hz from a 15 fps module: allow for a missed frame
+    const uint64_t max_age_us = 2U * CA_THERMAL_MAX_AGE_US;
+#else
+    const uint64_t max_age_us = CA_THERMAL_MAX_AGE_US;
+#endif
+    if (!_backend || !_backend->thermal_range(range)) return false;
+    const uint64_t now = ca_binlog_time_us();
+    return range->sampled_us && now >= range->sampled_us && now - range->sampled_us <= max_age_us;
+}
 bool APC_Media::photo_available() const { return APCAM_HAVE_PHOTO && _backend && _backend->photo_available(); }
 int APC_Media::capture_photo(enum ca_photo_scope scope)
 {

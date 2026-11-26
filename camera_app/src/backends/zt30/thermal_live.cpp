@@ -181,7 +181,7 @@ void ThermalLive::capture() {
     errno=saved;fatal(call,status);
 }
 void ThermalLive::encode() {
-    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0,late_frames=0,range_scanned=0;
+    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0,late_frames=0,range_scanned=0,slow_samples=0;
     bool budget_reset=false,raw_error_logged=false;
     uint64_t clean_last=now(),record_pts=0,hevc_last=now();bool clean_frames=false,hevc_frames=false;
     EncodedFrame hevc{};hevc.data=hevc_encoded.get();hevc.capacity=4*1024*1024;
@@ -221,7 +221,8 @@ void ThermalLive::encode() {
                 ca_thermal_range measured{};
                 if(ca_thermal_range_from_kelvin64(radiometric.get(),640,512,&measured)) {
                     std::lock_guard<std::mutex> guard(range_lock);
-                    measured.frame_sequence=range.frame_sequence+1;measured.sampled_us=ca_binlog_time_us();
+                    // age counts from the frame's arrival, not from the end of the scan
+                    measured.frame_sequence=range.frame_sequence+1;measured.sampled_us=ca_binlog_time_us()-(now()-received)/1000;
                     range=measured;
                 }
             }
@@ -229,10 +230,17 @@ void ThermalLive::encode() {
             uint64_t pts=0;const auto before=now();const int rc=sdk.current_pts(0,&pts);const auto after=now();
             if(rc) { ca_log("ZT30 thermal degraded: GetCurPts raw=%d",rc);degraded.store(true);break; }
             if(after-before>2000000ULL) {
-                ca_log("ZT30 thermal dropping slow PTS sample bracket_ns=%llu",(unsigned long long)(after-before));
-            } else {
-                if(!clock.observe(pts,before,after) || !clean_clock.observe(pts,before,after) || (need_hevc && !hevc_clock.observe(pts,before,after))) { ca_log("ZT30 thermal degraded: SYS clock ordering/drift");degraded.store(true);break; }
-            if(!clock.healthy())continue; // no precise clock sample yet
+                // imprecise as a clock sample, still this frame's presentation time
+                if(!(slow_samples++%100))ca_log("ZT30 thermal slow PTS samples=%llu bracket_ns=%llu",(unsigned long long)slow_samples,(unsigned long long)(after-before));
+            } else if(!clock.observe(pts,before,after) || !clean_clock.observe(pts,before,after) || (need_hevc && !hevc_clock.observe(pts,before,after))) {
+                ca_log("ZT30 thermal degraded: SYS clock ordering/drift");degraded.store(true);break;
+            }
+            // no precise clock sample yet; bounded, as the encoders then starve
+            if(!clock.healthy()) {
+                if(now()-last>10000000000ULL) { ca_log("ZT30 thermal degraded: no precise SYS clock sample");degraded.store(true);break; }
+                continue;
+            }
+            {
             // Presentation uses SYS's sampled clock; USB receipt is not claimed
             // to be exposure time or a calibrated conversion of UVC timestamps.
             if(stop.load())break;

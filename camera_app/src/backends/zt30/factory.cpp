@@ -110,6 +110,7 @@ struct Context {
     ca_live_video_server *live=nullptr;
     PtsClock clock;
     uint64_t skipped_samples=0,late_frames=0;
+    unsigned unclocked_frames=0,focus_retry=0;
     uint8_t focus_stats[CA_ZT30_AF_STATS_BYTES]{};
     bool focus_failed=false,focus_logged=false;
     std::unique_ptr<ThermalFileTest> thermal_test;
@@ -139,20 +140,25 @@ struct Context {
     }
     // The lens MCU autofocuses on the zoom sensor's statistics, one set a frame.
     void sample_focus() {
-        if(!sdk.image.af_stats || focus_failed)return;
+        // after a failure try again each second: the zoom ISP may not be up yet
+        if(!sdk.image.af_stats || (focus_retry && --focus_retry))return;
         const int rc=sdk.image.af_stats(0,ZoomPath.isp_channel,focus_stats);
         if(rc || !ca_zt30_offer_focus(focus_stats,sizeof(focus_stats))) {
-            focus_failed=true;ca_log("ZT30 focus statistics unavailable raw=%d; lens autofocus has no feedback",rc);
+            focus_retry=30;
+            if(!focus_failed)ca_log("ZT30 focus statistics unavailable raw=%d; lens autofocus has no feedback",rc);
+            focus_failed=true;focus_logged=false;
         } else if(!focus_logged) {
-            focus_logged=true;ca_log("ZT30 focus statistics feeding the lens MCU");
+            focus_logged=true;focus_failed=false;ca_log("ZT30 focus statistics feeding the lens MCU");
         }
     }
     bool observe() {
         PtsObservation sample;
         const bool valid=observe_pts_clock(clock,[this](uint64_t *pts) { return sdk.current_pts(0,pts); },monotonic_ns,sample);
         if(sample.skipped && !(skipped_samples++%100))ca_log("ZT30 presentation clock slow PTS samples=%llu",(unsigned long long)skipped_samples);
-        // no precise sample yet: frames are dropped until there is one
-        if(!valid && sample.skipped && !clock.broken())return true;
+        // no precise sample yet: frames are dropped until there is one, for
+        // at most five seconds
+        if(!valid && sample.skipped && !clock.broken() && ++unclocked_frames<=150)return true;
+        if(valid)unclocked_frames=0;
         if(!valid)ca_log("ZT30 presentation clock failed: raw=%d bracket_ns=%llu pts=%llu attempts=%u",
             sample.status,(unsigned long long)sample.bracket_ns,(unsigned long long)sample.pts,sample.attempts);
         return valid;

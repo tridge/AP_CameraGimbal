@@ -86,6 +86,12 @@ int main() {
     assert(retried.frame(seed+5000,(ns+3050000)/1000+2000,out,&late) && !late);
     PtsClock too_late;assert(too_late.observe(seed,ns,ns));
     assert(!too_late.frame(seed-5000001,ns/1000,out,&late) && too_late.broken());
+    // Twenty seconds without a precise observation: the drift budget applies to
+    // the future-time check too, but not beyond it.
+    PtsClock aged;assert(aged.observe(seed,ns,ns));
+    assert(aged.frame(seed+20000000+20000,ns/1000+20000000,out,&late) && !aged.broken());
+    PtsClock stepped;assert(stepped.observe(seed,ns,ns));
+    assert(!stepped.frame(seed+20000000+22001,ns/1000+20000000,out,&late) && stepped.broken());
     // Before the first observation such a caller drops frames; nothing is broken.
     PtsClock waiting;
     assert(!waiting.frame(seed,ns/1000,out,&late) && !waiting.broken());
