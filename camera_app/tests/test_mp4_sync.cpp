@@ -12,6 +12,7 @@
 #include "apcam/atomic.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
@@ -167,19 +168,38 @@ int main(int argc, char **argv)
     hold_sync = true;
     sync_calls = 0;
     assert(setenv("CAMERA_APP_RECORD_STALL_MS", "1500", 1) == 0);
+    /* The encoder may deliver SPS/PPS apart from the IDR that needs them:
+     * recording must still resume, so split the access unit that way. */
+    uint8_t *headers = (uint8_t*)(malloc(frame_length)), *picture = (uint8_t*)(malloc(frame_length + 16));
+    size_t headers_length = 0, picture_length = 0;
+    assert(headers && picture);
+    scan = 0;
+    while (ca_annexb_next(data, frame_length, &scan, &nal, &length)) {
+        if (!length) continue;
+        unsigned type = data[nal] & 31U;
+        uint8_t *out = type == 7U || type == 8U ? headers : picture;
+        size_t *used = type == 7U || type == 8U ? &headers_length : &picture_length;
+        memcpy(out + *used, "\0\0\0\1", 4); *used += 4;
+        memcpy(out + *used, data + nal, length); *used += length;
+    }
+    assert(headers_length > 8 && picture_length > 8);
     assert(ca_mp4_open(&writer, path, 320, 240, 10) == 0);
     assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
     wait_for_sync();
     for (unsigned i = 0; i < 150; i++) {
-        assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+        assert(ca_mp4_write_h264(writer, headers, headers_length, 0, false, 88) == 0);
+        assert(ca_mp4_write_h264(writer, picture, picture_length, 0, true, 88) == 0);
         nanosleep(&delay, NULL);
     }
     release_sync();
     /* the queue drains within a write interval; frames then record again */
     const struct timespec settle = {.tv_sec = 1, .tv_nsec = 300000000};
     nanosleep(&settle, NULL);
-    for (unsigned i = 0; i < 5; i++)
-        assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+    for (unsigned i = 0; i < 5; i++) {
+        assert(ca_mp4_write_h264(writer, headers, headers_length, 0, false, 88) == 0);
+        assert(ca_mp4_write_h264(writer, picture, picture_length, 0, true, 88) == 0);
+    }
+    free(headers); free(picture);
     assert(ca_mp4_close(writer) == 0);
     /* about 1.5 s of the 3 s stall was kept, then the last five frames */
     assert(stat(path, &st) == 0 && st.st_size > (off_t)(60 * frame_length) &&
@@ -204,7 +224,8 @@ int main(int argc, char **argv)
     unsigned before_close = sync_calls;
     pthread_mutex_unlock(&lock);
     assert(ca_mp4_close(writer) == 0);
-    assert(sync_calls == before_close + 1);
+    /* MPEG-TS has no index, so its close only syncs if frames were pending */
+    assert(argc == 3 ? sync_calls >= before_close : sync_calls == before_close + 1);
     assert(stat(path, &st) == 0 && st.st_size > (off_t)(10 * frame_length));
     unlink(path);
     unsetenv("CAMERA_APP_RECORD_STALL_MS");

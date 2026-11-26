@@ -306,7 +306,6 @@ static int open_recording(ca_thermal_stream *s)
         return -1;
     }
     ++s->record_generation;
-    s->record_failed = 0;
     s->record_open = true;
     s->record_stalled = false;
     s->record_start = mono_us();
@@ -328,6 +327,7 @@ int ca_thermal_stream_recording(ca_thermal_stream *s, bool active, const char *v
     }
     if (s->recording) return 0;
     if (!video_path || !*video_path) { errno = EINVAL; return -1; }
+    s->record_failed = 0;
     s->video_path = video_path;
     if (s->record_fps && open_recording(s) < 0) return -1;
     s->recording = true;
@@ -490,6 +490,7 @@ static void *thermal_worker(void *opaque)
         if (encoded_sequence != sequence && !s->codec.encode(pixels.data(),(capture-epoch)/1000,encoded)) {
             ca_log("thermal FFV1 encoding failed"); enabled=false;
             std::lock_guard<std::mutex> guard(s->record_lock);
+            if (s->record_fd >= 0) s->record_failed=EIO;
             (void)close_recording(s);
             break;
         }
@@ -518,9 +519,14 @@ static void *thermal_worker(void *opaque)
                 }
                 Bytes data;
                 if (!stalled) data=thermal_mkv::frame(encoded,json.c_str(),(capture-s->record_epoch)/1000);
-                if (!stalled && s->record_out->append(data.data(),data.size()) == 0) s->record_out->commit();
-                if (s->record_out->error() != 0) {
-                    errno=s->record_out->error();
+                int failed=0;
+                if (!stalled) {
+                    if (s->record_out->append(data.data(),data.size()) == 0) s->record_out->commit();
+                    else failed=errno;
+                }
+                if (!failed) failed=s->record_out->error();
+                if (failed) {
+                    errno=failed;
                     // remembered: the stop that follows must not report success
                     s->record_failed=errno;
                     ca_log("raw thermal recording write failed: %s",strerror(errno));
