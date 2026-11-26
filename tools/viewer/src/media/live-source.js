@@ -1,4 +1,6 @@
 /** A SupportProxy live stream as a source: the LocalSource surface plus connection state. */
+import { transportPayload } from './containers.js';
+
 export const MAX_BACKLOG = 64 * 1024 * 1024;
 const RETRY_MS = [500, 1000, 2000, 5000];
 
@@ -27,10 +29,10 @@ export function parseLiveUrl(text, base = globalThis.location?.href) {
   return { url };
 }
 
-/** Name for the recording: live-HOST-PORT-YYYYMMDDTHHMMSSZ.mkv */
-export function liveName(url, started) {
+/** Name for the recording: live-HOST-PORT-YYYYMMDDTHHMMSSZ.mkv, or .ts for MPEG-TS video */
+export function liveName(url, started, format = 'matroska') {
   const stamp = new Date(started).toISOString().replace(/[-:]|\.\d+/g, '');
-  return `live-${url.hostname}${url.port ? '-' + url.port : ''}-${stamp}.mkv`;
+  return `live-${url.hostname}${url.port ? '-' + url.port : ''}-${stamp}.${format === 'mpegts' ? 'ts' : 'mkv'}`;
 }
 
 export class LiveSource {
@@ -103,6 +105,11 @@ export class LiveSource {
         this.selectedTrackId = data.tracks[0]?.id;
       }
       this.frames.push(...data.frames);
+      if (data.progress.format !== this.format) {
+        // known from the first bytes: raw thermal Matroska, or H.264/HEVC in MPEG-TS
+        this.format = data.progress.format;
+        this.name = liveName(this.url, this.started, this.format);
+      }
       this.size = data.progress.bytes;
       this.epochs = data.progress.epochs;
       // frames of a connection that has since closed do not make this one live
@@ -239,15 +246,22 @@ export class LiveSource {
   }
   async readPacket(frame, { signal } = {}) {
     signal?.throwIfAborted();
-    const { bytes } = await this.request({ type: 'read', offset: frame.offset, size: frame.size });
+    // an MPEG-TS frame is spread over the transport packets of its span
+    const t = frame.transport,
+      offset = t ? t.packetStart : frame.offset,
+      size = t ? t.packetEnd - t.packetStart : frame.size;
+    const { bytes } = await this.request({ type: 'read', offset, size });
     signal?.throwIfAborted();
     if (this.closed) throw new DOMException('Source closed', 'AbortError');
-    return bytes;
+    return t ? transportPayload(bytes, offset, frame) : bytes;
   }
   /** The recording so far as a File with the frame index's offsets. */
   async snapshot() {
     const { parts } = await this.request({ type: 'snapshot' });
-    return new File(parts, this.name, { type: 'video/x-matroska', lastModified: this.started });
+    return new File(parts, this.name, {
+      type: this.format === 'mpegts' ? 'video/mp2t' : 'video/x-matroska',
+      lastModified: this.started,
+    });
   }
   /** Stops receiving; frames and packets stay available until close(). */
   async end() {

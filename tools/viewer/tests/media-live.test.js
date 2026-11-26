@@ -301,3 +301,140 @@ test('live addresses: wss only from https, and never a password in the address',
     'live-proxy.example-40003-20261126T010203Z.mkv',
   );
 });
+
+// ---- live MPEG-TS video ----
+const tsHelpers = await import('./helpers/ts-stream.js');
+const { TsLiveRecorder, retimePacket } = await import('../src/media/mpegts-live.js');
+const { transportPayload } = await import('../src/media/containers.js');
+const TICKS = 9000; // 10 fps
+
+function tsRecorder() {
+  const clock = { now: 1e6 };
+  const store = new LiveStore({ segmentBytes: 4096 });
+  return { store, clock, rec: new TsLiveRecorder({ store, now: () => clock.now }) };
+}
+// frames [from, to) at their own times, as one connection delivers them after the tables
+function tsRun(from, to, { start = 0, counter = { value: 0 } } = {}) {
+  const parts = [tsHelpers.tsTables()];
+  for (let n = from; n < to; n++)
+    parts.push(tsHelpers.tsFrame(n, start + (n - from) * TICKS, counter));
+  return tsHelpers.join(...parts);
+}
+async function feedAll(rec, bytes, clock, step = 1000) {
+  const out = { frames: [] };
+  for (let at = 0; at < bytes.length; at += step) {
+    await rec.feed(bytes.slice(at, at + step), out);
+    if (clock) clock.now += 20;
+  }
+  return out;
+}
+
+test('live MPEG-TS: frames are indexed whatever the chunking, and the stored stream reopens', async () => {
+  const bytes = tsRun(0, 12);
+  let reference = null;
+  for (const step of [1, 7, 188, 189, 1000, bytes.length]) {
+    const { rec, store } = tsRecorder(),
+      out = await feedAll(rec, bytes, null, step);
+    // the last access unit is unfinished and the two before it wait, as in a file
+    assert.equal(out.frames.length, 9, `step ${step}`);
+    assert.deepEqual(
+      out.frames.map((f) => f.id),
+      [...Array(9).keys()],
+    );
+    assert.equal(out.tracks[0].codec, 'avc');
+    assert.ok(out.frames.every((f, i) => Math.abs(f.pts - i * 0.1) < 1e-9 && f.decodable));
+    assert.deepEqual(
+      out.frames.map((f) => f.keyframe),
+      [...Array(9).keys()].map((i) => i % 5 === 0),
+    );
+    const stored = await saved(store);
+    reference ??= stored;
+    assert.deepEqual(stored, reference);
+    // the coded bytes of a frame come back from its packet span
+    const f = out.frames[6],
+      span = stored.subarray(f.transport.packetStart, f.transport.packetEnd);
+    assert.deepEqual(transportPayload(span, f.transport.packetStart, f), tsHelpers.accessUnit(6));
+  }
+  const reopened = await indexFile(reference);
+  assert.equal(reopened.frames.length, 12);
+  assert.equal(reopened.warnings.length, 0);
+});
+
+test('live MPEG-TS: a rejoin at a keyframe already held repeats nothing and keeps the group decodable', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 };
+  // frames 0..8, the connection ends part way through frame 8
+  const first = tsRun(0, 9, { counter }),
+    out = await feedAll(rec, first.subarray(0, first.length - 188), clock);
+  clock.now += 300;
+  rec.beginConnection();
+  // the relay starts the viewer again at keyframe 5 and carries on to frame 14
+  const again = tsHelpers.join(
+    tsHelpers.tsTables(),
+    ...[...Array(10).keys()].map((i) => tsHelpers.tsFrame(5 + i, (5 + i) * TICKS, counter)),
+  );
+  await feedAll(rec, again, clock, 500);
+  await rec.feed(new Uint8Array(0), out);
+  const all = [...out.frames];
+  for (const f of (await feedAll(rec, tsHelpers.tsFrame(15, 15 * TICKS, counter), clock)).frames)
+    all.push(f);
+  void store;
+  const { rec: whole } = tsRecorder(),
+    expected = await feedAll(whole, tsRun(0, 16), null);
+  // no frame twice, none missing, one epoch
+  assert.equal(rec.epoch, 0);
+  assert.equal(rec.frames, expected.frames.length);
+  const reopened = await indexFile(await saved(store));
+  assert.deepEqual(
+    reopened.frames.map((f) => Math.round(f.pts * 10)),
+    [...Array(16).keys()],
+  );
+});
+
+test('live MPEG-TS: a publisher that restarts its clock continues the timeline in a new epoch', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    out = await feedAll(rec, tsRun(0, 10), clock);
+  clock.now += 2500;
+  rec.beginConnection();
+  // a restarted camera: its clock starts again
+  const later = await feedAll(rec, tsRun(0, 10, { start: 4500 }), clock);
+  assert.equal(rec.epoch >= 1, true);
+  const reopened = await indexFile(await saved(store));
+  const pts = reopened.frames.map((f) => f.pts);
+  assert.ok(
+    pts.every((t, i) => i === 0 || t > pts[i - 1]),
+    'stored timestamps keep increasing',
+  );
+  // the gap is about the time the stream was away, not the publisher's clock
+  const gap = Math.max(...pts.slice(1).map((t, i) => t - pts[i]));
+  assert.ok(gap > 2 && gap < 4, `gap ${gap}`);
+  // frames held when the stream went away keep their state; the new epoch starts at a keyframe
+  assert.ok(out.frames.every((f) => f.decodable));
+  assert.deepEqual(
+    later.frames.map((f) => [f.epoch, f.decodable]),
+    [...Array(2).fill([0, true]), ...Array(later.frames.length - 2).fill([1, true])],
+  );
+});
+
+test('live MPEG-TS: retimePacket moves PES timestamps; a Matroska stream on this recorder is terminal', async () => {
+  const counter = { value: 0 },
+    packets = tsHelpers.tsFrame(0, 1000, counter);
+  retimePacket(packets.subarray(0, 188), 9000);
+  const { rec } = tsRecorder(),
+    out = await feedAll(
+      rec,
+      tsHelpers.join(
+        tsHelpers.tsTables(),
+        packets,
+        tsHelpers.tsFrame(1, 19000, counter),
+        tsHelpers.tsFrame(2, 28000, counter),
+        tsHelpers.tsFrame(3, 37000, counter),
+      ),
+      null,
+    );
+  assert.equal(Math.round(out.frames[0].pts * 90000), 10000);
+  await assert.rejects(
+    () => new TsLiveRecorder({ store: new LiveStore({}) }).feed(headBytes()),
+    (e) => e instanceof LiveError && e.terminal,
+  );
+});

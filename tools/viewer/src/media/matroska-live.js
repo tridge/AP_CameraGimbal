@@ -159,7 +159,7 @@ export class MatroskaLiveDemuxer {
       if (!this.stage && at < bytes.length && bytes[at] === 0x47)
         throw new LiveError(
           'mpegts',
-          'This port carries MPEG-TS video, not a raw thermal Matroska stream.',
+          'The stream changed from raw thermal to MPEG-TS video; open it again.',
           true,
         );
       const h = elementHeader(bytes, at);

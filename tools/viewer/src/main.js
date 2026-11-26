@@ -737,6 +737,11 @@ async function openVideo(file, sourceUrl = null, live = null) {
       if (live) {
         // live frames arrive in presentation order with id equal to index: nothing moves
         live.bytes = batch.progress.bytes;
+        if (file.name !== state.source.name) {
+          // the kind of stream, and so the recording's name, is known from its first bytes
+          file.name = state.source.name;
+          $('source-name').textContent = file.name;
+        }
         if (!state.dirtyPose && !poseTimeline.extend(batch.frames)) state.dirtyPose = true;
       } else {
         state.frames.sort((a, b) => a.pts - b.pts || a.id - b.id);

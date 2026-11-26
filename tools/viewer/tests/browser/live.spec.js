@@ -314,34 +314,9 @@ test('a refused connection is reported as observed and a password can be entered
   expect(await page.evaluate(() => window.fireViewer.state.live.started)).toBe(session);
 });
 
-test('an MPEG-TS port and a bad address are explained', async ({ page }) => {
-  const ts = http.createServer(),
-    open = [];
-  ts.on('upgrade', (req, socket) => {
-    const accept = crypto
-      .createHash('sha1')
-      .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-      .digest('base64');
-    socket.write(
-      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
-        `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-    );
-    socket.on('error', () => {});
-    socket.write(frame(Buffer.alloc(188 * 4, 0x47)));
-    open.push(socket);
-  });
-  await new Promise((resolve) => ts.listen(0, '127.0.0.1', resolve));
-  try {
-    await page.goto(`./?live=${encodeURIComponent(`ws://127.0.0.1:${ts.address().port}/`)}`);
-    await expect(page.locator('#error-text')).toContainText('MPEG-TS');
-    await page.waitForFunction(() => window.fireViewer.state.indexed);
-    await page.goto(`./?live=${encodeURIComponent('ftp://example.org/')}`);
-    await expect(page.locator('#error-text')).toContainText('wss://');
-  } finally {
-    for (const socket of open) socket.destroy();
-    ts.closeAllConnections();
-    await new Promise((resolve) => ts.close(resolve));
-  }
+test('a bad address is explained', async ({ page }) => {
+  await page.goto(`./?live=${encodeURIComponent('ftp://example.org/')}`);
+  await expect(page.locator('#error-text')).toContainText('wss://');
 });
 
 test.describe('with the shipped CSP', () => {

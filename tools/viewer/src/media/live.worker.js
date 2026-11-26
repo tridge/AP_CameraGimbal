@@ -1,5 +1,6 @@
 // Stores and indexes a live stream. The page owns the socket and posts its bytes here.
 import { LiveRecorder } from './matroska-live.js';
+import { TsLiveRecorder } from './mpegts-live.js';
 import { LiveStore } from './live-store.js';
 
 const DIRECTORY = 'live-streams',
@@ -66,13 +67,18 @@ async function segmentWriter(session) {
 
 function flush() {
   timer = null;
-  if (!pending.frames.length && !pending.tracks) return;
+  if (!recorder || (!pending.frames.length && !pending.tracks)) return;
   self.postMessage({
     type: 'batch',
     frames: pending.frames,
     tracks: pending.tracks,
     connection: pending.connection,
-    progress: { live: true, bytes: store.size, epochs: recorder.epoch + 1 },
+    progress: {
+      live: true,
+      bytes: store.size,
+      epochs: recorder.epoch + 1,
+      format: recorder.format || 'matroska',
+    },
   });
   pending = { frames: [], tracks: null, connection: pending.connection };
 }
@@ -80,6 +86,13 @@ function flush() {
 async function data(own, buffer) {
   try {
     if (failed || own !== current || own === dead) return;
+    if (!recorder) {
+      // the first byte tells the two stream kinds apart: MPEG-TS sync, or the EBML header
+      const first = new Uint8Array(buffer, 0, Math.min(1, buffer.byteLength))[0];
+      if (first === undefined) return;
+      recorder = first === 0x47 ? new TsLiveRecorder({ store }) : new LiveRecorder({ store });
+      recorder.beginConnection();
+    }
     // what was stored before a failure part way through a message is still published
     const out = { frames: [] };
     try {
@@ -111,14 +124,13 @@ self.onmessage = ({ data: message }) => {
     queue = queue.then(async () => {
       const writeSegment = await segmentWriter(message.session);
       store = new LiveStore({ writeSegment });
-      recorder = new LiveRecorder({ store });
       self.postMessage({ type: 'opened', persistent: !!writeSegment });
     });
   } else if (message.type === 'connect') {
     const id = (latest = message.connection);
     queue = queue.then(() => {
       current = id;
-      recorder.beginConnection();
+      recorder?.beginConnection();
     });
   } else if (message.type === 'data') {
     const id = latest;
