@@ -130,6 +130,7 @@ public:
         LOAD(get_metering,"MI_ISP_AE_GetWinWgtType");LOAD(set_metering,"MI_ISP_AE_SetWinWgtType");
         LOAD(query,"MI_ISP_AE_QueryExposureInfo");
 #undef LOAD
+        image.af_stats=reinterpret_cast<IspAttribute>(dlsym(handle,"MI_ISP_CUS3A_GetAFStats"));
         return true;
     }
     bool resolve_rgn() {

@@ -46,4 +46,29 @@ int main()
     // A callback region must select its own fields, not always use region0.
     assert(ca_zt30_pack_focus_callback(block.data(),448,0,output,27));
     for(unsigned i=0;i<27;i++)assert(output[i]==0);
+    // Centre payload: sums of regions 5, 6, 9 and 10, saturating per field.
+    {
+        std::array<uint8_t,448> grid{};
+        const size_t offsets[]={0,80,160,240,320,400};
+        for(unsigned field=0;field<6;field++) {
+            const size_t stride=field==5?3:5;
+            for(unsigned region=0;region<16;region++)
+                grid[offsets[field]+region*stride]=(uint8_t)(region+field); // low byte only
+        }
+        uint8_t centre[27];
+        assert(ca_zt30_pack_focus_centre(grid.data(),grid.size(),centre,sizeof(centre)));
+        const size_t at[]={0,5,10,14,19,24};
+        for(unsigned field=0;field<6;field++)assert(centre[at[field]]==5+6+9+10+4*field && centre[at[field]+1]==0);
+        // the 32-bit third field saturates when the 40-bit sum does not fit
+        for(unsigned region:{5U,6U,9U,10U})memset(grid.data()+160+region*5,0xff,4);
+        assert(ca_zt30_pack_focus_centre(grid.data(),grid.size(),centre,sizeof(centre)));
+        for(unsigned byte=0;byte<4;byte++)assert(centre[10+byte]==0xff);
+        assert(!ca_zt30_pack_focus_centre(grid.data(),447,centre,sizeof(centre)));
+        assert(!ca_zt30_pack_focus_centre(grid.data(),448,centre,26));
+        // offered statistics are taken once
+        uint8_t taken[27];
+        assert(!ca_zt30_take_focus(taken));
+        assert(ca_zt30_offer_focus(grid.data(),grid.size()) && ca_zt30_take_focus(taken));
+        assert(memcmp(taken,centre,27)==0 && !ca_zt30_take_focus(taken));
+    }
 }
