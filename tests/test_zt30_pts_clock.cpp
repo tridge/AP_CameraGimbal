@@ -90,6 +90,10 @@ int main() {
     // the future-time check too, but not beyond it.
     PtsClock aged;assert(aged.observe(seed,ns,ns));
     assert(aged.frame(seed+20000000+20000,ns/1000+20000000,out,&late) && !aged.broken());
+    // ...and a precise observation after that must not break the next frame.
+    assert(aged.observe(seed+20000000+20000+33333,ns+20000000000+33333000,ns+20000000000+33333000));
+    uint64_t previous_out=out;
+    assert(aged.frame(seed+20000000+20000+33334,ns/1000+20000000+33334,out,&late) && out>previous_out && !aged.broken());
     PtsClock stepped;assert(stepped.observe(seed,ns,ns));
     assert(!stepped.frame(seed+20000000+22001,ns/1000+20000000,out,&late) && stepped.broken());
     // Before the first observation such a caller drops frames; nothing is broken.
