@@ -470,10 +470,9 @@ public:
         context->external_main=main_width!=1280 || main_height!=720 || context->settings.main_codec!=CA_VIDEO_H264;
         ca_video_resolution_size(context->settings.sub_resolution,&main_width,&main_height);
         context->external_sub=main_width!=1280 || main_height!=720 || context->settings.sub_codec!=CA_VIDEO_H264;
-        // The setting is for the stream published as video1: the built-in
-        // encoder, or the separate one when another format is selected.
-        const unsigned main_bps=context->settings.main_bitrate_kbps*1000U;
-        if(!context->external_main)main_bitrate=main_bps;
+        // The setting is the RGB stream bitrate: every RGB stream encoder
+        // uses it, as any of them can feed video1 or video2.
+        main_bitrate=context->settings.main_bitrate_kbps*1000U;
         const int rc=initialize(h,context->buffer.get(),4U*1024*1024,source,MediaRun::Continuous,31);
         if(rc)return rc;
         if(ca_raw_thermal_open(&context->raw_photo,context->capture_root.c_str()))
@@ -521,7 +520,7 @@ public:
             ca_video_resolution_size(context->settings.sub_resolution,&width,&height);
             context->sub_output.reset(new(std::nothrow) VideoOutput(context->sdk,context->memory));
             const auto codec=context->settings.sub_codec==CA_VIDEO_H265?EncoderCodec::H265:EncoderCodec::H264;
-            if(!context->sub_output || context->sub_output->start(source,4,4,codec,width,height,1570000,Context::sub_frame,context.get()))return EIO;
+            if(!context->sub_output || context->sub_output->start(source,4,4,codec,width,height,context->settings.main_bitrate_kbps*1000U,Context::sub_frame,context.get()))return EIO;
         }
         ca_video_resolution_size(context->settings.recording_resolution,&width,&height);
         context->recordings.configure(context->record_root.c_str(),width,height,context->raw_stream);
