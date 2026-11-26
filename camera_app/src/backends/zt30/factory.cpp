@@ -16,6 +16,7 @@
 #include "media_graph.h"
 #include "mi/native_sdk.h"
 #include "pts_clock.h"
+#include "focus.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/video_metadata.h"
@@ -109,6 +110,8 @@ struct Context {
     ca_live_video_server *live=nullptr;
     PtsClock clock;
     uint64_t skipped_samples=0,late_frames=0;
+    uint8_t focus_stats[CA_ZT30_AF_STATS_BYTES]{};
+    bool focus_failed=false,focus_logged=false;
     std::unique_ptr<ThermalFileTest> thermal_test;
     std::unique_ptr<ThermalLive> thermal_live;
     std::unique_ptr<PhotoOwner> photos;
@@ -133,6 +136,16 @@ struct Context {
         struct stat st{};
         return owner_lock>=0 && !fstat(owner_lock,&st) && S_ISREG(st.st_mode) &&
             !st.st_uid && st.st_nlink==1 && !(st.st_mode&0022) && !flock(owner_lock,LOCK_EX|LOCK_NB);
+    }
+    // The lens MCU autofocuses on the zoom sensor's statistics, one set a frame.
+    void sample_focus() {
+        if(!sdk.image.af_stats || focus_failed)return;
+        const int rc=sdk.image.af_stats(0,ZoomPath.isp_channel,focus_stats);
+        if(rc || !ca_zt30_offer_focus(focus_stats,sizeof(focus_stats))) {
+            focus_failed=true;ca_log("ZT30 focus statistics unavailable raw=%d; lens autofocus has no feedback",rc);
+        } else if(!focus_logged) {
+            focus_logged=true;ca_log("ZT30 focus statistics feeding the lens MCU");
+        }
     }
     bool observe() {
         PtsObservation sample;
@@ -212,6 +225,7 @@ struct Context {
         if(!c.clock.frame(f.pts[0],monotonic_ns()/1000,mapped,&late))return c.clock.broken()?false:true;
         if(late && !(c.late_frames++%100))ca_log("ZT30 video late frames=%llu",(unsigned long long)c.late_frames);
         (void)after;
+        c.sample_focus();
         for(unsigned i=1;i<f.packets;i++)if(f.pts[i]!=f.pts[0])return false;
         size_t offset=0,nal=0,length=0;bool key=false;
         while(ca_annexb_next(f.data,f.bytes,&offset,&nal,&length))

@@ -31,5 +31,6 @@ struct ImageApi {
     IspAttribute get_limit=nullptr,set_limit=nullptr;
     IspAttribute get_metering=nullptr,set_metering=nullptr;
     IspAttribute query=nullptr;
+    IspAttribute af_stats=nullptr; // optional; MI_ISP_CUS3A_GetAFStats, 0x1c00 bytes
 };
 }

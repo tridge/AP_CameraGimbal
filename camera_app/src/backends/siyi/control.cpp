@@ -45,6 +45,7 @@
 
 #ifdef CAMERA_APP_ZT30_DEV
 #include "../zt30/zoom_feedback.h"
+#include "../zt30/focus.h"
 #include "../zt30/zoom_control.h"
 #endif
 
@@ -1348,6 +1349,10 @@ void ca_backend_periodic(struct ca_backend *backend)
                 ca_log("ZT30 gimbal stop write failed; retrying: %s",strerror(errno));
             }
         }
+    }
+    {
+        uint8_t focus[CA_ZT30_AF_PAYLOAD_BYTES];
+        if (ca_zt30_take_focus(focus)) (void)send_link(backend,A8_LINK_FLAG_PLAIN,0x02,focus,sizeof(focus));
     }
     (void)ca_backend_request_gimbal_attitude(backend);
     if (!backend->zoom_query_ms || now-backend->zoom_query_ms>=(ca_zt30::optical_zoom().active()?80U:1000U)) {
