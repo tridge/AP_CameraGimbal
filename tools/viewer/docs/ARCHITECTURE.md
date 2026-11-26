@@ -42,8 +42,12 @@ it to a dedicated single-thread FFmpeg worker. Only one output frame is retained
 the full recording never enters WASM memory. Both return either original gray16
 samples or display RGBA with an explicit kind, dimensions and source frame ID.
 
-`LiveSource` is the second adapter, for a raw thermal stream relayed by
-SupportProxy. The page owns the WebSocket, so the page's CSP governs it, and
+`LiveSource` is the second adapter, for a stream relayed by SupportProxy: raw
+thermal Matroska, or H.264/HEVC in MPEG-TS, told apart by the first byte. For
+MPEG-TS `TsLiveRecorder` (`mpegts-live.js`) stores the packets and indexes them
+with `createTsDemuxer`, the packet-driven core that file indexing also uses; a
+frame's coded bytes are rebuilt from its packet span when the decoder asks.
+What follows describes raw thermal. The page owns the WebSocket, so the page's CSP governs it, and
 transfers each message to `live.worker.js`. There `MatroskaLiveDemuxer` frames
 the prefix and complete Clusters (a partial Cluster is dropped with its
 connection), `LiveRecorder` turns connections into one recording, and
