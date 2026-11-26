@@ -181,7 +181,7 @@ void ThermalLive::capture() {
     errno=saved;fatal(call,status);
 }
 void ThermalLive::encode() {
-    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0,late_frames=0;
+    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0,late_frames=0,range_scanned=0;
     bool budget_reset=false,raw_error_logged=false;
     uint64_t clean_last=now(),record_pts=0,hevc_last=now();bool clean_frames=false,hevc_frames=false;
     EncodedFrame hevc{};hevc.data=hevc_encoded.get();hevc.capacity=4*1024*1024;
@@ -215,7 +215,9 @@ void ThermalLive::encode() {
                 if(error && !raw_error_logged)ca_log("ZT30 raw TCP publish failed errno=%d; repeats suppressed",errno);
                 raw_error_logged=error;
             }
-            {
+            // 5Hz is enough for CAMERA_THERMAL_RANGE; the scan is not free
+            if(now()-range_scanned>=190000000ULL) {
+                range_scanned=now();
                 ca_thermal_range measured{};
                 if(ca_thermal_range_from_kelvin64(radiometric.get(),640,512,&measured)) {
                     std::lock_guard<std::mutex> guard(range_lock);
