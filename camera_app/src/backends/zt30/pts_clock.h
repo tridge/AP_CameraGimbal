@@ -60,9 +60,11 @@ public:
         }
         // After a run of skipped observations a fresh anchor can map the next
         // frame slightly earlier than the last one; keep the output ordered.
+        // Advance by the source interval so distinct pictures keep distinct
+        // times at 90kHz.
         if (have_frame && mapped<=last_frame_us) {
             if (!late) return fail();
-            mapped=last_frame_us+1;
+            mapped=last_frame_us+(pts-last_frame_pts);
         }
         last_frame_pts=pts;last_frame_us=mapped;have_frame=true;
         mapped_us=mapped;

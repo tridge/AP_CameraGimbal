@@ -94,6 +94,13 @@ int main() {
     assert(aged.observe(seed+20000000+20000+33333,ns+20000000000+33333000,ns+20000000000+33333000));
     uint64_t previous_out=out;
     assert(aged.frame(seed+20000000+20000+33334,ns/1000+20000000+33334,out,&late) && out>previous_out && !aged.broken());
+    // After 100 s ahead by the full drift budget, a fresh anchor maps the next
+    // frame earlier than the last: it advances by the source interval.
+    PtsClock drifted;assert(drifted.observe(seed,ns,ns));
+    assert(drifted.frame(seed+100100000,ns/1000+100000000,out,&late));
+    previous_out=out;
+    assert(drifted.observe(seed+100100000+33333,ns+100033333000ULL,ns+100033333000ULL));
+    assert(drifted.frame(seed+100100000+33334,ns/1000+100033334,out,&late) && out==previous_out+33334 && !drifted.broken());
     PtsClock stepped;assert(stepped.observe(seed,ns,ns));
     assert(!stepped.frame(seed+20000000+22001,ns/1000+20000000,out,&late) && stepped.broken());
     // Before the first observation such a caller drops frames; nothing is broken.
