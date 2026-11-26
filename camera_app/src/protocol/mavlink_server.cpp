@@ -1078,7 +1078,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
 {
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
-#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+#if defined(CAMERA_APP_ZT30_RAM)
     info.bitrate=1570000U;
 #else
     info.bitrate = main_bitrate_bps(server);
@@ -1094,7 +1094,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
 #ifdef CAMERA_APP_ZT30_DEV
-    info.bitrate=thermal?1000000U:1570000U;
+    info.bitrate=thermal?1000000U:(stream_id==1U?main_bitrate_bps(server):1570000U);
 #endif
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
@@ -1180,7 +1180,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.framerate = ca_media_frame_rate(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U);
 #ifdef CAMERA_APP_ZT30_DEV
-    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:1570000U;
+    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:(stream_id==1U?main_bitrate_bps(server):1570000U);
 #endif
     status.resolution_h = (uint16_t)width;
     status.resolution_v = (uint16_t)height;

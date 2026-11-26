@@ -138,6 +138,12 @@
 #ifdef CAMERA_APP_ZT30_DEV
 #undef APCAM_HAVE_SSH_KEYS
 #define APCAM_HAVE_SSH_KEYS 1
+/* Main stream bitrate; applies after an app restart. The default is the
+ * rate the native build has always used. */
+#define APCAM_HAVE_VIDEO_BITRATE 1
+#define APCAM_DEFAULT_MAIN_BITRATE_KBPS 1570
+#define APCAM_MAIN_BITRATE_MIN_KBPS 500
+#define APCAM_MAIN_BITRATE_MAX_KBPS 12000
 #define APCAM_HAVE_THERMAL_VIDEO 1
 #define APCAM_HAVE_THERMAL_PALETTE 1
 #endif

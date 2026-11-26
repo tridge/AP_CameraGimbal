@@ -5,7 +5,8 @@ Parameters page and MAVLink camera definition. The Video group includes
 brightness, contrast, saturation, exposure compensation, ISO, shutter, metering
 and white balance. Image controls apply to both RGB sensors without restarting.
 
-Main and secondary RGB resolution/codec, recording resolution, network addresses
+Main and secondary RGB resolution/codec, the main stream bitrate
+(`[stream.main] bitrate_kbps`, 500 to 12000, default 1570), recording resolution, network addresses
 and SupportProxy connection settings apply after restarting the application.
 RGB formats run from 720p to 2160p, using H.264 or H.265. The wide sensor remains
 2560×1440; choosing a larger output scales that image. Browser RGB video uses an
