@@ -46,6 +46,7 @@ struct ca_mp4_file {
     int fd;
     ca_card_writer *out;   /* all appends go to the card through this */
     bool dropping;         /* the card stalled; skipping until the next IDR */
+    bool dropped_headers;  /* a skipped frame carried SPS or PPS */
     unsigned dropped;
     MP4E_mux_t *mux;
     mp4_h26x_writer_t h264;
@@ -106,19 +107,6 @@ static void put64(uint8_t *p, uint64_t v)
 {
     put32(p, (uint32_t)(v >> 32));
     put32(p + 4, (uint32_t)v);
-}
-
-static int pwrite_all(int fd, const void *buffer, size_t size, uint64_t at)
-{
-    const uint8_t *data = (const uint8_t*)(buffer);
-    size_t done = 0;
-    while (done < size) {
-        ssize_t written = pwrite(fd, data + done, size - done, (off_t)(at + done));
-        if (written > 0) done += (size_t)written;
-        else if (written < 0 && errno == EINTR) continue;
-        else return -1;
-    }
-    return 0;
 }
 
 /* Remember where the version 0 duration fields of the moov live. */
@@ -190,7 +178,7 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
     } else if (end > writer->bytes) {
         errno = EINVAL;
         return 1;
-    } else if (writer->out->flush() < 0 || pwrite_all(writer->fd, data, size, at) < 0) {
+    } else if (writer->out->patch(at, data, size) < 0) {
         return 1;
     }
     if (size >= 8 && !memcmp(data + 4, "moof", 4) && writer->pending_key) {
@@ -220,7 +208,6 @@ static int write_at(int64_t offset, const void *buffer, size_t size, void *opaqu
 static int write_index(struct ca_mp4_file *writer)
 {
     if (!writer->shift || writer->index_failed || writer->keyframe_count == 0) return 0;
-    if (writer->out->flush() < 0) return -1;
     size_t max_refs = (CA_MP4_INDEX_RESERVE - 8U - CA_MP4_SIDX_HEADER) / CA_MP4_SIDX_ENTRY;
     size_t stride = (writer->keyframe_count + max_refs - 1) / max_refs;
     size_t count = (writer->keyframe_count + stride - 1) / stride;
@@ -250,9 +237,8 @@ static int write_index(struct ca_mp4_file *writer)
     uint8_t padding[8];
     put32(padding, (uint32_t)(CA_MP4_INDEX_RESERVE - sidx_size));
     memcpy(padding + 4, "free", 4);
-    int result = pwrite_all(writer->fd, box, sidx_size,
-                            writer->index_at + CA_MP4_INDEX_RESERVE - sidx_size);
-    if (result == 0) result = pwrite_all(writer->fd, padding, sizeof(padding), writer->index_at);
+    int result = writer->out->patch(writer->index_at + CA_MP4_INDEX_RESERVE - sidx_size, box, sidx_size);
+    if (result == 0) result = writer->out->patch(writer->index_at, padding, sizeof(padding));
     free(box);
     if (result < 0) return -1;
     uint64_t media = writer->next_pts90k;
@@ -261,12 +247,12 @@ static int write_index(struct ca_mp4_file *writer)
     uint8_t value[4];
     if (writer->mdhd_at && media <= UINT32_MAX) {
         put32(value, (uint32_t)media);
-        if (pwrite_all(writer->fd, value, 4, writer->mdhd_at + 24) < 0) return -1;
+        if (writer->out->patch(writer->mdhd_at + 24, value, 4) < 0) return -1;
     }
     if (movie <= UINT32_MAX) {
         put32(value, (uint32_t)movie);
-        if (writer->mvhd_at && pwrite_all(writer->fd, value, 4, writer->mvhd_at + 24) < 0) return -1;
-        if (writer->tkhd_at && pwrite_all(writer->fd, value, 4, writer->tkhd_at + 28) < 0) return -1;
+        if (writer->mvhd_at && writer->out->patch(writer->mvhd_at + 24, value, 4) < 0) return -1;
+        if (writer->tkhd_at && writer->out->patch(writer->tkhd_at + 28, value, 4) < 0) return -1;
     }
     return 0;
 }
@@ -321,8 +307,10 @@ static int file_open(struct ca_mp4_file **result, const char *path,
     }
     /* Tests shorten the time a stalled card is tolerated before frames drop. */
     const char *stall = getenv("CAMERA_APP_RECORD_STALL_MS");
-    if (stall && *stall >= '1' && *stall <= '9')
-        writer->out->set_stall_us(strtoull(stall, NULL, 10) * 1000U);
+    if (stall && *stall >= '1' && *stall <= '9') {
+        unsigned long long ms = strtoull(stall, NULL, 10);
+        if (ms >= 1000U && ms < ca_card_writer::STALL_US / 1000U) writer->out->set_stall_us(ms * 1000U);
+    }
 #ifdef __APPLE__
     writer->hard_limit = !strcmp(fs.f_fstypename, "msdos") ? CA_FAT_MAX_BYTES : INT64_MAX;
 #else
@@ -475,16 +463,24 @@ static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *anne
     return 1;
 }
 
-static bool has_idr(const uint8_t *annex_b, size_t length)
+/* bit 0: IDR slice, bit 1: SPS, bit 2: PPS */
+static unsigned nal_kinds(const uint8_t *annex_b, size_t length)
 {
     size_t offset = 0U, nal, nal_length;
-    while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length))
-        if (nal_length != 0U && (annex_b[nal] & 31U) == 5U) return true;
-    return false;
+    unsigned kinds = 0;
+    while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length)) {
+        if (nal_length == 0U) continue;
+        unsigned type = annex_b[nal] & 31U;
+        if (type == 5U) kinds |= 1U;
+        else if (type == 7U) kinds |= 2U;
+        else if (type == 8U) kinds |= 4U;
+    }
+    return kinds;
 }
 
 /* Never blocks on the card. If the card stalls for long enough, whole frames
- * are dropped and the recording picks up again at an IDR. */
+ * are dropped and the recording picks up again at an IDR. If parameter sets
+ * were among the dropped frames, that IDR must carry its own. */
 static int file_write_h264(struct ca_mp4_file *writer, const uint8_t *annex_b,
                       size_t length, uint64_t pts, bool key_frame, float hfov_deg)
 {
@@ -495,9 +491,14 @@ static int file_write_h264(struct ca_mp4_file *writer, const uint8_t *annex_b,
     if (stalled || writer->dropping) {
         if (!writer->dropping) {
             writer->dropping = true;
+            writer->dropped_headers = false;
             fprintf(stderr, "recording: card is not keeping up, dropping frames\n");
         }
-        if (stalled || !has_idr(annex_b, length)) {
+        unsigned kinds = nal_kinds(annex_b, length);
+        bool resume = !stalled && (kinds & 1U) != 0U &&
+                      (!writer->dropped_headers || (kinds & 6U) == 6U);
+        if (!resume) {
+            if ((kinds & 6U) != 0U) writer->dropped_headers = true;
             writer->dropped++;
             /* MPEG-TS keeps real time across the gap; MP4 samples stay contiguous */
             if (writer->format == CA_VIDEO_TELEMETRY_MISB) writer->next_pts90k += writer->frame_duration;
@@ -661,7 +662,11 @@ int ca_mp4_write_h264(struct ca_mp4 *writer, const uint8_t *annex_b,
     if (writer->roll_bytes) {
         bool idr;
         if (cache_headers(writer, annex_b, length, &idr) < 0) goto fail;
-        if (idr && writer->file->bytes >= writer->roll_bytes && retired == 0) {
+        /* a failed file ends the recording here; a stalled card defers the
+         * new file, whose creation would wait for the card in this thread */
+        if ((errno = writer->file->out->error()) != 0) goto fail;
+        if (idr && writer->file->bytes >= writer->roll_bytes && retired == 0 &&
+            !writer->file->out->stalled()) {
             if (roll_file(writer) < 0) goto fail;
         }
     }
