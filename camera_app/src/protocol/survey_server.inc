@@ -269,7 +269,8 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     if(ca_media_survey_poll(s->media,result)) {
         v.pending=false;
         if(!result.error) { ++v.captured; ++s->image_count; if(!result.request.settled) ++v.unsettled; }
-        else { ++v.skipped; ca_log("Survey image %d failed: %s",result.request.index,strerror(result.error)); }
+        else { ++v.skipped; ca_log("Survey image %d failed: %s (settled=%d window=%lldms)",result.request.index,strerror(result.error),
+            int(result.request.settled),(long long)(result.request.deadline_ms-result.request.eligible_ms)); }
         survey_capture_notice(s,result);
         if(result.error && result.error!=ECANCELED && result.error!=ETIMEDOUT)
             survey_pause(s,"survey paused: capture/storage failure");
