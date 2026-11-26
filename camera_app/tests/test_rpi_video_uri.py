@@ -150,7 +150,7 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 output, _ = process.communicate()
-        assert "Video 1 URI must be blank or an rtsp:// or rtsps:// URI" in output, output
+        assert "A video URI must be blank or an rtsp://, rtsps://, http:// or https:// URI" in output, output
     print("PASS RPi video 1 URI: configured, live reload, invalid kept previous, automatic;\n"
           "     a changed UART device override needs a restart")
 
