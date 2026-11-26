@@ -290,6 +290,12 @@ static int read_config(struct ca_config *config, FILE *file,
         errno = EINVAL;
         goto fail;
     }
+    /* stream 3 is advertised as Matroska over HTTP, never RTSP */
+    if (parsed.video3_uri[0] && strncmp(parsed.video3_uri, "http://", 7) && strncmp(parsed.video3_uri, "https://", 8)) {
+        snprintf(error, error_size, "The raw thermal video URI must be blank or an http:// or https:// URI");
+        errno = EINVAL;
+        goto fail;
+    }
     if (!apcam_uart_device_override_valid(parsed.uart_device_override)) {
         snprintf(error, error_size, "Gimbal link must be blank, a /dev serial device, udp://IPv4:PORT or tcp://IPv4:PORT");
         errno = EINVAL;

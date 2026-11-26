@@ -2585,6 +2585,9 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         (void)ca_config_param_assign(&next,i,float(ca_config_param_get(&desired,i)));
     memcpy(next.timezone,desired.timezone,sizeof(next.timezone));
     next.vpn=desired.vpn;
+    memcpy(next.video1_uri,desired.video1_uri,sizeof(next.video1_uri));
+    memcpy(next.video2_uri,desired.video2_uri,sizeof(next.video2_uri));
+    memcpy(next.video3_uri,desired.video3_uri,sizeof(next.video3_uri));
     if(apply_runtime_config(server,&next)<0) {
         snprintf(error,sizeof(error),"Could not apply saved settings: %s",strerror(errno));
         config_status(server,hash,"error",error);return;
