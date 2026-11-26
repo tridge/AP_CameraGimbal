@@ -74,6 +74,7 @@
 #define A8_SUB_ATTITUDE 0x50U
 #define A8_MOUNT_QUERY_INTERVAL_MS 1000U
 #define A8_INVERTED_PITCH_THRESHOLD 900
+#define A8_INVERTED_PITCH_CACHED_THRESHOLD 1350
 #define A8_LINK_HEADER 11U
 #define A8_LINK_OVERHEAD (A8_LINK_HEADER + 2U)
 #define A8_LINK_MAX_PAYLOAD 255U
@@ -440,6 +441,12 @@ static const char *mounting_cache_path()
 // A failed write is retried from ca_backend_periodic().
 static void remember_mounting_direction(struct ca_backend *backend, uint8_t direction)
 {
+    // the save syncs to flash: not while a rate command awaits its timed stop
+    if (backend->rate_stop_ms) {
+        backend->mounting_cache_pending = direction;
+        backend->mounting_cache_retry_ms = monotonic_ms();
+        return;
+    }
     backend->mounting_cache_pending =
         ca_mounting_cache_save(mounting_cache_path(), direction) ? 0U : direction;
     backend->mounting_cache_retry_ms = monotonic_ms();
@@ -501,10 +508,13 @@ static void update_attitude(struct ca_backend *backend, const uint8_t *values,
      * inverted, level camera is represented near +/-180 degrees.  That makes
      * an out-of-range raw pitch an unambiguous inverted-mount indication. */
     // a cached direction is the MCU's last report, not this session's
+    // Overriding a cached direction needs a clear margin: a gimbal at nadir can
+    // read a little past -90, while an inverted level camera reads near +/-180.
+    const int16_t inverted_pitch = backend->mounting_direction_cached ?
+        A8_INVERTED_PITCH_CACHED_THRESHOLD : A8_INVERTED_PITCH_THRESHOLD;
     if (backend->orientation == CA_MOUNT_AUTO && !backend->mounting_unsupported &&
         (!backend->mounting_direction_known || backend->mounting_direction_cached) &&
-        (v[1] < -A8_INVERTED_PITCH_THRESHOLD ||
-         v[1] > A8_INVERTED_PITCH_THRESHOLD)) {
+        (v[1] < -inverted_pitch || v[1] > inverted_pitch)) {
         int16_t raw_pitch = v[1];
         backend->mounting_direction_cached = false;
 #ifdef CAMERA_APP_ZT30_DEV
@@ -1372,6 +1382,7 @@ void ca_backend_periodic(struct ca_backend *backend)
 #endif
 #ifdef CAMERA_APP_ZT30_DEV
     if (backend && backend->mounting_cache_pending &&
+        !backend->rate_stop_ms &&
         monotonic_ms() - backend->mounting_cache_retry_ms >= 1000U)
         remember_mounting_direction(backend, backend->mounting_cache_pending);
 #endif
