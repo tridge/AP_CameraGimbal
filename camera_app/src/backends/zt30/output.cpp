@@ -44,9 +44,14 @@ void VideoOutput::consume() {
         if(got) {
             PtsObservation sample;
             bool valid=observe_pts_clock(clock,[this](uint64_t *pts){return sdk.current_pts(0,pts);},now,sample);
-            uint64_t mapped=0;
-            valid=valid && frame.packets && clock.frame(frame.pts[0],now()/1000,mapped);
+            uint64_t mapped=0;bool late=false;
+            // no precise clock sample yet: drop the frame, do not fail
+            const bool unclocked=!valid && sample.skipped && !clock.broken();
+            valid=valid && frame.packets && clock.frame(frame.pts[0],now()/1000,mapped,&late);
             for(unsigned i=1;i<frame.packets;i++)if(frame.pts[i]!=frame.pts[0])valid=false;
+            if(sample.skipped && !(skipped_samples++%100))ca_log("ZT30 auxiliary video port=%u slow PTS samples=%llu",port,(unsigned long long)skipped_samples);
+            if(late && !(late_frames++%100))ca_log("ZT30 auxiliary video port=%u late frames=%llu",port,(unsigned long long)late_frames);
+            if(unclocked) { last=now();continue; }
             size_t offset=0,nal=0,length=0;bool key=false;
             while(ca_annexb_next(frame.data,frame.bytes,&offset,&nal,&length))if(length) {
                 unsigned type=codec==EncoderCodec::H264 ? frame.data[nal]&31 : (frame.data[nal]>>1)&63;

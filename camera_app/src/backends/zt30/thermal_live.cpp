@@ -181,7 +181,7 @@ void ThermalLive::capture() {
     errno=saved;fatal(call,status);
 }
 void ThermalLive::encode() {
-    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0;
+    uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0,late_frames=0;
     bool budget_reset=false,raw_error_logged=false;
     uint64_t clean_last=now(),record_pts=0,hevc_last=now();bool clean_frames=false,hevc_frames=false;
     EncodedFrame hevc{};hevc.data=hevc_encoded.get();hevc.capacity=4*1024*1024;
@@ -230,6 +230,7 @@ void ThermalLive::encode() {
                 ca_log("ZT30 thermal dropping slow PTS sample bracket_ns=%llu",(unsigned long long)(after-before));
             } else {
                 if(!clock.observe(pts,before,after) || !clean_clock.observe(pts,before,after) || (need_hevc && !hevc_clock.observe(pts,before,after))) { ca_log("ZT30 thermal degraded: SYS clock ordering/drift");degraded.store(true);break; }
+            if(!clock.healthy())continue; // no precise clock sample yet
             // Presentation uses SYS's sampled clock; USB receipt is not claimed
             // to be exposure time or a calibrated conversion of UVC timestamps.
             if(stop.load())break;
@@ -271,7 +272,8 @@ void ThermalLive::encode() {
         }
         const int got=encoder.copy_frame(f);if(got<0)encoder_fatal(encoder.failure()?encoder.failure():"copy frame",encoder.status());
         if(got) {
-            uint64_t mapped=0;bool valid=f.packets && clock.frame(f.pts[0],now()/1000,mapped);
+            uint64_t mapped=0;bool late=false;bool valid=f.packets && clock.frame(f.pts[0],now()/1000,mapped,&late);
+            if(late && !(late_frames++%100))ca_log("ZT30 thermal late frames=%llu",(unsigned long long)late_frames);
             for(unsigned i=1;i<f.packets;++i)if(f.pts[i]!=f.pts[0])valid=false;
             if(!valid) { ca_log("ZT30 thermal degraded: frame/packet PTS");degraded.store(true);break; }
             size_t offset=0,nal=0,length=0;bool key=false;
@@ -293,7 +295,8 @@ void ThermalLive::encode() {
         const int clean_got=clean_encoder.copy_frame(clean);
         if(clean_got<0)encoder_fatal("clean thermal frame",clean_encoder.status());
         if(clean_got) {
-            uint64_t mapped=0;bool valid=clean.packets && clean_clock.frame(clean.pts[0],now()/1000,mapped);
+            uint64_t mapped=0;bool late=false;bool valid=clean.packets && clean_clock.frame(clean.pts[0],now()/1000,mapped,&late);
+            if(late && !(late_frames++%100))ca_log("ZT30 thermal late frames=%llu",(unsigned long long)late_frames);
             for(unsigned i=1;i<clean.packets;i++)if(clean.pts[i]!=clean.pts[0])valid=false;
             if(!valid) { degraded.store(true);break; }
             size_t offset=0,nal=0,length=0;bool key=false;
@@ -304,7 +307,8 @@ void ThermalLive::encode() {
         if(need_hevc) {
             const int got_hevc=hevc_encoder.copy_frame(hevc);if(got_hevc<0)encoder_fatal("thermal HEVC frame",hevc_encoder.status());
             if(got_hevc) {
-                uint64_t mapped=0;bool valid=hevc.packets && hevc_clock.frame(hevc.pts[0],now()/1000,mapped);
+                uint64_t mapped=0;bool late=false;bool valid=hevc.packets && hevc_clock.frame(hevc.pts[0],now()/1000,mapped,&late);
+            if(late && !(late_frames++%100))ca_log("ZT30 thermal late frames=%llu",(unsigned long long)late_frames);
                 for(unsigned i=1;i<hevc.packets;i++)if(hevc.pts[i]!=hevc.pts[0])valid=false;
                 if(!valid) { degraded.store(true);break; }
                 size_t offset=0,nal=0,length=0;bool key=false;

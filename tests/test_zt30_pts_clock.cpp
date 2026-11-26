@@ -75,6 +75,20 @@ int main() {
     assert(!ca_zt30::observe_pts_clock(busy,[&](uint64_t *pts) { *pts=seed;reads++;return 0; },
         [&]() { return ns+(ticks++)*3000000; },observation));
     assert(reads==3 && observation.attempts==3 && !busy.healthy());
+    // With a clock already running, three slow samples are skipped, not fatal.
+    reads=ticks=0;
+    assert(ca_zt30::observe_pts_clock(retried,[&](uint64_t *pts) { *pts=seed;reads++;return 0; },
+        [&]() { return ns+4000000+(ticks++)*3000000; },observation));
+    assert(reads==3 && observation.skipped && retried.healthy());
+    // A late frame keeps its mapped time when the caller tolerates lateness.
+    bool late=false;
+    assert(retried.frame(seed+4000,(ns+3050000)/1000+600000,out,&late) && late && out==(ns+3025000)/1000+1000);
+    assert(retried.frame(seed+5000,(ns+3050000)/1000+2000,out,&late) && !late);
+    PtsClock too_late;assert(too_late.observe(seed,ns,ns));
+    assert(!too_late.frame(seed-5000001,ns/1000,out,&late) && too_late.broken());
+    // Before the first observation such a caller drops frames; nothing is broken.
+    PtsClock waiting;
+    assert(!waiting.frame(seed,ns/1000,out,&late) && !waiting.broken());
     reads=ticks=0;
     assert(!ca_zt30::observe_pts_clock(retried,[&](uint64_t *pts) { *pts=0;reads++;return 0; },
         [&]() { return ns+10000000+(ticks++)*1000; },observation));

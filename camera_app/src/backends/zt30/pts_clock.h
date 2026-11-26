@@ -6,6 +6,8 @@ namespace ca_zt30 {
  * greater than INT64_MAX. Subtract integer origins before any conversion.
  * Observations bracket GetCurPts; they do not turn receipt time into capture
  * time. This single-use clock fails closed on resets; restart the pipeline.
+ * Scheduling delay is not a reset: a slow sample is skipped and a late frame
+ * keeps its mapped time.
  * Calls must not overlap. Initialization before pthread_create and subsequent
  * use by the sole worker until pthread_join satisfy this requirement.
  * Mapping qualifies the SDK presentation clock, not sensor exposure timing.
@@ -37,19 +39,29 @@ public:
         last_pts=pts;last_us=middle_us;
         return true;
     }
-    bool frame(uint64_t pts, uint64_t receipt_us, uint64_t &mapped_us) {
+    // Without late, a frame over 500ms old fails the clock (a photo must be
+    // fresh). With late, it is flagged and accepted up to MaxLateUs. Before
+    // the first observation the result is false but the clock is not broken.
+    static constexpr uint64_t StaleUs=500000,MaxLateUs=5000000;
+    bool frame(uint64_t pts, uint64_t receipt_us, uint64_t &mapped_us, bool *late=nullptr) {
         mapped_us=0;
+        if (late) *late=false;
         uint64_t mapped=0;
+        if (!failed && !initialized && late) return false;
         if (failed || !initialized || (have_frame && pts<=last_frame_pts) ||
             !translate(pts,last_pts,last_us,mapped)) return fail();
-        if ((mapped>receipt_us && mapped-receipt_us>2000) ||
-            (mapped<=receipt_us && receipt_us-mapped>500000)) return fail();
+        if (mapped>receipt_us && mapped-receipt_us>2000) return fail();
+        if (mapped<=receipt_us && receipt_us-mapped>StaleUs) {
+            if (!late || receipt_us-mapped>MaxLateUs) return fail();
+            *late=true;
+        }
         if (have_frame && mapped<=last_frame_us) return fail();
         last_frame_pts=pts;last_frame_us=mapped;have_frame=true;
         mapped_us=mapped;
         return true;
     }
     bool healthy() const { return initialized && !failed; }
+    bool broken() const { return failed; }
 private:
     // Frame mapping uses the latest qualified observation so allowed clock
     // drift cannot accumulate into a false future/stale-frame failure. Keep
@@ -75,10 +87,12 @@ struct PtsObservation {
     uint64_t pts=0,bracket_ns=0;
     int status=0;
     unsigned attempts=0;
+    bool skipped=false;
 };
 // Scheduling delay makes an observation imprecise, not evidence of a clock
 // reset. Retry a bounded number of samples before passing a precise one to the
-// clock. Never retry an SDK error, reversed time, reset or drift failure.
+// clock; if none is precise, skip this observation and keep the last one.
+// Never retry an SDK error, reversed time, reset or drift failure.
 template<typename Read,typename Now>
 bool observe_pts_clock(PtsClock &clock,Read read,Now now,PtsObservation &sample) {
     for(unsigned i=0;i<3;i++) {
@@ -88,6 +102,7 @@ bool observe_pts_clock(PtsClock &clock,Read read,Now now,PtsObservation &sample)
         if(!sample.status && after>=before && sample.bracket_ns>2000000ULL)continue;
         return !sample.status && clock.observe(sample.pts,before,after);
     }
-    return false;
+    sample.skipped=true;
+    return clock.healthy();
 }
 } // namespace ca_zt30

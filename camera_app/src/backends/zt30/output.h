@@ -34,5 +34,6 @@ private:
     Frame callback=nullptr;
     void *opaque=nullptr;
     PtsClock clock;
+    uint64_t skipped_samples=0,late_frames=0;
 };
 }
