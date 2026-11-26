@@ -3,6 +3,7 @@
 #endif
 #include "camera_app/directories.h"
 #include "camera_app/still.h"
+#include "camera_app/card_writer.h"
 
 #include "camera_app/metadata.h"
 
@@ -111,7 +112,8 @@ int ca_still_write_jpeg(const char *root, char suffix,
         write_all(fd, segments, segments_length) == 0 &&
         write_all(fd, jpeg + 2U, jpeg_length - 2U) == 0) {
         const struct timespec times[2] = {*captured_at, *captured_at};
-        if (futimens(fd, times) == 0 && fsync(fd) == 0 && close(fd) == 0) {
+        if (futimens(fd, times) == 0) {
+            ca_sync_later(fd);
             fd = -1;
             if (rename(temporary, path) == 0) result = 0;
         }

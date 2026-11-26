@@ -530,19 +530,28 @@ the hard FAT limit still applies. For short FAT bench tests only,
 `make -C camera_app recording-test` for decoded segment/telemetry tests and sparse
 tests at the real 4 GiB boundary.
 
-Each recording has a background worker which requests `fdatasync` after the
-first frame and waits at least one second after each completed flush before
-syncing further data. Requests coalesce into a single dirty flag, so slow
-syncs do not create a backlog. The worker never holds the frame-write or
-download-snapshot locks while syncing. It also syncs the parent directory
-once to persist the new filename. Normal close waits for the worker's final
-flush and reports any asynchronous I/O error.
+Frames are never written to the card by the thread that produces them. Each
+recording file has a background writer (`camera_app/card_writer.h`): frames
+are queued in memory and the writer puts them on the card in chunks of at
+least 1 MiB, or once a second if less has arrived. It calls `fdatasync` after
+the first data, then waits five seconds after each completed sync before the
+next, and syncs the parent directory once to persist the new filename. It
+holds the download-snapshot lock only while writing whole frames. Normal
+close waits for the queue to be written and synced and reports any
+asynchronous I/O error.
 
-Frame processing does not wait for the sync worker, but writes still share
-the card's bandwidth and can block under kernel dirty-page pressure. The
-one-second interval is not a maximum loss window: slow flushes, SD-card
-hardware caches and filesystem damage from a physical power cut can still
-affect what reaches storage.
+If the card stalls so that queued data is more than five seconds old (or the
+queue passes 64 MiB), whole frames are dropped and the recording resumes at
+the next IDR; the app log reports the start of the gap and the number of
+frames lost. The raw thermal recording uses the same writer and drops whole
+frames in the same way. Photos and survey images are written at once, and
+their `fsync` is done by a background thread in batches every five seconds.
+
+So an app crash can lose about the last second of video, and a power cut can
+lose the last five to ten seconds of video and leave the newest photos
+incomplete. These are not hard limits: slow syncs, SD-card hardware caches
+and filesystem damage from a physical power cut can still affect what reaches
+storage.
 
 Telemetry remains in every frame's SEI, including FOV, position and attitude.
 New recordings omit the duplicate `mett` JSON track: VLC 3's fragmented MP4
