@@ -524,7 +524,10 @@ function syncLive() {
   }
   if (source.persistent === false) parts.push('kept in memory (no browser file storage)');
   $('live-status').textContent = parts.join(' · ');
-  if (now) status(parts.join(' · '));
+  // the footer is shared with other feedback: only a change of connection state goes there
+  const connection = now ? `${source.state}|${source.detail || ''}` : '';
+  if (now && connection !== syncLive.connection) status(parts.join(' · '));
+  syncLive.connection = connection;
   videoIndexSummary();
 }
 setInterval(() => {
