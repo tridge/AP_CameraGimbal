@@ -108,6 +108,7 @@ struct Context {
     ca_rtsp *rtsp=nullptr;
     ca_live_video_server *live=nullptr;
     PtsClock clock;
+    uint64_t skipped_samples=0,late_frames=0;
     std::unique_ptr<ThermalFileTest> thermal_test;
     std::unique_ptr<ThermalLive> thermal_live;
     std::unique_ptr<PhotoOwner> photos;
@@ -136,6 +137,9 @@ struct Context {
     bool observe() {
         PtsObservation sample;
         const bool valid=observe_pts_clock(clock,[this](uint64_t *pts) { return sdk.current_pts(0,pts); },monotonic_ns,sample);
+        if(sample.skipped && !(skipped_samples++%100))ca_log("ZT30 presentation clock slow PTS samples=%llu",(unsigned long long)skipped_samples);
+        // no precise sample yet: frames are dropped until there is one
+        if(!valid && sample.skipped && !clock.broken())return true;
         if(!valid)ca_log("ZT30 presentation clock failed: raw=%d bracket_ns=%llu pts=%llu attempts=%u",
             sample.status,(unsigned long long)sample.bracket_ns,(unsigned long long)sample.pts,sample.attempts);
         return valid;
@@ -203,9 +207,10 @@ struct Context {
     static bool frame(void *opaque,const EncodedFrame &f,uint64_t,uint64_t after) {
         auto &c=*static_cast<Context*>(opaque);
         if(!c.observe() || !f.packets)return false;
-        uint64_t mapped=0;
+        uint64_t mapped=0;bool late=false;
         // Use receipt after the clock sample, not the earlier stream-copy call.
-        if(!c.clock.frame(f.pts[0],monotonic_ns()/1000,mapped))return false;
+        if(!c.clock.frame(f.pts[0],monotonic_ns()/1000,mapped,&late))return c.clock.broken()?false:true;
+        if(late && !(c.late_frames++%100))ca_log("ZT30 video late frames=%llu",(unsigned long long)c.late_frames);
         (void)after;
         for(unsigned i=1;i<f.packets;i++)if(f.pts[i]!=f.pts[0])return false;
         size_t offset=0,nal=0,length=0;bool key=false;
