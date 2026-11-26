@@ -88,7 +88,13 @@ def publish(url, password, data, prefix, clusters, speed, tick_ms):
             f'PUT {target} HTTP/1.1\r\nHost: {host}:{port}\r\n'
             'Content-Type: video/x-matroska\r\nTransfer-Encoding: chunked\r\n'
             'Expect: 100-continue\r\n\r\n').encode())
-        reply = sock.recv(1024)
+        # the reply can arrive in more than one segment
+        reply = b''
+        while b'\r\n\r\n' not in reply and len(reply) < 4096:
+            more = sock.recv(1024)
+            if not more:
+                break
+            reply += more
         if not reply.startswith(b'HTTP/1.1 100'):
             raise ConnectionError('publish refused: ' + reply.split(b'\r\n')[0].decode(errors='replace'))
         sock.settimeout(30)
