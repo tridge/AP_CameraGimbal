@@ -74,7 +74,7 @@
 #define A8_SUB_ATTITUDE 0x50U
 #define A8_MOUNT_QUERY_INTERVAL_MS 1000U
 #define A8_INVERTED_PITCH_THRESHOLD 900
-#define A8_INVERTED_PITCH_CACHED_THRESHOLD 1350
+#define A8_INVERTED_PITCH_MARGIN_THRESHOLD 1350
 #define A8_LINK_HEADER 11U
 #define A8_LINK_OVERHEAD (A8_LINK_HEADER + 2U)
 #define A8_LINK_MAX_PAYLOAD 255U
@@ -508,10 +508,15 @@ static void update_attitude(struct ca_backend *backend, const uint8_t *values,
      * inverted, level camera is represented near +/-180 degrees.  That makes
      * an out-of-range raw pitch an unambiguous inverted-mount indication. */
     // a cached direction is the MCU's last report, not this session's
-    // Overriding a cached direction needs a clear margin: a gimbal at nadir can
-    // read a little past -90, while an inverted level camera reads near +/-180.
+    // A ZT30 at nadir can read a little past -90, while an inverted level
+    // camera reads near +/-180. It needs a clear margin, with a cached
+    // direction or none: the inference is stored, and inverted is refused.
+#ifdef CAMERA_APP_ZT30_DEV
+    const int16_t inverted_pitch = A8_INVERTED_PITCH_MARGIN_THRESHOLD;
+#else
     const int16_t inverted_pitch = backend->mounting_direction_cached ?
-        A8_INVERTED_PITCH_CACHED_THRESHOLD : A8_INVERTED_PITCH_THRESHOLD;
+        A8_INVERTED_PITCH_MARGIN_THRESHOLD : A8_INVERTED_PITCH_THRESHOLD;
+#endif
     if (backend->orientation == CA_MOUNT_AUTO && !backend->mounting_unsupported &&
         (!backend->mounting_direction_known || backend->mounting_direction_cached) &&
         (v[1] < -inverted_pitch || v[1] > inverted_pitch)) {
