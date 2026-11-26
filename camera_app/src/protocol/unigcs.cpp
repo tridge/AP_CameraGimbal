@@ -268,7 +268,7 @@ static void encoder(ca_unigcs *s,uint8_t id,uint8_t *out)
     put16(out+2,width); put16(out+4,height);
     put16(out+6,width>=3840 || height>=2160 ? 12000 : width>=1920 || height>=1080 ? 4096 : 2048);
 #ifdef CAMERA_APP_ZT30_DEV
-    put16(out+6,id==0?12000:thermal?1000:1570);
+    put16(out+6,id==0?12000:thermal?1000:cfg.main_bitrate_kbps);
 #endif
     out[8]=ca_media_frame_rate(s->media,thermal);
 }

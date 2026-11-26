@@ -55,6 +55,8 @@ telemetry = misb
 # rtsp://CAMERA:8554/video1
 resolution = 1280x720
 codec = h264
+# RGB stream kbps, 500-12000; applies after restarting camera-app. Parameter VIDEO_MAIN_KBPS.
+bitrate_kbps = 1570
 # extra RTSP path for the same stream; the vendor firmware serves main.264
 alias = ""
 

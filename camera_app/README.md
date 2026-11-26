@@ -1007,8 +1007,9 @@ video3_uri = http://support.example.org:40003/v3.mkv
 
 A URI is `rtsp://`, `rtsps://`, `http://` or `https://`, is sent as written,
 and applies without a restart; blank restores the automatic address. The
-MISB and APCG telemetry variants of streams 1 and 2 keep the camera's own
-address. A viewer password in a URI (`?pw=`) is sent to every ground station.
+override applies to streams 1 and 2 in whichever telemetry format is
+selected, including the default MISB one; only the extra compatibility
+streams keep the camera's own address. A viewer password in a URI (`?pw=`) is sent to every ground station.
 
 Camera stream-information requests received through the proxy advertise the
 configured stream names and proxy HTTP viewer URLs (`/v1.ts`, `/v2.ts`, and
