@@ -800,6 +800,16 @@ static constexpr Translations translations = [] {
 #endif
 #if APCAM_HAVE_VIDEO_BITRATE
     result[S_P_MAIN_BITRATE] = {"Main RTSP bitrate (kbps)", "主 RTSP 流码率 (kbps)", "メイン RTSP ビットレート (kbps)"};
+#ifdef CAMERA_APP_ZT30_DEV
+    /* the native ZT30 sets the RGB stream only, at start-up; recordings keep their own rate */
+    result[S_H_MAIN_BITRATE] = {
+        "Bitrate in kbps for the RGB video stream, " APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "–" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "; default " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) ". Recordings are not affected. Applies after restarting the camera app.",
+        "RGB 视频流的码率 (kbps)，" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "–" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "，默认 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。不影响录像。重启相机应用后生效。",
+        "RGB 映像ストリームのビットレート (kbps)、" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "～" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "、既定値 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。録画には影響しません。カメラアプリの再起動後に適用されます。"};
+#else
     result[S_H_MAIN_BITRATE] = {
         "Bitrate in kbps for the RTSP stream and recordings, " APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "–" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
             "; default " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "." MAIN_BITRATE_AUTO_EN " Applies immediately, without a restart.",
@@ -807,6 +817,7 @@ static constexpr Translations translations = [] {
             "，默认 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。" MAIN_BITRATE_AUTO_ZH "立即生效，无需重启。",
         "RTSP 配信と録画のビットレート (kbps)、" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "～" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
             "、初期値 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。" MAIN_BITRATE_AUTO_JA "再起動なしで即時反映されます。"};
+#endif
 #endif
 #if APCAM_HAVE_VIDEO_FRAME_RATE
     result[S_P_MAIN_FPS] = {"Main RTSP frame rate (fps)", "主 RTSP 流帧率 (fps)", "メイン RTSP フレームレート (fps)"};

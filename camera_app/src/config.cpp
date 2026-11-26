@@ -547,7 +547,8 @@ int ca_config_param_save(struct ca_config *config, const char *path,
 #else
 #define PHOTO_FIELDS(X)
 #endif
-#if APCAM_HAVE_VIDEO_BITRATE
+/* the native ZT30 applies its bitrate at start-up only */
+#if APCAM_HAVE_VIDEO_BITRATE && !defined(CAMERA_APP_ZT30_DEV)
 #define ENCODER_FIELDS(X) X(main_bitrate_kbps)
 #else
 #define ENCODER_FIELDS(X)

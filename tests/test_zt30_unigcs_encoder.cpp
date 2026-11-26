@@ -9,13 +9,14 @@ unsigned ca_media_frame_rate(const ca_media *,bool thermal) { return thermal?15:
 void ca_video_resolution_size(ca_video_resolution,unsigned *w,unsigned *h) { *w=1280;*h=720; }
 int main() {
     ca_unigcs server{};uint8_t out[9]{};
+    settings.main_bitrate_kbps=3000; // the RGB stream reports its configured rate
     for(bool thermal : {false,true}) {
         thermal_primary=thermal;
         for(unsigned id=0;id<3;id++) {
             encoder(&server,id,out);
             const bool thermal_encoder=id && ((id==1)==thermal);
             const unsigned bitrate=unsigned(out[6])|(unsigned(out[7])<<8);
-            assert(bitrate==(id==0?12000:thermal_encoder?1000:1570));
+            assert(bitrate==(id==0?12000:thermal_encoder?1000:3000));
             assert(out[8]==(thermal_encoder?15:30));
         }
     }

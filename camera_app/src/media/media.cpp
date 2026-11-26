@@ -296,7 +296,8 @@ int APC_Media::configure(const struct ca_config *settings)
     // Keep live image/raw controls independent from restart-only formats.
     if (old.main_resolution!=settings->main_resolution || old.main_codec!=settings->main_codec ||
         old.sub_resolution!=settings->sub_resolution || old.sub_codec!=settings->sub_codec ||
-        old.recording_resolution!=settings->recording_resolution) {
+        old.recording_resolution!=settings->recording_resolution ||
+        old.main_bitrate_kbps!=settings->main_bitrate_kbps) {
         errno=ENOTSUP;return -1;
     }
     if (_backend->apply_overlay(settings)<0) { (void)_backend->apply_overlay(&old);return -1; }

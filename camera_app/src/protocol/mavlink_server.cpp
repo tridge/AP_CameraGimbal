@@ -1094,7 +1094,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
 #ifdef CAMERA_APP_ZT30_DEV
-    info.bitrate=thermal?1000000U:(stream_id==1U?main_bitrate_bps(server):1570000U);
+    info.bitrate=thermal?1000000U:main_bitrate_bps(server); // the RGB encoder, whichever stream carries it
 #endif
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
@@ -1152,6 +1152,8 @@ static void send_stream_information(struct ca_mavlink_server *server,
         }
         if (server->settings.video3_uri[0]) {
             snprintf(uri, sizeof(uri), "%s", server->settings.video3_uri);
+            // an RTSP relay of the stream is not Matroska over HTTP
+            if (!strncmp(uri, "rtsp", 4)) info.type = VIDEO_STREAM_TYPE_RTSP;
             if (ca_thermal_stream_available() && ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
         }
         put_text(info.uri,sizeof(info.uri),uri);
@@ -1180,7 +1182,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.framerate = ca_media_frame_rate(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U);
 #ifdef CAMERA_APP_ZT30_DEV
-    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:(stream_id==1U?main_bitrate_bps(server):1570000U);
+    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:main_bitrate_bps(server);
 #endif
     status.resolution_h = (uint16_t)width;
     status.resolution_v = (uint16_t)height;
@@ -1192,8 +1194,9 @@ static void send_stream_status(struct ca_mavlink_server *server,
         status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,true));
         status.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
             (ca_thermal_stream_available() && ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
-        const bool reachable = route->kind == ROUTE_PROXY ?
-            server->settings.support.enabled && server->settings.support.video3_port : ca_thermal_stream_port() != 0;
+        // a configured URI is where the stream is advertised, as in the information message
+        const bool reachable = server->settings.video3_uri[0] || (route->kind == ROUTE_PROXY ?
+            server->settings.support.enabled && server->settings.support.video3_port : ca_thermal_stream_port() != 0);
         if (!reachable) status.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
     }
     status.stream_id = (uint8_t)stream_id;
