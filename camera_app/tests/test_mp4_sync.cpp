@@ -187,6 +187,28 @@ int main(int argc, char **argv)
     unlink(path);
     unsetenv("CAMERA_APP_RECORD_STALL_MS");
 
+    /* A first frame that arrives long after open is not a stalled card: the
+     * header queued at open must not count against the stall limit. */
+    hold_sync = false;
+    sync_calls = 0;
+    assert(setenv("CAMERA_APP_RECORD_STALL_MS", "1000", 1) == 0);
+    assert(ca_mp4_open(&writer, path, 320, 240, 10) == 0);
+    const struct timespec late_start = {.tv_sec = 1, .tv_nsec = 300000000};
+    nanosleep(&late_start, NULL);
+    for (unsigned i = 0; i < 10; i++)
+        assert(ca_mp4_write_h264(writer, data, frame_length, 0, true, 88) == 0);
+    /* the first sync is done; the index written at close needs another */
+    wait_for_sync();
+    nanosleep(&delay, NULL);
+    pthread_mutex_lock(&lock);
+    unsigned before_close = sync_calls;
+    pthread_mutex_unlock(&lock);
+    assert(ca_mp4_close(writer) == 0);
+    assert(sync_calls == before_close + 1);
+    assert(stat(path, &st) == 0 && st.st_size > (off_t)(10 * frame_length));
+    unlink(path);
+    unsetenv("CAMERA_APP_RECORD_STALL_MS");
+
     /* An asynchronous I/O failure must still reach the caller at close. */
     sync_calls = 0;
     hold_sync = true;

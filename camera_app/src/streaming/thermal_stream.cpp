@@ -72,6 +72,7 @@ struct ca_thermal_stream {
     int record_fd = -1;
     ca_card_writer *record_out = nullptr;   // queues Clusters for the card
     bool record_stalled = false;
+    int record_failed = 0;                  // errno of a recording the worker had to end
     unsigned record_fps = 5;
     bool recording = false;
     std::string video_path, record_path;
@@ -305,6 +306,7 @@ static int open_recording(ca_thermal_stream *s)
         return -1;
     }
     ++s->record_generation;
+    s->record_failed = 0;
     s->record_open = true;
     s->record_stalled = false;
     s->record_start = mono_us();
@@ -319,7 +321,10 @@ int ca_thermal_stream_recording(ca_thermal_stream *s, bool active, const char *v
     std::lock_guard<std::mutex> guard(s->record_lock);
     if (!active) {
         s->recording = false;
-        return close_recording(s);
+        int result = close_recording(s);
+        if (result == 0 && s->record_failed) { errno = s->record_failed; result = -1; }
+        s->record_failed = 0;
+        return result;
     }
     if (s->recording) return 0;
     if (!video_path || !*video_path) { errno = EINVAL; return -1; }
@@ -516,6 +521,8 @@ static void *thermal_worker(void *opaque)
                 if (!stalled && s->record_out->append(data.data(),data.size()) == 0) s->record_out->commit();
                 if (s->record_out->error() != 0) {
                     errno=s->record_out->error();
+                    // remembered: the stop that follows must not report success
+                    s->record_failed=errno;
                     ca_log("raw thermal recording write failed: %s",strerror(errno));
                     (void)close_recording(s);
                 } else {
