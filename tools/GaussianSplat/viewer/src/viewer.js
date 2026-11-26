@@ -11,8 +11,8 @@
 // only; a PLY can be downloaded without them.
 // View settings (gear button, kept in localStorage): a horizon-level orbit that stays above the
 // ground, a circular trim (Spark SplatEdit cylinder) about trim_centre / the target, and for
-// georeferenced splats (meta.origin) Esri satellite imagery on the plot.ardupilot.org SRTM terrain
-// out to the horizon, under a sky, below the splat.
+// georeferenced splats (meta.origin) satellite imagery (imagery.js: Esri, or a chosen source) on
+// the plot.ardupilot.org SRTM terrain out to the horizon, under a sky, below the splat.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -34,6 +34,16 @@ import {
   tileXY,
 } from './terrain.js';
 import { curvatureDrop, mercatorBounds, planTiles, tileMesh, tileSize } from './map-tiles.js';
+import {
+  chooseSource,
+  googleImagery,
+  googleKey,
+  listSources,
+  loadRuntimeConfig,
+  loadTileLayers,
+  sourceCredit,
+  validTemplate,
+} from './imagery.js';
 import { clipPly } from '../ply-clip.mjs';
 import projectIconUrl from '../../../../assets/camera-gimbal.svg?url';
 import {
@@ -55,10 +65,6 @@ const MOVING_SCALE = 0.45; // linear scale while the view moves, refined when it
 const FORMATS = ['ply', 'spz', 'splat', 'ksplat', 'sog'];
 const UP_AXES = { z: [0, 0, 1], y: [0, 1, 0], '-y': [0, -1, 0] };
 const SAMPLES = 300000; // Gaussians sampled for the trim and ground estimates
-// the video viewer's satellite imagery (tools/viewer map-view.js), with its credit
-const SAT_URL =
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-const SAT_CREDIT = 'Esri, Maxar, Earthstar Geographics';
 const GEAR_SVG =
   '<svg viewBox="-12 -12 24 24" width="20" height="20" aria-hidden="true"><mask id="gear-hole">' +
   '<rect x="-12" y="-12" width="24" height="24" fill="#fff"/><circle r="3.2" fill="#000"/></mask>' +
@@ -264,8 +270,15 @@ async function main() {
     '<label id="trim-radius-label">Radius <input id="trim-radius" type="range" min="0" ' +
     'max="1000" step="1" /></label><p id="trim-note" class="note"></p>' +
     '<div id="satellite-controls" hidden>' +
-    '<label title="Fetches imagery (Esri) and terrain (plot.ardupilot.org) tiles around the ' +
+    '<label title="Fetches imagery and terrain (plot.ardupilot.org) tiles around the ' +
     'splat\'s location"><input id="set-satellite" type="checkbox" /> Satellite map below</label>' +
+    '<label id="imagery-label">Imagery <select id="set-imagery"></select></label>' +
+    '<div id="imagery-custom" hidden>' +
+    '<label>Tile URL <input id="imagery-url" type="url" ' +
+    'placeholder="https://…/{z}/{x}/{y}.jpg" /></label>' +
+    '<label>Credit <input id="imagery-credit" type="text" /></label>' +
+    '<label>Finest zoom <input id="imagery-zoom" type="number" min="1" max="22" step="1" />' +
+    '</label></div>' +
     '<label id="splat-opacity-label">Splat opacity <input id="splat-opacity" type="range" ' +
     'min="0" max="100" step="1" value="100" /></label>' +
     '<label id="align-label"><input id="set-align" type="checkbox" /> Align terrain to the ' +
@@ -275,7 +288,6 @@ async function main() {
   const satCredit = document.createElement('span');
   satCredit.id = 'sat-credit';
   satCredit.hidden = true;
-  satCredit.textContent = `Imagery: ${SAT_CREDIT} · `;
   document.querySelector('.credits')?.prepend(satCredit);
   $('settings-button').onclick = () => {
     settingsUi.hidden = !settingsUi.hidden;
@@ -584,7 +596,7 @@ async function main() {
     else if (e.key === '-' || e.key === '_') zoom(false);
   });
 
-  // satellite map: Esri World Imagery tiles on a Web Mercator quadtree about the splat's ENU
+  // satellite map: imagery tiles (imagery.js) on a Web Mercator quadtree about the splat's ENU
   // origin (map-tiles.js), fine over the splat and coarser out to FAR, each a grid mesh on the
   // SRTM terrain (flat at the splat's ground estimate where none has loaded) with earth curvature
   // and skirts. A sky gradient and distance haze surround it; neither touches the splat.
@@ -648,6 +660,8 @@ async function main() {
 
   let sat = null; // see buildSatellite
   let satGen = 0;
+  let config = null; // window.VIEWER_CONFIG from an optional viewer-config.js beside viewer.js
+  let google = null;
   // tile loaders wait here while the map is off
   let mapResume = null;
   let mapPaused = null;
@@ -708,26 +722,84 @@ async function main() {
   }
   const rebuildAll = () => sat?.leaves.forEach(buildLeaf);
 
+  // a tile's image: its layers (imagery.js) drawn bottom first, each cropped to the tile
+  async function tileImage(layers) {
+    const imgs = await Promise.all(
+      layers.map(async ({ blob }) => {
+        const img = new Image();
+        img.src = URL.createObjectURL(blob);
+        try {
+          await img.decode();
+        } finally {
+          URL.revokeObjectURL(img.src);
+        }
+        return img;
+      }),
+    );
+    if (imgs.length === 1 && !layers[0].crop) return imgs[0];
+    const c = document.createElement('canvas');
+    c.width = c.height = Math.max(...imgs.map((img) => img.naturalWidth));
+    const g = c.getContext('2d');
+    imgs.forEach((img, i) => {
+      const k = layers[i].crop ?? { x: 0, y: 0, size: 1 };
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      g.drawImage(img, k.x * w, k.y * h, k.size * w, k.size * h, 0, 0, c.width, c.height);
+    });
+    return c;
+  }
+
   function buildSatellite() {
     const gen = ++satGen;
     setSky();
     const nearRadius = Math.max(150, 1.5 * (trim?.initial ?? 100));
-    const plan = planTiles(meta.origin, { nearRadius, farRadius: FAR });
+    const source = chooseSource(settings, config, meta.origin);
     const s = {
       state: 'loading',
       loaded: 0,
       failed: 0,
-      total: plan.leaves.length,
-      zNear: plan.zNear,
-      zRoot: plan.zRoot,
+      total: 0,
+      zNear: null,
+      zRoot: null,
       nearRadius,
       t0: performance.now(),
       nearMs: null,
       allMs: null,
+      source,
+      leaves: [],
       terrainSet: new Terrain(meta.origin),
       terrain: { state: 'loading', total: 0, loaded: 0, failed: 0, ms: null },
     };
     sat = s;
+    if (source.id !== 'google') {
+      const { maxZoom } = source;
+      loadSatellite(
+        s,
+        gen,
+        planTiles(meta.origin, { nearRadius, farRadius: FAR, maxZoom }),
+        source,
+      );
+      return;
+    }
+    // Google: a session, then the zoom limit and attribution here
+    google ??= googleImagery(source.key);
+    google.open(meta.origin, { nearRadius, farRadius: FAR }).then(
+      (g) => gen === satGen && loadSatellite(s, gen, g.plan, g.source),
+      (err) => {
+        if (gen !== satGen) return;
+        console.error(err);
+        s.state = 'failed';
+        s.reason = err instanceof TypeError ? null : err.message;
+        updateSatellite();
+      },
+    );
+  }
+
+  function loadSatellite(s, gen, plan, source) {
+    s.source = source;
+    s.total = plan.leaves.length;
+    s.zNear = plan.zNear;
+    s.zRoot = plan.zRoot;
     s.leaves = plan.leaves.map((t) => {
       const m = new THREE.Mesh(
         new THREE.BufferGeometry(),
@@ -740,26 +812,13 @@ async function main() {
       return m;
     });
     placeMap();
-    const nearLeft = new Set(s.leaves.filter((m) => m.userData.tile.dist < nearRadius));
+    const nearLeft = new Set(s.leaves.filter((m) => m.userData.tile.dist < s.nearRadius));
     const queue = [...s.leaves];
     const one = async (m) => {
-      const { z, x, y } = m.userData.tile;
-      const n = 2 ** z;
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = SAT_URL.replace('{z}', z)
-        .replace('{y}', y)
-        .replace('{x}', ((x % n) + n) % n);
-      let timer = null;
       try {
-        await Promise.race([
-          img.decode(),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error('timeout')), 20000);
-          }),
-        ]);
+        const image = await tileImage(await loadTileLayers(source, m.userData.tile));
         if (gen !== satGen) return;
-        const tex = new THREE.Texture(img);
+        const tex = new THREE.Texture(image);
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
         tex.needsUpdate = true;
@@ -769,8 +828,6 @@ async function main() {
         s.loaded++;
       } catch {
         s.failed++;
-      } finally {
-        clearTimeout(timer);
       }
       if (gen !== satGen) return;
       nearLeft.delete(m);
@@ -930,6 +987,8 @@ async function main() {
     const avail = satAvailable();
     $('satellite-controls').hidden = !avail;
     $('set-satellite').checked = settings.satellite;
+    $('imagery-label').hidden = !settings.satellite;
+    $('imagery-custom').hidden = !settings.satellite || $('set-imagery').value !== 'custom';
     if (avail && settings.satellite && !sat) buildSatellite();
     const on = avail && settings.satellite && sat?.state !== 'failed';
     $('splat-opacity-label').hidden = !on;
@@ -938,16 +997,24 @@ async function main() {
     let note = '';
     if (avail && settings.satellite && sat) {
       if (sat.state === 'failed')
-        note = 'Satellite imagery could not be loaded (offline, or blocked by the network).';
+        note =
+          'Satellite imagery could not be loaded (' +
+          (sat.reason ?? 'offline, or blocked by the network') +
+          ').';
       else if (sat.state === 'loading')
         note = `Loading imagery ${sat.loaded} of ${sat.total} tiles…`;
       else note = sat.failed ? `${sat.failed} of ${sat.total} imagery tiles failed.` : '';
+      if (sat.source.outside) note = `No coverage here: showing ${sat.source.label}. ${note}`;
+      else if (settings.imagery === 'custom' && sat.source.id !== 'custom')
+        note = `Enter a tile URL with {z}, {x} and {y}: showing ${sat.source.label}. ${note}`;
       if (sat.state !== 'failed') note = (note + terrainNote()).trim();
     }
     $('satellite-note').textContent = note;
     satCredit.hidden = !satVisible();
     satCredit.textContent =
-      `Imagery: ${SAT_CREDIT}` + (terrainOn() ? ` · Terrain: ${TERRAIN_CREDIT}` : '') + ' · ';
+      `Imagery: ${sat ? sourceCredit(sat.source) : ''}` +
+      (terrainOn() ? ` · Terrain: ${TERRAIN_CREDIT}` : '') +
+      ' · ';
     const op = on ? splatOpacity : 1;
     if (mesh) mesh.opacity = thermal ? 1 : op; // thermal: faded in the post pass, values kept
     if (post) post.material.uniforms.op.value = op;
@@ -962,6 +1029,7 @@ async function main() {
           total: sat?.total ?? 0,
           zNear: sat?.zNear ?? null,
           zRoot: sat?.zRoot ?? null,
+          source: sat?.source.id ?? null,
           nearMs: sat?.nearMs ?? null,
           allMs: sat?.allMs ?? null,
           height: ground.map,
@@ -1001,6 +1069,40 @@ async function main() {
     $('splat-opacity').value = '100';
     updateSatellite();
   };
+  // the imagery choice: the sources offered (Google only with a key) and the custom fields
+  function fillSources() {
+    const sources = listSources(config);
+    $('set-imagery').replaceChildren(...sources.map(({ id, label }) => new Option(label, id)));
+    $('set-imagery').value = sources.some((o) => o.id === settings.imagery)
+      ? settings.imagery
+      : 'esri';
+    $('imagery-url').value = settings.imageryUrl ?? '';
+    $('imagery-credit').value = settings.imageryCredit ?? '';
+    $('imagery-zoom').value = settings.imageryMaxZoom ?? 18;
+  }
+  fillSources();
+  function setImagery() {
+    settings.imagery = $('set-imagery').value;
+    const url = $('imagery-url').value.trim();
+    settings.imageryUrl = validTemplate(url) ? url : undefined;
+    settings.imageryCredit = $('imagery-credit').value.trim() || undefined;
+    const zoom = Number($('imagery-zoom').value);
+    settings.imageryMaxZoom = Number.isInteger(zoom) && zoom >= 1 && zoom <= 22 ? zoom : undefined;
+    saveSettings(store, settings);
+    disposeSatellite();
+    updateSatellite();
+  }
+  for (const id of ['set-imagery', 'imagery-url', 'imagery-credit', 'imagery-zoom'])
+    $(id).onchange = setImagery;
+  loadRuntimeConfig(new URL('viewer-config.js', import.meta.url)).then((c) => {
+    if (!googleKey(c)) return;
+    config = c;
+    fillSources();
+    if (settings.imagery === 'google' && sat) {
+      disposeSatellite();
+      updateSatellite();
+    }
+  });
   $('set-align').onchange = () => {
     settings.alignTerrain = $('set-align').checked;
     saveSettings(store, settings);

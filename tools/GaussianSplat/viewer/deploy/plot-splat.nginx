@@ -3,6 +3,12 @@
 location = /splat {
     return 301 /splat/$is_args$args;
 }
+# Optional runtime settings: the video viewer's shared file, for its Google Map Tiles API key.
+location = /splat/viewer-config.js {
+    alias /data/sites/logviewer/video/shared/viewer-config.js;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options nosniff always;
+}
 # Sample splats, kept outside the releases so each release stays small.
 location ^~ /splat/samples/ {
     alias /data/sites/logviewer/splat/samples/;

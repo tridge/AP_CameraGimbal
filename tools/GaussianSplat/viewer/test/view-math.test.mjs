@@ -139,8 +139,20 @@ test('settings: defaults, round trip, bad or blocked storage', () => {
     trim: true,
     satellite: false,
     alignTerrain: true, // not saved: the default
+    imagery: 'esri',
     panel: 'collapsed',
   });
+  // the imagery choice and the custom source's fields
+  const custom = {
+    imagery: 'custom',
+    imageryUrl: 'https://tiles.example/{z}/{x}/{y}.jpg',
+    imageryCredit: 'Example',
+    imageryMaxZoom: 20,
+  };
+  saveSettings(storage, { ...DEFAULT_SETTINGS, ...custom });
+  assert.deepEqual(loadSettings(storage), { ...DEFAULT_SETTINGS, ...custom });
+  saveSettings(storage, { imagery: 'bing', imageryUrl: 7, imageryMaxZoom: 99 });
+  assert.deepEqual(loadSettings(storage), DEFAULT_SETTINGS);
   mem.set(SETTINGS_KEY, '{not json');
   assert.deepEqual(loadSettings(storage), DEFAULT_SETTINGS);
   mem.set(SETTINGS_KEY, JSON.stringify({ level: 'yes', panel: 'sideways' }));

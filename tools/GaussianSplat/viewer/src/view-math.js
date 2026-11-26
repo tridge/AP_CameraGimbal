@@ -9,6 +9,7 @@ export const DEFAULT_SETTINGS = {
   trim: true,
   satellite: true,
   alignTerrain: true,
+  imagery: 'esri', // imagery.js source id
   panel: null,
 };
 
@@ -25,6 +26,12 @@ export function loadSettings(storage) {
   for (const k of ['level', 'trim', 'satellite', 'alignTerrain'])
     if (typeof s[k] === 'boolean') out[k] = s[k];
   if (s.panel === 'open' || s.panel === 'collapsed') out.panel = s.panel;
+  if (['esri', 'google', 'act', 'custom'].includes(s.imagery)) out.imagery = s.imagery;
+  // the custom source: an XYZ template, its credit and finest zoom
+  for (const k of ['imageryUrl', 'imageryCredit'])
+    if (typeof s[k] === 'string' && s[k]) out[k] = s[k].slice(0, 500);
+  if (Number.isInteger(s.imageryMaxZoom) && s.imageryMaxZoom >= 1 && s.imageryMaxZoom <= 22)
+    out.imageryMaxZoom = s.imageryMaxZoom;
   return out;
 }
 

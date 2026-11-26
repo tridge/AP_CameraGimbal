@@ -169,12 +169,14 @@ mouse. The gear opens view settings, kept in the browser's local storage:
 - Trim to a circle (on by default): hides the Gaussians outside `trim_radius` about
   `trim_centre` (else the target), with a radius slider. Files without the fields get an
   estimate: 0.85 times the horizontal distance at which the density of Gaussians drops off.
-- Satellite map below (on by default), for splats with an `origin`: Esri World Imagery (as the video viewer's
-  3D map, same credit) on the video viewer's terrain, plot.ardupilot.org/quantized/ (SRTM,
+- Satellite map below (on by default), for splats with an `origin`: imagery (Esri World Imagery
+  unless another source is chosen, below) on the video viewer's terrain,
+  plot.ardupilot.org/quantized/ (SRTM,
   heights AMSL, so z = height - `origin.alt_amsl`), out to 25 km with earth curvature, under a
   sky with distance haze (darker for thermal splats); the splat itself is drawn over it
   untouched, so temperatures read the same with the map on or off. The tiles are a Web Mercator
-  quadtree about the origin: the finest zoom (up to 18) over the splat, one zoom coarser per
+  quadtree about the origin: the finest zoom (up to the source's limit) over the splat, one zoom
+  coarser per
   doubling of distance (about 100 to 150 imagery tiles), each on terrain of a matching level
   (about 20 to 25 terrain tiles, the finest that layer.json says is available), with skirts
   against cracks. They are fetched only while the map is on (turning it off pauses the downloads), nearest first. A splat
@@ -183,6 +185,24 @@ mouse. The gear opens view settings, kept in the browser's local storage:
   default) shifts the terrain by it, for SfM or altitude drift. Without terrain (offline,
   blocked or no coverage) the map is flat at a low ground estimate from the splat; the note says
   which. The horizon-level camera limit also keeps above the terrain when it is loaded.
+- Imagery, the map's source; the credit line follows it:
+  - Esri World Imagery (the default, as the video viewer's 3D map), to zoom 18.
+  - Google satellite, offered only when a Google Map Tiles API key is configured (below): 2D
+    tiles of the official Map Tiles API (a `createSession` session, renewed before it expires),
+    to the zoom limit and with the attribution its `viewport` request gives for the map's area.
+  - ACT Government aerial (ACT only): ACTmapi's `ACT_Aerial_Imagery_Current_3857` tile service,
+    the latest captures of the Australian Capital Territory at 7.5 cm, to zoom 21, CC BY 4.0
+    (credit "ACT Aerial Imagery from ACTmapi © Australian Capital Territory and Aerometrex").
+    Esri tiles are drawn where it has none and under its partly transparent border tiles; a
+    splat outside its coverage gets the Esri map.
+  - Custom tiles: a Web Mercator XYZ template (`https://…/{z}/{x}/{y}.jpg`, 256 px tiles, from a
+    server that allows cross-origin requests), with a credit and a finest zoom.
+
+The Google key is not part of the build. The viewer loads an optional `viewer-config.js` from
+beside `viewer.js`, the video viewer's runtime config (`tools/viewer/README.md`, "Maps and Google
+keys"), and reads only `googleMapsApiKey` from its `window.VIEWER_CONFIG`; without the file, or
+with an empty key, Google is not offered. The key is public to the page: restrict it to the
+hosting origin and to the Map Tiles API.
 
 Build the viewer once (needs Node.js 20.19 or later), then add splats to a site directory:
 
@@ -252,6 +272,10 @@ upload service or server process.
   `include snippets/plot-splat.conf;` inside the plot.ardupilot.org HTTPS server block next to
   the video include, run `nginx -t`, then `systemctl reload nginx`. Create the first release
   and `current` before reloading.
+- Google imagery: the snippet serves `/splat/viewer-config.js` from the video viewer's
+  `/data/sites/logviewer/video/shared/viewer-config.js`, so both pages use the one
+  `googleMapsApiKey`; the key's website restriction must allow `https://plot.ardupilot.org/*`.
+  When updating an existing install, copy the snippet again, run `nginx -t` and reload nginx.
 - Samples: the page links `samples/log80-run13` and `samples/randy-run2` (`.spz` and `.json`,
   the `splat.spz` and `meta.json` from `export_web.py`). They live in
   `/data/sites/logviewer/splat/samples/`, outside the releases, served by the snippet's
