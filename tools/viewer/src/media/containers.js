@@ -1063,9 +1063,13 @@ function annexBConfig(track) {
   }
 }
 
-async function* tsFrames(source) {
-  const reader = source.reader,
-    pending = new Map(),
+/**
+ * MPEG-TS demultiplexing without a file: packets go in with their stream offset, video frames
+ * come out with telemetry attached. source needs tracks, warnings and maxPacketBytes. A packet
+ * passed in must not be modified afterwards.
+ */
+export function createTsDemuxer(source) {
+  const pending = new Map(),
     sections = new Map(),
     continuity = new Map();
   const metadata = new Map(),
@@ -1076,17 +1080,9 @@ async function* tsFrames(source) {
     streamTypes = new Map(),
     asynchronousPids = new Set();
   let clock = null,
-    start = 0,
     lastVideo = null,
     asynchronousRecords = 0,
     asynchronousMatches = 0;
-  const probe = await reader.read(0, Math.min(188 * 6, source.file.size));
-  while (
-    start < Math.min(188, probe.length) &&
-    !(probe[start] === 0x47 && probe[start + 188] === 0x47)
-  )
-    start++;
-  if (start === Math.min(188, probe.length)) throw new Error('No MPEG-TS packet alignment');
   const warn = (message) => {
     if (!source.warnings.includes(message)) source.warnings.push(message);
   };
@@ -1342,36 +1338,15 @@ async function* tsFrames(source) {
       if (entry.asynchronous && tick < earliest) metadata.delete(tick);
     return frame;
   }
-  let advertised = false;
-  for (let offset = start; offset + 188 <= source.file.size; offset += 188) {
-    const packet = await reader.read(offset, 188);
-    source.position = offset + 188;
-    if (packet[0] !== 0x47) {
-      pending.clear();
-      discardAsynchronous();
-      sections.clear();
-      continuity.clear();
-      const scan = await reader.read(offset, Math.min(188 * 18, source.file.size - offset));
-      let recovered = -1;
-      for (let i = 1; i + 188 < scan.length && i <= 188 * 16; i++) {
-        if (
-          scan[i] === 0x47 &&
-          scan[i + 188] === 0x47 &&
-          (i + 376 >= scan.length || scan[i + 376] === 0x47)
-        ) {
-          recovered = i;
-          break;
-        }
-      }
-      if (recovered < 0) {
-        warn('MPEG-TS sync loss; no alignment in bounded scan');
-        offset += scan.length - 188;
-      } else {
-        warn('MPEG-TS sync loss recovered within bounded scan');
-        offset += recovered - 188;
-      }
-      continue;
-    }
+  /** Forget partial packets and counters: the stream was interrupted. */
+  function reset() {
+    pending.clear();
+    discardAsynchronous();
+    sections.clear();
+    continuity.clear();
+  }
+  /** One 188-byte packet starting with its sync byte, at this offset of the stream. */
+  function push(packet, offset) {
     const pid = (packet[1] & 31) * 256 + packet[2],
       startPES = !!(packet[1] & 64),
       control = (packet[3] >> 4) & 3,
@@ -1383,13 +1358,13 @@ async function* tsFrames(source) {
       discardAsynchronous(pid);
       sections.delete(pid);
       warn('Damaged or scrambled MPEG-TS packet');
-      continue;
+      return;
     }
     if (control & 2) {
       if (packet[4] > 183) {
         pending.delete(pid);
         warn('Invalid MPEG-TS adaptation field');
-        continue;
+        return;
       }
       if (packet[4]) discontinuity = !!(packet[5] & 128);
       off += 1 + packet[4];
@@ -1405,10 +1380,10 @@ async function* tsFrames(source) {
     }
     // Adaptation-only packets can reset the stream without carrying payload.
     // Process that reset above, but count continuity only for payload packets.
-    if (!(control & 1) || off >= 188) continue;
+    if (!(control & 1) || off >= 188) return;
     const previous = continuity.get(pid);
     if (previous !== undefined && cc === previous)
-      continue; // Repeated packet.
+      return; // Repeated packet.
     else if (previous !== undefined && cc !== (previous + 1) % 16) {
       pending.delete(pid);
       discardAsynchronous(pid);
@@ -1445,13 +1420,15 @@ async function* tsFrames(source) {
         }
       }
     }
-    if (!advertised && queue.length) {
-      advertised = true;
-      yield { tracksOnly: true };
-    }
-    // Allow mux/reorder lag for metadata, without retaining compressed packets.
-    // Keep two video PES to learn frame duration, and at most two decode-clock
-    // seconds /180 descriptors while waiting for an advertised KLV stream.
+  }
+  /**
+   * Frames whose metadata has had its chance to arrive. Allows mux/reorder lag for metadata
+   * without retaining compressed packets: two video PES are kept to learn frame duration, and
+   * at most two decode-clock seconds / 180 descriptors while waiting for an advertised KLV
+   * stream.
+   */
+  function ready() {
+    const out = [];
     while (queue.length > 2) {
       const first = queue[0],
         expectsKLV = [...streamTypes.values()].includes('klv');
@@ -1463,17 +1440,111 @@ async function* tsFrames(source) {
         clock / 90000 - first.dts <= 2
       )
         break;
-      yield attach(queue.shift());
+      out.push(attach(queue.shift()));
     }
+    return out;
+  }
+  /** The stream has ended: everything still held. */
+  function finish() {
+    for (const pid of [...pending.keys()]) finishPES(pid);
+    const out = [];
+    while (queue.length) out.push(attach(queue.shift()));
+    if ([...metadata.values()].some((entry) => !entry.asynchronous))
+      warn('Unmatched KLV remained after the final video frame');
+    if (asynchronousRecords && !asynchronousMatches)
+      warn('Asynchronous KLV could not be associated with video within the freshness window');
+    return out;
+  }
+  return {
+    packet: push,
+    ready,
+    finish,
+    reset,
+    warn,
+    get queued() {
+      return queue.length;
+    },
+  };
+}
+
+async function* tsFrames(source) {
+  const reader = source.reader;
+  let start = 0;
+  const probe = await reader.read(0, Math.min(188 * 6, source.file.size));
+  while (
+    start < Math.min(188, probe.length) &&
+    !(probe[start] === 0x47 && probe[start + 188] === 0x47)
+  )
+    start++;
+  if (start === Math.min(188, probe.length)) throw new Error('No MPEG-TS packet alignment');
+  const demux = createTsDemuxer(source),
+    warn = demux.warn;
+  let advertised = false;
+  for (let offset = start; offset + 188 <= source.file.size; offset += 188) {
+    const packet = await reader.read(offset, 188);
+    source.position = offset + 188;
+    if (packet[0] !== 0x47) {
+      demux.reset();
+      const scan = await reader.read(offset, Math.min(188 * 18, source.file.size - offset));
+      let recovered = -1;
+      for (let i = 1; i + 188 < scan.length && i <= 188 * 16; i++) {
+        if (
+          scan[i] === 0x47 &&
+          scan[i + 188] === 0x47 &&
+          (i + 376 >= scan.length || scan[i + 376] === 0x47)
+        ) {
+          recovered = i;
+          break;
+        }
+      }
+      if (recovered < 0) {
+        warn('MPEG-TS sync loss; no alignment in bounded scan');
+        offset += scan.length - 188;
+      } else {
+        warn('MPEG-TS sync loss recovered within bounded scan');
+        offset += recovered - 188;
+      }
+      continue;
+    }
+    demux.packet(packet, offset);
+    if (!advertised && demux.queued) {
+      advertised = true;
+      yield { tracksOnly: true };
+    }
+    yield* demux.ready();
   }
   if ((source.file.size - start) % 188) warn('Truncated final MPEG-TS packet');
-  for (const pid of [...pending.keys()]) finishPES(pid);
-  while (queue.length) yield attach(queue.shift());
-  if ([...metadata.values()].some((entry) => !entry.asynchronous))
-    warn('Unmatched KLV remained after the final video frame');
-  if (asynchronousRecords && !asynchronousMatches)
-    warn('Asynchronous KLV could not be associated with video within the freshness window');
+  yield* demux.finish();
   if (!source.tracks.length) throw new Error('No AVC/HEVC MPEG-TS track advertised');
+}
+
+/** The coded bytes of a frame from the transport packets of its span (bytes start at base). */
+export function transportPayload(bytes, base, frame) {
+  const t = frame.transport,
+    out = new Uint8Array(frame.size);
+  let skip = t.headerBytes,
+    copied = 0,
+    continuity = null;
+  for (let at = t.packetStart - base; at + 188 <= bytes.length && copied < out.length; at += 188) {
+    if (bytes[at] !== 0x47) throw new Error('TS packet sync lost in stored stream');
+    if ((bytes[at + 1] & 31) * 256 + bytes[at + 2] !== t.pid || !(bytes[at + 3] & 16)) continue;
+    const counter = bytes[at + 3] & 15;
+    if (counter === continuity) continue;
+    continuity = counter;
+    const begin = 4 + (bytes[at + 3] & 32 ? 1 + bytes[at + 4] : 0);
+    if (begin > 188) throw new Error('Invalid TS payload in stored stream');
+    const data = bytes.subarray(at + begin, at + 188);
+    if (skip >= data.length) {
+      skip -= data.length;
+      continue;
+    }
+    const n = Math.min(data.length - skip, out.length - copied);
+    out.set(data.subarray(skip, skip + n), copied);
+    copied += n;
+    skip = 0;
+  }
+  if (copied !== out.length) throw new Error('Incomplete TS packet span');
+  return out;
 }
 
 /** Reconstruct one PES on demand; the persistent TS index has a constant-size descriptor. */
