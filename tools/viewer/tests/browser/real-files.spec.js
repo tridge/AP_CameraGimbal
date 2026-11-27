@@ -8,6 +8,7 @@ import {
   openFile,
   waitIndexed,
   seekNumber,
+  pickAt,
   pointAt,
   downloadJSON,
   screenshot,
@@ -113,7 +114,7 @@ test('real large thermal archive remains local and preserves first, middle and l
       description: 'Deterministic test terrain',
     };
   });
-  await pointAt(page, 20, 30);
+  await pickAt(page, 20, 30);
   await page.locator('#mark-finding').click();
   await page.locator('#export-findings').click();
   const marked = await downloadJSON(page, '#export-json', testInfo, 'real-findings.json');

@@ -156,7 +156,9 @@ Raw thermal review is substantially faster and retains exact sensor values.
 1. **Open video.** Playback, frame stepping, absolute recorded UTC and pose UTC
    are separate. Space plays/pauses, arrows step frames, and `M` marks the selected
    pixel. Telemetry is outside the image. Raw X/Y fields allow keyboard pixel
-   selection; mouse hover also selects a sensor pixel.
+   selection. The pointer inspects the sensor pixel under it, shown by a cross
+   that goes when the pointer leaves the video; a click keeps that pixel
+   selected.
 2. **Choose a palette and stretch.** White hot, black hot, Inferno, iron,
    Viridis and GloryHot change only display pixels. Auto uses the 1st/99th
    percentiles; Low/High show its current window and remain editable. Editing
