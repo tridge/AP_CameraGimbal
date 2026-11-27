@@ -237,7 +237,12 @@ test('google: a request with no reply times out, and the next one starts again',
     calls++;
     if (!hang) return Promise.resolve({ ok: true, json: async () => ({ session: 's1' }) });
     return new Promise((resolve, reject) => {
-      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      // the signal's own timer does not keep the process alive
+      const waiting = setTimeout(() => reject(new Error('not aborted')), 5000);
+      init.signal.addEventListener('abort', () => {
+        clearTimeout(waiting);
+        reject(init.signal.reason);
+      });
     });
   };
   const g = googleImagery(KEY, { fetch, timeout: 20 });

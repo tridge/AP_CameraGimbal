@@ -789,6 +789,7 @@ async function main() {
       .open(meta.origin, { nearRadius, farRadius: FAR })
       .catch((err) => {
         // refused, over quota or unreachable: Esri instead, with the reason in the note
+        if (gen !== satGen) return null;
         console.error(err);
         const unavailable =
           err instanceof TypeError ? 'offline, or blocked by the network' : err.message;
@@ -799,7 +800,7 @@ async function main() {
         };
       })
       .then((g) => {
-        if (gen !== satGen) return;
+        if (!g || gen !== satGen) return;
         s.starting = false;
         loadSatellite(s, gen, g.plan, g.source);
         updateSatellite();
@@ -1018,7 +1019,12 @@ async function main() {
       else note = sat.failed ? `${sat.failed} of ${sat.total} imagery tiles failed.` : '';
       if (sat.source.outside) note = `No coverage here: showing ${sat.source.label}. ${note}`;
       else if (sat.source.unavailable)
-        note = `Google satellite is unavailable (${sat.source.unavailable}): showing ${sat.source.label}. ${note}`;
+        note =
+          `Google satellite is unavailable (${sat.source.unavailable})` +
+          (sat.state === 'failed'
+            ? '. '
+            : `: ${sat.loaded ? 'showing' : 'trying'} ${sat.source.label}. `) +
+          note;
       else if (settings.imagery === 'custom' && sat.source.id !== 'custom')
         note = `Enter a tile URL with {z}, {x} and {y}: showing ${sat.source.label}. ${note}`;
       if (sat.state !== 'failed') note = (note + terrainNote()).trim();
@@ -1070,7 +1076,7 @@ async function main() {
   $('set-satellite').onchange = () => {
     settings.satellite = $('set-satellite').checked;
     saveSettings(store, settings);
-    if (sat?.state === 'failed') {
+    if (sat?.state === 'failed' || sat?.source.unavailable) {
       disposeSatellite(); // try again next time
     } else if (sat && settings.satellite) {
       resumeMapLoads();
