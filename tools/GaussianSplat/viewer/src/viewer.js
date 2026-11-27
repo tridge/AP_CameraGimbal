@@ -37,6 +37,7 @@ import { curvatureDrop, mercatorBounds, planTiles, tileMesh, tileSize } from './
 import {
   ESRI,
   chooseSource,
+  failureReason,
   googleImagery,
   googleKey,
   listSources,
@@ -750,11 +751,14 @@ async function main() {
     return c;
   }
 
-  function buildSatellite() {
+  // unavailable: why Google gave no tiles, when Esri is shown in its place
+  function buildSatellite(unavailable) {
     const gen = ++satGen;
     setSky();
     const nearRadius = Math.max(150, 1.5 * (trim?.initial ?? 100));
-    const source = chooseSource(settings, config, meta.origin);
+    const source = unavailable
+      ? { ...ESRI, unavailable }
+      : chooseSource(settings, config, meta.origin);
     const s = {
       state: 'loading',
       loaded: 0,
@@ -838,8 +842,9 @@ async function main() {
         m.material.needsUpdate = true;
         m.visible = true;
         s.loaded++;
-      } catch {
+      } catch (err) {
         s.failed++;
+        s.reason ??= failureReason(err);
       }
       if (gen !== satGen) return;
       nearLeft.delete(m);
@@ -854,6 +859,13 @@ async function main() {
     };
     Promise.all(Array.from({ length: 6 }, worker)).then(() => {
       if (gen !== satGen) return;
+      if (!s.loaded && s.failed && source.id === 'google') {
+        // a session but no tiles (quota, or the key lacks them): Esri instead, if the map is on
+        disposeSatellite();
+        if (settings.satellite) buildSatellite(`tiles: ${s.reason}`);
+        updateSatellite();
+        return;
+      }
       s.allMs = performance.now() - s.t0;
       s.state = !s.loaded ? 'failed' : s.failed ? 'partial' : 'done';
       updateSatellite();
@@ -1011,7 +1023,7 @@ async function main() {
       if (sat.state === 'failed')
         note =
           'Satellite imagery could not be loaded (' +
-          (sat.reason ?? 'offline, or blocked by the network') +
+          (sat.reason ?? 'no tiles here') +
           ').';
       else if (sat.starting) note = 'Starting Google Map Tiles session…';
       else if (sat.state === 'loading')

@@ -119,6 +119,14 @@ async function fetchLayer(source, tile, fetch) {
   return { blob: await r.blob(), crop: t.crop };
 }
 
+// why a tile or session request failed, without its address (which may hold a key)
+export function failureReason(err) {
+  if (err?.name === 'TimeoutError') return 'no reply';
+  if (err instanceof TypeError) return 'offline, or blocked by the network';
+  const said = /HTTP \d+$|^Google Map Tiles API: (.+)$/.exec(err?.message ?? '');
+  return said ? (said[1] ?? said[0]) : 'the tiles could not be read';
+}
+
 async function isPng(blob) {
   const b = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
   return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;

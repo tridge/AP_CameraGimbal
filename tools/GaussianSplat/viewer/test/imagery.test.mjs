@@ -5,6 +5,7 @@ import {
   ESRI,
   ancestorTile,
   chooseSource,
+  failureReason,
   googleImagery,
   googleKey,
   listSources,
@@ -340,4 +341,29 @@ test('loadRuntimeConfig: the key from viewer-config.js, null without the file', 
   const win = fakeWindow(null);
   win.VIEWER_CONFIG = { googleMapsApiKey: '' };
   assert.equal(googleKey(await loadRuntimeConfig('viewer-config.js', win)), null);
+});
+
+test('failureReason: says why without the tile address', async () => {
+  const blob = new Blob([Uint8Array.of(0xff, 0xd8, 0xff, 0xe0)]);
+  const source = { url: () => `https://tile.example/1/2/3?key=${KEY}`, maxZoom: 22 };
+  const tile = { z: 3, x: 1, y: 2 };
+  const reason = (fetch) => loadTileLayers(source, tile, fetch).then(() => null, failureReason);
+  assert.equal(await reason(async () => ({ ok: true, blob: async () => blob })), null);
+  assert.equal(await reason(async () => ({ ok: false, status: 403 })), 'HTTP 403');
+  assert.equal(
+    await reason(async () => {
+      throw new TypeError('Failed to fetch');
+    }),
+    'offline, or blocked by the network',
+  );
+  assert.equal(
+    await reason(async () => {
+      throw new DOMException('timed out', 'TimeoutError');
+    }),
+    'no reply',
+  );
+  assert.equal(failureReason(new Error('bad image')), 'the tiles could not be read');
+  // from the session, renewed for a tile
+  assert.equal(failureReason(new Error('Google Map Tiles API: no reply')), 'no reply');
+  assert.equal(failureReason(new Error('Google Map Tiles API: HTTP 429')), 'HTTP 429');
 });
