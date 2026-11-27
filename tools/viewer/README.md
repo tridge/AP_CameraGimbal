@@ -157,7 +157,7 @@ Raw thermal review is substantially faster and retains exact sensor values.
    are separate. Space plays/pauses, arrows step frames, and `M` marks the selected
    pixel. Telemetry is outside the image. Raw X/Y fields allow keyboard pixel
    selection. The pointer inspects the sensor pixel under it, shown by a cross
-   that goes when the pointer leaves the video; a click keeps that pixel
+   that goes when the pointer leaves the video; a click or tap keeps that pixel
    selected.
 2. **Choose a palette and stretch.** White hot, black hot, Inferno, iron,
    Viridis and GloryHot change only display pixels. Auto uses the 1st/99th
@@ -211,7 +211,7 @@ Some cameras report commanded gimbal targets without physical angle feedback;
 unless telemetry identifies this, the viewer cannot distinguish the two. Check
 alignment while the camera is moving before interpreting projected locations.
 
-The **Follow** checkbox below the map is enabled by default. It centres on the
+The **Follow** checkbox above the map, over Project video, is enabled by default. It centres on the
 current video's aligned aircraft position while preserving zoom and 3D camera
 orientation. Uncheck it to pan and inspect a fixed area; **Center** recentres
 once without enabling Follow. Dragging temporarily suspends automatic movement.

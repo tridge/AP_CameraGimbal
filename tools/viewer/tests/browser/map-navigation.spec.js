@@ -11,7 +11,7 @@ import {
 
 test.use({ deviceScaleFactor: 2 });
 
-test('Follow starts checked below map and preserves2D zoom through seeking and toggles', async ({
+test('Follow starts checked above Project video and preserves2D zoom through seeking and toggles', async ({
   page,
 }) => {
   await start(page);

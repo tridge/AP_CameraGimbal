@@ -103,8 +103,17 @@ test('raw-coordinate ROI, rotation, histogram CSV and raw/result comparison', as
 }, testInfo) => {
   await openAnalysis(page);
   await page.locator('#rotation').selectOption('180');
-  await pickAt(page, 319, 255); // Raw320,256 after rotation.
   await page.locator('.analysis-region > summary').click();
+  // off centre first: with no pixel chosen the region is centred, as the next one is
+  await pickAt(page, 119, 155); // Raw 520, 356 after rotation.
+  await page.locator('#analysis-cursor').click();
+  expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.roi)).toEqual({
+    x: 472,
+    y: 308,
+    width: 96,
+    height: 96,
+  });
+  await pickAt(page, 319, 255); // Raw320,256 after rotation.
   await page.locator('#analysis-cursor').click();
   await expect(page.locator('#analysis-statistics')).toContainText('9,216 samples');
   expect(await page.evaluate(() => window.fireViewer.thermalAnalysis.roi)).toEqual({
