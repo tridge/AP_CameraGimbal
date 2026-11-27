@@ -76,7 +76,10 @@ test('video magnification scrolls while raw hover, rotation and findings retain 
     );
   }
   await page.locator('#rotation').selectOption('180');
+  // a click keeps the pixel while the pointer goes to the button
   await hoverRaw(page, 500, 400, 180);
+  await page.mouse.down();
+  await page.mouse.up();
   await page.locator('#mark-finding').click();
   expect(await page.evaluate(() => window.fireViewer.state.findings[0].rawPixel)).toEqual({
     x: 500,
@@ -147,7 +150,10 @@ test('video hover dot stays hidden after leaving, including frame and terrain re
     await page.locator('#play').hover();
     expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
     await seekNumber(page, i + 1);
-    expect(await page.evaluate(() => window.fireViewer.state.cursor)).toEqual({ x: 320, y: 256 });
+    // the pointer's pixel went with it; the one typed in the first pass is selected again
+    expect(await page.evaluate(() => window.fireViewer.state.cursor)).toEqual(
+      i ? { x: 100, y: 256 } : null,
+    );
     expect(await page.evaluate(() => window.fireViewer.map.hover.show)).toBe(false);
     await page.evaluate(() => window.fireViewer.map.terrain.onChange());
     await page.waitForTimeout(100);
@@ -290,4 +296,64 @@ test('a pointer sweep on a slow terrain link preserves cached video-pixel height
   await page.waitForTimeout(220);
   expect(await page.evaluate(() => window.pointerTerrainRequests)).toBe(1);
   await expect(page.locator('#map-terrain-height')).toContainText('move pointer');
+});
+
+test('the pixel cross follows the pointer, goes when it leaves the video, and stays after a click', async ({
+  page,
+}) => {
+  await start(page);
+  await openFile(page, fixture('thermal.mkv'));
+  await waitIndexed(page);
+  // the cross is drawn in its own colour, 5 px along an arm from the pixel
+  const cross = (x, y) =>
+    page.evaluate(
+      ([px, py]) => {
+        const d = document
+          .querySelector('#video-canvas')
+          .getContext('2d')
+          .getImageData(px + 5, py, 1, 1).data;
+        // a 1 px line on a grey image: tinted, if not the full colour
+        return d[1] - d[0] > 20 && d[2] - d[0] > 20;
+      },
+      [x, y],
+    );
+  const state = () =>
+    page.evaluate(() => ({
+      cursor: window.fireViewer.state.cursor,
+      x: document.querySelector('#pixel-x').value,
+      y: document.querySelector('#pixel-y').value,
+      reading: document.querySelector('#hover-reading').textContent,
+    }));
+  await hoverRaw(page, 200, 150);
+  expect(await cross(200, 150)).toBe(true);
+  expect((await state()).reading).toContain('Raw pixel 200, 150');
+  await page.locator('#play').hover();
+  expect(await cross(200, 150)).toBe(false);
+  expect(await state()).toEqual({
+    cursor: null,
+    x: '320',
+    y: '256',
+    reading: 'Hover over a frame to inspect a pixel.',
+  });
+  // a pixel chosen in the fields stays, and comes back after the pointer has passed over
+  await page.locator('#pixel-x').fill('100');
+  await page.locator('#pixel-y').fill('120');
+  expect(await cross(100, 120)).toBe(true);
+  await hoverRaw(page, 400, 300);
+  expect(await cross(400, 300)).toBe(true);
+  expect(await cross(100, 120)).toBe(false);
+  await page.locator('#play').hover();
+  expect(await cross(400, 300)).toBe(false);
+  expect(await cross(100, 120)).toBe(true);
+  const back = await state();
+  expect(back.cursor).toEqual({ x: 100, y: 120 });
+  expect([back.x, back.y]).toEqual(['100', '120']);
+  expect(back.reading).toContain('Raw pixel 100, 120');
+  // a click keeps the pointer's pixel instead
+  await hoverRaw(page, 250, 200);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.locator('#play').hover();
+  expect(await cross(250, 200)).toBe(true);
+  expect((await state()).cursor).toEqual({ x: 250, y: 200 });
 });

@@ -6,6 +6,7 @@ import {
   openFile,
   waitIndexed,
   seekNumber,
+  pickAt,
   pointAt,
   downloadJSON,
   screenshot,
@@ -79,7 +80,7 @@ test('histograms and every method preserve raw radiometry, coordinates and repro
       window.fireViewer.state.peaks.some((p) => Math.hypot(p.x - 320, p.y - 256) < 3),
     ),
   ).toBe(true);
-  await pointAt(page, 20, 30);
+  await pickAt(page, 20, 30);
   await page.locator('#mark-finding').click();
   await expect(page.locator('#finding-count')).toHaveText('1');
   await page.locator('#export-findings').click();
@@ -102,7 +103,7 @@ test('raw-coordinate ROI, rotation, histogram CSV and raw/result comparison', as
 }, testInfo) => {
   await openAnalysis(page);
   await page.locator('#rotation').selectOption('180');
-  await pointAt(page, 319, 255); // Raw320,256 after rotation.
+  await pickAt(page, 319, 255); // Raw320,256 after rotation.
   await page.locator('.analysis-region > summary').click();
   await page.locator('#analysis-cursor').click();
   await expect(page.locator('#analysis-statistics')).toContainText('9,216 samples');

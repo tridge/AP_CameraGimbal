@@ -18,11 +18,15 @@ test('Follow starts checked below map and preserves2D zoom through seeking and t
   await expect(page.getByRole('checkbox', { name: 'Follow', exact: true })).toBeChecked();
   await openFile(page, fixture('thermal.mkv'));
   await waitIndexed(page);
-  const layout = await page.evaluate(() => ({
-    map: document.querySelector('#map').getBoundingClientRect().bottom,
-    follow: document.querySelector('#map-follow').getBoundingClientRect().top,
-  }));
-  expect(layout.follow).toBeGreaterThanOrEqual(layout.map);
+  // Follow sits directly above Project video, in the controls over the map
+  const layout = await page.evaluate(() => {
+    const box = (id) => document.querySelector(id).getBoundingClientRect();
+    return { map: box('#map'), follow: box('#map-follow'), project: box('#map-project-video') };
+  });
+  expect(layout.follow.bottom).toBeLessThanOrEqual(layout.project.top);
+  expect(layout.project.top - layout.follow.bottom).toBeLessThan(12);
+  expect(Math.abs(layout.follow.left - layout.project.left)).toBeLessThan(1);
+  expect(layout.project.bottom).toBeLessThanOrEqual(layout.map.top);
   // Give the fixture a moving embedded position, keeping its original frame PTS.
   await page.evaluate(() => {
     const s = window.fireViewer.state;

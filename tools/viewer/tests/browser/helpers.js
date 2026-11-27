@@ -108,6 +108,14 @@ export async function pointAt(page, x, y) {
   return point;
 }
 
+/** Points at a pixel and clicks it, so it stays selected when the pointer moves away. */
+export async function pickAt(page, x, y) {
+  const point = await pointAt(page, x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  return point;
+}
+
 export async function downloadJSON(page, button, testInfo, name) {
   const pending = page.waitForEvent('download');
   await page.locator(button).click();

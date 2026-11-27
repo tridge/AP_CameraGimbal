@@ -6,6 +6,7 @@ import {
   openFile,
   waitIndexed,
   seekNumber,
+  pickAt,
   pointAt,
   downloadJSON,
   screenshot,
@@ -63,7 +64,7 @@ test('thermal review keeps raw values through palettes, rotation, playback and e
       description: 'Deterministic test terrain',
     };
   });
-  await pointAt(page, 20, 30);
+  await pickAt(page, 20, 30);
   await page.locator('#mark-finding').click();
   await expect(page.locator('#finding-count')).toHaveText('1');
   await page.locator('#export-findings').click();

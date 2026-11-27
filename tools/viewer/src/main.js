@@ -73,7 +73,8 @@ const state = {
   projectionYawSeconds: 2,
   findings: [],
   peaks: [],
-  cursor: null,
+  cursor: null, // the pixel inspected: the pointer's while it is over the image, else pinned
+  pinned: null, // the pixel chosen with the X/Y fields, a peak or a finding
   videoPointerInside: false,
   image: null,
   contrastUnits: null,
@@ -637,7 +638,7 @@ async function openVideo(file, sourceUrl = null, live = null) {
   state.decoded = null;
   thermalWorkbench.setFrame(null, null, null, state.generation);
   state.number = 0;
-  state.cursor = null;
+  state.cursor = state.pinned = null;
   state.videoPointerInside = false;
   state.peaks = [];
   state.image = null;
@@ -956,8 +957,9 @@ function presentFrame() {
   for (const id of ['seek', 'previous', 'next', 'play']) $(id).disabled = false;
   $('scan-peaks').disabled = decoded.kind !== 'gray16';
   syncContrastControls();
-  if (state.cursor && (state.cursor.x >= decoded.width || state.cursor.y >= decoded.height))
-    state.cursor = null;
+  for (const key of ['cursor', 'pinned'])
+    if (state[key] && (state[key].x >= decoded.width || state[key].y >= decoded.height))
+      state[key] = null;
   for (const [id, max] of [
     ['pixel-x', decoded.width - 1],
     ['pixel-y', decoded.height - 1],
@@ -1390,7 +1392,7 @@ function renderPeaks() {
       temp = celsius(p.value, state.frame?.thermalMetadata);
     button.textContent = `${i + 1}. ${p.x}, ${p.y} · ${temp === null ? p.value + ' raw' : temp.toFixed(2) + ' °C'} · ${p.scoreUnit ? `${p.contrast.toFixed(2)} ${p.scoreUnit}${p.singlePixel ? ' · pixel-scale excess' : ''}` : `contrast +${p.contrast.toFixed(1)} raw`}`;
     button.onclick = () => {
-      state.cursor = { x: p.x, y: p.y };
+      state.cursor = state.pinned = { x: p.x, y: p.y };
       paint();
       inspectPixel(state.cursor);
     };
@@ -1495,7 +1497,7 @@ function renderFindings() {
         .then(() => {
           if (generation !== state.generation || !state.decoded) return;
           if (f.rawPixel.x >= state.decoded.width || f.rawPixel.y >= state.decoded.height) return;
-          state.cursor = { ...f.rawPixel };
+          state.cursor = state.pinned = { ...f.rawPixel };
           paint();
           inspectPixel(state.cursor);
         })
@@ -1996,20 +1998,38 @@ $('rotation').onchange = (e) => {
   saveReview();
   paint();
 };
-$('video-canvas').onpointermove = (e) => {
-  const point = displayPoint(e);
-  state.videoPointerInside = !!point;
-  if (point) {
-    $('pixel-x').value = point.x;
-    $('pixel-y').value = point.y;
-    state.cursor = point;
-    inspectPixel(point);
-    paint();
-  } else map?.setHover(null);
-};
-$('video-canvas').onpointerleave = $('video-canvas').onpointercancel = () => {
+// The pointer's cross goes with the pointer; a pinned pixel comes back.
+function pointerLeftImage() {
   state.videoPointerInside = false;
   map?.setHover(null);
+  if (state.cursor === state.pinned) return;
+  state.cursor = state.pinned;
+  if (!state.decoded) return;
+  if (state.cursor) {
+    $('pixel-x').value = state.cursor.x;
+    $('pixel-y').value = state.cursor.y;
+    inspectPixel(state.cursor);
+  } else {
+    $('pixel-x').value = Math.floor(state.decoded.width / 2);
+    $('pixel-y').value = Math.floor(state.decoded.height / 2);
+    $('hover-reading').textContent = 'Hover over a frame to inspect a pixel.';
+  }
+  paint();
+}
+$('video-canvas').onpointermove = (e) => {
+  const point = displayPoint(e);
+  if (!point) return pointerLeftImage();
+  state.videoPointerInside = true;
+  $('pixel-x').value = point.x;
+  $('pixel-y').value = point.y;
+  state.cursor = point;
+  inspectPixel(point);
+  paint();
+};
+$('video-canvas').onpointerleave = $('video-canvas').onpointercancel = pointerLeftImage;
+// a click keeps the pixel under the pointer when the pointer moves away
+$('video-canvas').onclick = () => {
+  if (state.videoPointerInside && state.cursor) state.pinned = state.cursor;
 };
 for (const id of ['pixel-x', 'pixel-y'])
   $(id).oninput = () => {
@@ -2025,7 +2045,7 @@ for (const id of ['pixel-x', 'pixel-y'])
       y >= state.decoded.height
     )
       return;
-    state.cursor = { x, y };
+    state.cursor = state.pinned = { x, y };
     paint();
     inspectPixel(state.cursor);
   };
