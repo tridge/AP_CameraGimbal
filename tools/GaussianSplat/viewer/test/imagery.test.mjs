@@ -230,6 +230,23 @@ test('google: a refused key or a bad reply is an error, and is retried', async (
   await assert.rejects(bad.token(), /no session/);
 });
 
+test('google: a request with no reply times out, and the next one starts again', async () => {
+  let calls = 0;
+  let hang = true;
+  const fetch = (url, init) => {
+    calls++;
+    if (!hang) return Promise.resolve({ ok: true, json: async () => ({ session: 's1' }) });
+    return new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    });
+  };
+  const g = googleImagery(KEY, { fetch, timeout: 20 });
+  await assert.rejects(g.token(), /Google Map Tiles API: no reply/);
+  hang = false;
+  assert.equal(await g.token(), 's1');
+  assert.equal(calls, 2);
+});
+
 test('google: open plans to the zoom limit here and collects the attribution', async () => {
   const m = mockGoogle({
     copyright: (zoom) => (zoom >= 15 ? 'Imagery ©2026 Near' : 'Imagery ©2026 Far'),

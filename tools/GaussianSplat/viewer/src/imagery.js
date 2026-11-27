@@ -31,6 +31,7 @@ const GOOGLE_MAX_ZOOM = 22;
 const GOOGLE = { id: 'google', label: 'Google satellite' };
 const CUSTOM = { id: 'custom', label: 'Custom tiles' };
 const TILE_TIMEOUT_MS = 20000;
+const API_TIMEOUT_MS = 20000;
 
 // the Google Map Tiles API key from the runtime config (window.VIEWER_CONFIG), else null
 export function googleKey(config) {
@@ -147,13 +148,21 @@ function boxAround(origin, radius) {
 }
 
 // Google satellite 2D tiles through the Map Tiles API: one session, renewed before it expires
-export function googleImagery(key, { fetch = globalThis.fetch, now = Date.now } = {}) {
+export function googleImagery(
+  key,
+  { fetch = globalThis.fetch, now = Date.now, timeout = API_TIMEOUT_MS } = {},
+) {
   let session = null; // {token, expiry (ms)}
   let pending = null;
   const getJson = async (url, init) => {
-    const r = await fetch(url, init);
-    if (!r.ok) throw new Error(`Google Map Tiles API: HTTP ${r.status}`);
-    return r.json();
+    try {
+      const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
+      if (!r.ok) throw new Error(`Google Map Tiles API: HTTP ${r.status}`);
+      return await r.json();
+    } catch (err) {
+      if (err.name === 'TimeoutError') throw new Error('Google Map Tiles API: no reply');
+      throw err;
+    }
   };
   async function token() {
     if (session && now() < session.expiry - 600e3) return session.token;

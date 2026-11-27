@@ -35,6 +35,7 @@ import {
 } from './terrain.js';
 import { curvatureDrop, mercatorBounds, planTiles, tileMesh, tileSize } from './map-tiles.js';
 import {
+  ESRI,
   chooseSource,
   googleImagery,
   googleKey,
@@ -782,17 +783,27 @@ async function main() {
       return;
     }
     // Google: a session, then the zoom limit and attribution here
+    s.starting = true;
     google ??= googleImagery(source.key);
-    google.open(meta.origin, { nearRadius, farRadius: FAR }).then(
-      (g) => gen === satGen && loadSatellite(s, gen, g.plan, g.source),
-      (err) => {
-        if (gen !== satGen) return;
+    google
+      .open(meta.origin, { nearRadius, farRadius: FAR })
+      .catch((err) => {
+        // refused, over quota or unreachable: Esri instead, with the reason in the note
         console.error(err);
-        s.state = 'failed';
-        s.reason = err instanceof TypeError ? null : err.message;
+        const unavailable =
+          err instanceof TypeError ? 'offline, or blocked by the network' : err.message;
+        const { maxZoom } = ESRI;
+        return {
+          plan: planTiles(meta.origin, { nearRadius, farRadius: FAR, maxZoom }),
+          source: { ...ESRI, unavailable },
+        };
+      })
+      .then((g) => {
+        if (gen !== satGen) return;
+        s.starting = false;
+        loadSatellite(s, gen, g.plan, g.source);
         updateSatellite();
-      },
-    );
+      });
   }
 
   function loadSatellite(s, gen, plan, source) {
@@ -1001,10 +1012,13 @@ async function main() {
           'Satellite imagery could not be loaded (' +
           (sat.reason ?? 'offline, or blocked by the network') +
           ').';
+      else if (sat.starting) note = 'Starting Google Map Tiles session…';
       else if (sat.state === 'loading')
         note = `Loading imagery ${sat.loaded} of ${sat.total} tiles…`;
       else note = sat.failed ? `${sat.failed} of ${sat.total} imagery tiles failed.` : '';
       if (sat.source.outside) note = `No coverage here: showing ${sat.source.label}. ${note}`;
+      else if (sat.source.unavailable)
+        note = `Google satellite is unavailable (${sat.source.unavailable}): showing ${sat.source.label}. ${note}`;
       else if (settings.imagery === 'custom' && sat.source.id !== 'custom')
         note = `Enter a tile URL with {z}, {x} and {y}: showing ${sat.source.label}. ${note}`;
       if (sat.state !== 'failed') note = (note + terrainNote()).trim();
@@ -1094,7 +1108,7 @@ async function main() {
   }
   for (const id of ['set-imagery', 'imagery-url', 'imagery-credit', 'imagery-zoom'])
     $(id).onchange = setImagery;
-  loadRuntimeConfig(new URL('viewer-config.js', import.meta.url)).then((c) => {
+  loadRuntimeConfig(new URL(/* @vite-ignore */ 'viewer-config.js', import.meta.url)).then((c) => {
     if (!googleKey(c)) return;
     config = c;
     fillSources();
