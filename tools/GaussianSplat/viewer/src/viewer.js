@@ -795,8 +795,7 @@ async function main() {
         // refused, over quota or unreachable: Esri instead, with the reason in the note
         if (gen !== satGen) return null;
         console.error(err);
-        const unavailable =
-          err instanceof TypeError ? 'offline, or blocked by the network' : err.message;
+        const unavailable = failureReason(err, 'invalid Google API response');
         const { maxZoom } = ESRI;
         return {
           plan: planTiles(meta.origin, { nearRadius, farRadius: FAR, maxZoom }),
@@ -830,6 +829,14 @@ async function main() {
     placeMap();
     const nearLeft = new Set(s.leaves.filter((m) => m.userData.tile.dist < s.nearRadius));
     const queue = [...s.leaves];
+    let nearLoaded = 0;
+    // a session but no tiles (quota, or the key lacks them): Esri instead, if the map is on
+    const noTiles = (loaded) => !loaded && s.failed && source.id === 'google';
+    const giveUp = () => {
+      disposeSatellite();
+      if (settings.satellite) buildSatellite(`tiles: ${s.reason}`);
+      updateSatellite();
+    };
     const one = async (m) => {
       try {
         const image = await tileImage(await loadTileLayers(source, m.userData.tile));
@@ -842,12 +849,14 @@ async function main() {
         m.material.needsUpdate = true;
         m.visible = true;
         s.loaded++;
+        if (nearLeft.has(m)) nearLoaded++;
       } catch (err) {
         s.failed++;
         s.reason ??= failureReason(err);
       }
       if (gen !== satGen) return;
-      nearLeft.delete(m);
+      // not after every tile has had its time to fail: the near ones are enough
+      if (nearLeft.delete(m) && !nearLeft.size && noTiles(nearLoaded)) return giveUp();
       if (!nearLeft.size && s.nearMs == null) s.nearMs = performance.now() - s.t0;
       updateSatellite();
     };
@@ -859,13 +868,7 @@ async function main() {
     };
     Promise.all(Array.from({ length: 6 }, worker)).then(() => {
       if (gen !== satGen) return;
-      if (!s.loaded && s.failed && source.id === 'google') {
-        // a session but no tiles (quota, or the key lacks them): Esri instead, if the map is on
-        disposeSatellite();
-        if (settings.satellite) buildSatellite(`tiles: ${s.reason}`);
-        updateSatellite();
-        return;
-      }
+      if (noTiles(s.loaded)) return giveUp();
       s.allMs = performance.now() - s.t0;
       s.state = !s.loaded ? 'failed' : s.failed ? 'partial' : 'done';
       updateSatellite();

@@ -363,6 +363,7 @@ test('failureReason: says why without the tile address', async () => {
     'no reply',
   );
   assert.equal(failureReason(new Error('bad image')), 'the tiles could not be read');
+  assert.equal(failureReason(new SyntaxError('bad JSON'), 'invalid reply'), 'invalid reply');
   // from the session, renewed for a tile
   assert.equal(failureReason(new Error('Google Map Tiles API: no reply')), 'no reply');
   assert.equal(failureReason(new Error('Google Map Tiles API: HTTP 429')), 'HTTP 429');
