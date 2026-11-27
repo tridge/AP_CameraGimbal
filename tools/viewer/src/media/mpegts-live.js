@@ -60,6 +60,13 @@ function mark(b) {
   for (let i = 4; i < PACKET; i++) h = Math.imul(h ^ b[i], 0x01000193);
   return h >>> 0;
 }
+const fold = (h, m) => Math.imul(h ^ m, 0x01000193) >>> 0;
+// tells a parser that this PID does not carry on from the packets before
+function breakPacket(pid) {
+  const b = new Uint8Array(PACKET).fill(255);
+  b.set([0x47, pid >> 8, pid & 255, 0x20, 183, 0x80]);
+  return b;
+}
 function shiftPacket(b, at, offset) {
   if (at.pcrAt >= 0) {
     // program clock reference: 33-bit base, 6 reserved bits, 9-bit extension
@@ -108,7 +115,12 @@ export class TsLiveRecorder {
     this.announced = null;
     this.partial = new Uint8Array(0);
     this.tables = new Set();
-    this.recent = []; // {raw, mark} of the newest access units stored
+    // {raw, mark, full} of the newest access units stored: decode time, mark of the first
+    // packet, and of all its packets once it is complete
+    this.recent = [];
+    this.open = null; // the one of them being received
+    this.pids = new Set(); // every PID stored
+    this.stored = 0; // bytes the store holds
     this.cuts = []; // stream offsets where what follows does not continue what came before
     this.keyed = false;
     this.position = 0;
@@ -126,7 +138,69 @@ export class TsLiveRecorder {
     this.placed = false; // whether this connection continues the frames held is not known yet
     this.counters = new Map();
     this.drop = new Map(); // by PID: the access unit being received is not kept
+    this.probe = null; // a first access unit held back while it is compared with one stored
+    this.distinct = false; // it was not that one: another publisher
+    this.open = null;
+    this.interrupt();
+  }
+  // what is stored next does not carry on from what is stored now
+  interrupt() {
+    this.broken = this.pids?.size > 0;
     this.demux.reset();
+  }
+  // this connection starts within the frames held: nothing is kept up to the newest complete
+  overlap(held, counter) {
+    this.joining = false;
+    this.skipTo = held;
+    this.counters.set(this.source.tracks[0].id, counter);
+    this.drop.set(this.source.tracks[0].id, true);
+  }
+  /**
+   * The packets to take now. The relay starts a viewer at its newest keyframe, which may be
+   * one already held: then its time and its packets are ones that were stored. A restarted
+   * publisher can repeat a time and a first packet, so the whole access unit is compared
+   * before it is passed over.
+   */
+  sift(b, at) {
+    const pid = (b[1] & 31) * 256 + b[2],
+      video = this.source.tracks[0]?.id,
+      counter = at.payload >= 0 ? b[3] & 15 : null,
+      clock = pid === video && b[1] & 0x40 ? pesClock(b, at.payload) : null,
+      p = this.probe;
+    if (!p) {
+      if (!this.joining || this.distinct || this.skipTo !== null || this.lastStart === null)
+        return [b];
+      if (!clock || counter === this.counters.get(pid)) return [b];
+      const raw = readTime(b, clock.dts),
+        sum = mark(b),
+        held = this.lastDone ?? (this.lastStart - 1 + WRAP) % WRAP,
+        entry =
+          ahead(raw, held) <= 0 ? this.recent.find((r) => r.raw === raw && r.mark === sum) : null;
+      if (!entry) return [b];
+      if (entry.full === undefined) this.overlap(held, counter);
+      else this.probe = { want: entry.full, sum, counter, held, packets: [b] };
+      return [];
+    }
+    if (pid === video) {
+      const repeated = counter !== null && counter === p.counter;
+      if (clock && !repeated) {
+        // the next access unit: the one held back is complete
+        this.probe = null;
+        if (p.sum === p.want) {
+          this.overlap(p.held, p.counter);
+          return [b];
+        }
+        this.distinct = true;
+        return [...p.packets, b];
+      }
+      if (!repeated) p.sum = fold(p.sum, mark(b));
+      if (counter !== null) p.counter = counter;
+    }
+    p.packets.push(b);
+    if (p.packets.length * PACKET <= this.source.maxPacketBytes) return [];
+    this.probe = null;
+    this.distinct = true;
+    return p.packets;
   }
   // true if the packet is to be stored
   admit(b, at) {
@@ -155,11 +229,16 @@ export class TsLiveRecorder {
       this.counters.set(pid, counter);
     }
     // a packet sent twice does not start another access unit
-    if (!clock || repeated) return this.drop.get(pid) === false;
+    if (!clock || repeated) {
+      const keep = this.drop.get(pid) === false;
+      if (keep && !repeated && this.open) this.open.sum = fold(this.open.sum, mark(b));
+      return keep;
+    }
     const raw = readTime(b, clock.dts),
       wall = this.now(),
       sum = mark(b);
-    let again = false;
+    let again = false,
+      fresh = false;
     if (this.skipTo !== null) {
       // still within what is held
       if (ahead(raw, this.skipTo) <= 0) {
@@ -172,23 +251,15 @@ export class TsLiveRecorder {
     } else if (this.lastStart !== null) {
       const advance = ahead(raw, this.lastStart) / 90,
         elapsed = wall - this.lastWall;
-      let fresh = false;
       if (this.joining) {
-        // The relay starts a viewer at its newest keyframe, which may be one already held:
-        // then its time and first packet are ones that were stored. A restarted publisher
-        // can repeat a time, but not the picture.
-        const held = this.lastDone ?? (this.lastStart - 1 + WRAP) % WRAP;
-        if (ahead(raw, held) <= 0 && this.recent.some((r) => r.raw === raw && r.mark === sum)) {
-          this.joining = false;
-          this.skipTo = held;
-          this.drop.set(pid, true);
-          return false;
-        }
         // The access unit that was being received when the old connection ended is not
         // held: it is taken again, as the next one of the same stream.
-        again = raw === this.lastStart && sum === this.lastMark;
+        again = !this.distinct && raw === this.lastStart && sum === this.lastMark;
         // a later time is the same publisher only if its clock advanced about as far as ours
-        if (!again && (advance <= 0 || Math.abs(advance - elapsed) > SAME_EPOCH_SLACK_MS))
+        if (
+          this.distinct ||
+          (!again && (advance <= 0 || Math.abs(advance - elapsed) > SAME_EPOCH_SLACK_MS))
+        )
           fresh = true;
       } else if (advance <= 0 || advance - elapsed > SAME_EPOCH_SLACK_MS) fresh = true;
       if (fresh) {
@@ -200,15 +271,23 @@ export class TsLiveRecorder {
       }
     }
     this.joining = false;
+    this.distinct = false;
     // a connection that does not carry on from the frames held starts at a keyframe
     if (!this.placed) this.cuts.push(this.position);
     this.placed = true;
     this.drop.set(pid, false);
-    if (!again) {
-      this.recent.push({ raw, mark: sum });
+    if (this.open) this.open.full = this.open.sum; // the one before this is complete
+    if (!fresh && raw === this.lastStart) {
+      // the access unit a connection was cut off in, taken again: it is not complete yet
+      const last = this.recent.at(-1);
+      this.open = last?.raw === raw ? last : null;
+    } else {
+      this.open = { raw, mark: sum };
+      this.recent.push(this.open);
       if (this.recent.length > 256) this.recent.shift();
       this.lastDone = this.lastStart;
     }
+    if (this.open) this.open.sum = sum;
     this.lastStart = raw;
     this.lastMark = sum;
     this.lastStored = (raw + this.offset) % WRAP;
@@ -258,21 +337,14 @@ export class TsLiveRecorder {
       if (bytes[at] !== 0x47) {
         this.aligned = false;
         this.cuts.push(base + kept.length * PACKET);
-        this.demux.reset();
+        this.interrupt();
         continue;
       }
       const b = bytes.subarray(at, at + PACKET),
         where = layout(b);
       at += PACKET;
       if (!where || b[1] & 0x80) continue; // damaged
-      this.position = base + kept.length * PACKET; // where this packet will be stored
-      if (!this.admit(b, where)) continue;
-      if (this.offset) shiftPacket(b, where, this.offset);
-      // parsed as it is admitted: the program tables say which packets are video
-      this.demux.packet(b, base + kept.length * PACKET);
-      this.noteTables(b, where);
-      kept.push(b);
-      frames.push(...this.demux.ready());
+      for (const packet of this.sift(b, where)) this.take(packet, base, kept, frames);
       if (this.source.codecChanged) {
         failure = new LiveError(
           'tracks',
@@ -286,16 +358,50 @@ export class TsLiveRecorder {
     if (kept.length) {
       const block = new Uint8Array(kept.length * PACKET);
       kept.forEach((b, i) => block.set(b, i * PACKET));
-      if ((await this.store.append(block)) !== base)
-        throw new LiveError('store', 'Live recording offsets are inconsistent', true);
-      for (const frame of frames) this.emit(frame, out);
+      try {
+        if ((await this.store.append(block)) !== base)
+          throw new LiveError('store', 'Live recording offsets are inconsistent', true);
+        this.stored = base + block.length;
+      } catch (e) {
+        failure = e;
+      }
+      // a frame is published only once all of it is stored
+      for (const frame of frames)
+        if (frame.transport.packetEnd <= this.stored) this.emit(frame, out);
     }
     if (failure) throw failure;
     return out;
   }
-  /** The stream has ended: the frames the demuxer still held, as a file's last frames are. */
+  // stores one packet, or passes it over
+  take(b, base, kept, frames) {
+    const where = layout(b);
+    if (this.broken) {
+      // a saved recording is read with no knowledge of the connections that made it
+      this.broken = false;
+      for (const pid of this.pids) {
+        const packet = breakPacket(pid);
+        this.demux.packet(packet, base + kept.length * PACKET);
+        kept.push(packet);
+      }
+    }
+    this.position = base + kept.length * PACKET; // where this packet will be stored
+    if (!this.admit(b, where)) return;
+    if (this.offset) shiftPacket(b, where, this.offset);
+    // parsed as it is admitted: the program tables say which packets are video
+    this.demux.packet(b, this.position);
+    this.noteTables(b, where);
+    const pid = (b[1] & 31) * 256 + b[2];
+    if (pid !== 0x1fff) this.pids.add(pid);
+    kept.push(b);
+    frames.push(...this.demux.ready());
+  }
+  /**
+   * The stream has ended: the frames the demuxer still held. The access unit that was still
+   * arriving is not one of them, and nor is anything that was not stored.
+   */
   finish(out = { frames: [] }) {
-    for (const frame of this.demux.finish()) this.emit(frame, out);
+    for (const frame of this.demux.finish({ open: false }))
+      if (frame.transport.packetEnd <= this.stored) this.emit(frame, out);
     return out;
   }
   // the PIDs that carry program map tables, from the program association table

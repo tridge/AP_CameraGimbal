@@ -47,10 +47,15 @@ thermal Matroska, or H.264/HEVC in MPEG-TS, told apart by the first byte. For
 MPEG-TS `TsLiveRecorder` (`mpegts-live.js`) stores the packets and indexes them
 with `createTsDemuxer`, the packet-driven core that file indexing also uses; a
 frame's coded bytes are rebuilt from its packet span when the decoder asks.
-A rejoin is recognised by the decode time and first packet of an access unit
-already held, so a restarted publisher that repeats a time is not taken for
-one. The demuxer holds the newest two frames until what follows them arrives;
-End live drains it, as the end of a file does.
+A rejoin is recognised by the decode time and the packets of a whole access
+unit already held (the connection's first unit is held back until it has all
+arrived), so a restarted publisher that repeats a time is not taken for one.
+Where the stored packets do not carry on, at a new connection or after lost
+alignment, a packet with the discontinuity indicator is stored for each PID,
+so the saved file is read as the live index was built. The demuxer holds the
+newest two frames until what follows them arrives; End live drains it, apart
+from the access unit still arriving, and a frame is indexed only once all its
+packets are stored.
 What follows describes raw thermal. The page owns the WebSocket, so the page's CSP governs it, and
 transfers each message to `live.worker.js`. There `MatroskaLiveDemuxer` frames
 the prefix and complete Clusters (a partial Cluster is dropped with its

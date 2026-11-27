@@ -462,9 +462,9 @@ test('live MPEG-TS: a rejoin at the access unit that was cut off is not a restar
   const out = { frames: [] };
   rec.finish(out);
   assert.equal(rec.epoch, 0);
-  // every frame once, at its own time
+  // every frame once, at its own time; the last was still arriving when the stream ended
   assert.deepEqual(frameTimes((await indexFile(await saved(store))).frames), [...Array(16).keys()]);
-  assert.equal(rec.frames, 16);
+  assert.equal(rec.frames, 15);
 });
 
 test('live MPEG-TS: a restarted publisher whose times repeat those held is a new epoch', async () => {
@@ -491,7 +491,7 @@ test('live MPEG-TS: a restarted publisher whose times repeat those held is a new
   assert.equal(first.frames.length, 7);
   assert.deepEqual(
     later.frames.map((f) => f.epoch),
-    [0, 0, ...Array(10).fill(1)],
+    [0, 0, ...Array(9).fill(1)],
   );
   const pts = (await indexFile(await saved(store))).frames.map((f) => f.pts);
   assert.equal(pts.length, 19);
@@ -508,22 +508,23 @@ test('live MPEG-TS: a codec change on the same stream ends the session', async (
   );
 });
 
-test('live MPEG-TS: ending the stream indexes the frames still held', async () => {
+test('live MPEG-TS: ending the stream indexes the frames still held, but not the one arriving', async () => {
   const { rec, store } = tsRecorder(),
     out = await feedAll(rec, tsRun(0, 12), null);
   assert.equal(out.frames.length, 9);
   rec.finish(out);
   assert.deepEqual(
     out.frames.map((f) => f.id),
-    [...Array(12).keys()],
+    [...Array(11).keys()],
   );
+  // nothing says the last access unit is complete: a file reader has to take it as it is
   assert.deepEqual(
     frameTimes(out.frames),
-    frameTimes((await indexFile(await saved(store))).frames),
+    frameTimes((await indexFile(await saved(store))).frames).slice(0, -1),
   );
-  // a stream of two frames can be saved
+  // a stream of three frames can be saved
   const short = tsRecorder(),
-    few = await feedAll(short.rec, tsRun(0, 2), null);
+    few = await feedAll(short.rec, tsRun(0, 3), null);
   assert.equal(few.frames.length, 0);
   short.rec.finish(few);
   assert.equal(few.frames.length, 2);
@@ -541,12 +542,15 @@ test('live MPEG-TS: junk longer than a few packets is skipped without a reconnec
   for (const f of (await feedAll(rec, rest, clock)).frames) out.frames.push(f);
   rec.finish(out);
   assert.equal(rec.epoch, 0);
-  // frame 9 was still open when the junk came; the junk is not stored, so the file has it
+  // frame 9 was still open when the junk came: it is not a frame, here or in the saved file
   assert.deepEqual(
     frameTimes(out.frames),
+    [...Array(89).keys()].filter((n) => n !== 9),
+  );
+  assert.deepEqual(
+    frameTimes((await indexFile(await saved(store))).frames),
     [...Array(90).keys()].filter((n) => n !== 9),
   );
-  assert.deepEqual(frameTimes((await indexFile(await saved(store))).frames), [...Array(90).keys()]);
   assert.equal(store.size % 188, 0);
 });
 
@@ -570,7 +574,7 @@ test('live MPEG-TS: what a failed message stored is indexed, and nothing else', 
   );
   for (const f of (await feedAll(rec, next, clock)).frames) out.frames.push(f);
   rec.finish(out);
-  assert.deepEqual(frameTimes(out.frames), [...Array(18).keys()]);
+  assert.deepEqual(frameTimes(out.frames), [...Array(17).keys()]);
   assert.ok(out.frames.every((f) => f.transport.packetEnd <= store.size));
 });
 
@@ -585,6 +589,113 @@ test('live MPEG-TS: a repeated packet that starts an access unit is not a restar
   const out = await feedAll(rec, tsHelpers.join(...parts), clock);
   rec.finish(out);
   assert.equal(rec.epoch, 0);
-  assert.deepEqual(frameTimes(out.frames), [...Array(12).keys()]);
+  assert.deepEqual(frameTimes(out.frames), [...Array(11).keys()]);
   assert.ok(out.frames.every((f) => f.decodable));
+});
+
+// transport packets of one frame
+const tsPackets = (n) => tsHelpers.tsFrame(n, 0, { value: 0 }).length / 188;
+
+test('live MPEG-TS: a restart that repeats a held time and first packet is still a new epoch', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    first = await feedAll(rec, tsRun(0, 10), clock);
+  clock.now += 3000;
+  rec.beginConnection();
+  // access unit 1285 starts as unit 5 does, and is longer
+  const counter = { value: 0 },
+    unit = (n, at, options) => tsHelpers.tsFrame(n, at * TICKS, counter, options),
+    held = tsHelpers.tsFrame(5, 5 * TICKS, { value: 0 }),
+    restart = unit(1285, 5, { bytes: 310 });
+  assert.deepEqual(restart.subarray(4, 188), held.subarray(4, 188));
+  const later = await feedAll(
+    rec,
+    tsHelpers.join(
+      tsHelpers.tsTables(),
+      restart,
+      ...[...Array(9).keys()].map((i) => unit(106 + i, 6 + i, { bytes: 310 })),
+    ),
+    clock,
+  );
+  rec.finish(later);
+  assert.equal(rec.epoch, 1);
+  assert.equal(first.frames.length, 7);
+  // all of the new publisher's frames but the one still arriving
+  assert.deepEqual(
+    later.frames.map((f) => f.epoch),
+    [0, 0, ...Array(9).fill(1)],
+  );
+  assert.ok(later.frames.at(-9).keyframe && later.frames.at(-9).decodable);
+  const pts = (await indexFile(await saved(store))).frames.map((f) => f.pts);
+  assert.equal(pts.length, 19);
+  assert.ok(pts.every((t, i) => i === 0 || t > pts[i - 1]));
+});
+
+test('live MPEG-TS: a second cut in the access unit that follows the frames held loses nothing', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 },
+    first = tsRun(0, 9, { counter }),
+    out = await feedAll(rec, first.subarray(0, first.length - 188), clock);
+  // twice more the relay starts at keyframe 5; the first of them is cut in frame 8 too
+  for (const last of [8, 15]) {
+    clock.now += 300;
+    rec.beginConnection();
+    const next = tsHelpers.join(
+      tsHelpers.tsTables(),
+      ...[...Array(last - 4).keys()].map((i) => tsHelpers.tsFrame(5 + i, (5 + i) * TICKS, counter)),
+    );
+    const part = await feedAll(rec, last === 8 ? next.subarray(0, next.length - 188) : next, clock);
+    out.frames.push(...part.frames);
+  }
+  rec.finish(out);
+  assert.equal(rec.epoch, 0);
+  assert.deepEqual(frameTimes(out.frames), [...Array(15).keys()]);
+  assert.ok(out.frames.every((f) => f.decodable));
+  assert.deepEqual(frameTimes((await indexFile(await saved(store))).frames), [...Array(16).keys()]);
+});
+
+test('live MPEG-TS: a saved recording does not join a cut-off access unit to the next connection', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 },
+    first = tsRun(0, 8, { counter }),
+    cut = counter.value, // continuity counter of the packet frame 8 is cut off after
+    out = await feedAll(
+      rec,
+      tsHelpers.join(first, tsHelpers.tsFrame(8, 8 * TICKS, counter).subarray(0, 188)),
+      clock,
+    );
+  clock.now += 300;
+  rec.beginConnection();
+  // the relay starts at keyframe 5, and frame 8 arrives with the next counter value
+  counter.value = cut + 1 - tsPackets(5) - tsPackets(6) - tsPackets(7);
+  const again = tsHelpers.join(
+    tsHelpers.tsTables(),
+    ...[...Array(8).keys()].map((i) => tsHelpers.tsFrame(5 + i, (5 + i) * TICKS, counter)),
+  );
+  out.frames.push(...(await feedAll(rec, again, clock)).frames);
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [...Array(12).keys()]);
+  const reopened = await indexFile(await saved(store));
+  assert.deepEqual(frameTimes(reopened.frames), [...Array(13).keys()]);
+  assert.deepEqual(
+    reopened.frames.slice(0, 12).map((f) => f.size),
+    out.frames.map((f) => f.size),
+  );
+});
+
+test('live MPEG-TS: when storage fails, only frames that were stored are indexed', async () => {
+  const clock = { now: 1e6 },
+    store = new LiveStore({ segmentBytes: 4096, memoryLimit: 188 * 21 }),
+    rec = new TsLiveRecorder({ store, now: () => clock.now }),
+    bytes = tsRun(0, 20),
+    out = { frames: [] };
+  let error = null;
+  for (let at = 0; at < bytes.length && !error; at += 1000)
+    await rec.feed(bytes.slice(at, at + 1000), out).catch((e) => (error = e));
+  assert.ok(error instanceof StoreFullError);
+  rec.finish(out);
+  const file = frameTimes((await indexFile(await saved(store))).frames);
+  assert.ok(file.length > 5);
+  assert.ok(out.frames.every((f) => f.transport.packetEnd <= store.size));
+  // every stored frame, but for the last: the recording may end part way through it
+  assert.deepEqual(frameTimes(out.frames), file.slice(0, -1));
 });

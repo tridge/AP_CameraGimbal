@@ -1450,9 +1450,11 @@ export function createTsDemuxer(source) {
     }
     return out;
   }
-  /** The stream has ended: everything still held. */
-  function finish() {
-    for (const pid of [...pending.keys()]) finishPES(pid);
+  /** The stream has ended: everything still held; open=false leaves out unfinished video. */
+  function finish({ open = true } = {}) {
+    for (const pid of [...pending.keys()])
+      if (open || streamTypes.get(pid) === 'klv') finishPES(pid);
+      else pending.delete(pid);
     const out = [];
     while (queue.length) out.push(attach(queue.shift()));
     if ([...metadata.values()].some((entry) => !entry.asynchronous))
