@@ -10,6 +10,7 @@ let store = null,
   recorder = null,
   queue = Promise.resolve(),
   failed = false,
+  ended = false,
   latest = 0,
   current = 0,
   dead = 0,
@@ -85,7 +86,7 @@ function flush() {
 
 async function data(own, buffer) {
   try {
-    if (failed || own !== current || own === dead) return;
+    if (failed || ended || own !== current || own === dead) return;
     if (!recorder) {
       // the first byte tells the two stream kinds apart: MPEG-TS sync, or the EBML header
       const first = new Uint8Array(buffer, 0, Math.min(1, buffer.byteLength))[0];
@@ -143,6 +144,18 @@ self.onmessage = ({ data: message }) => {
       .catch((e) => self.postMessage({ type: 'read', id: message.id, error: e.message }));
   } else if (message.type === 'snapshot') {
     queue = queue.then(async () => {
+      if (message.final && !ended) {
+        // the stream is over: index the frames that were waiting for what followed them
+        ended = true;
+        const out = { frames: [] };
+        try {
+          recorder?.finish?.(out);
+        } catch {
+          // a format change in the last frames: what was indexed before it stands
+        }
+        if (out.tracks) pending.tracks = out.tracks;
+        pending.frames.push(...out.frames);
+      }
       if (timer !== null) clearTimeout(timer);
       flush();
       const snapshot = store ? await store.snapshot() : { parts: [], size: 0 };

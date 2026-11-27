@@ -51,10 +51,10 @@ function stamp(n) {
   );
 }
 /** PAT and PMT, as the relay sends them to every new viewer. */
-export function tsTables() {
+export function tsTables({ type = 0x1b } = {}) {
   const pat = section(Uint8Array.of(0, 0, 0, 0, 1, 0xc1, 0, 0, 0, 1, 0xf0, 0)),
     pmt = section(
-      Uint8Array.of(2, 0, 0, 0, 1, 0xc1, 0, 0, 0xe1, 1, 0xf0, 0, 0x1b, 0xe1, 1, 0xf0, 0),
+      Uint8Array.of(2, 0, 0, 0, 1, 0xc1, 0, 0, 0xe1, 1, 0xf0, 0, type, 0xe1, 1, 0xf0, 0),
     );
   return join(
     packet(0, join(Uint8Array.of(0), pat), 0, true),

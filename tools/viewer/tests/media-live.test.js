@@ -438,3 +438,153 @@ test('live MPEG-TS: retimePacket moves PES timestamps; a Matroska stream on this
     (e) => e instanceof LiveError && e.terminal,
   );
 });
+
+const frameTimes = (frames) => frames.map((f) => Math.round(f.pts * 10));
+
+test('live MPEG-TS: a rejoin at the access unit that was cut off is not a restart', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 };
+  // frames 0..10; the connection ends part way through keyframe 10
+  const first = tsRun(0, 11, { counter });
+  await feedAll(rec, first.subarray(0, first.length - 188), clock);
+  for (let again = 0; again < 2; again++) {
+    clock.now += 4000;
+    rec.beginConnection();
+    // the relay starts at keyframe 10 each time; the second connection is cut in it too
+    const next = tsHelpers.join(
+      tsHelpers.tsTables(),
+      ...[...Array(again ? 6 : 1).keys()].map((i) =>
+        tsHelpers.tsFrame(10 + i, (10 + i) * TICKS, counter),
+      ),
+    );
+    await feedAll(rec, again ? next : next.subarray(0, next.length - 188), clock);
+  }
+  const out = { frames: [] };
+  rec.finish(out);
+  assert.equal(rec.epoch, 0);
+  // every frame once, at its own time
+  assert.deepEqual(frameTimes((await indexFile(await saved(store))).frames), [...Array(16).keys()]);
+  assert.equal(rec.frames, 16);
+});
+
+test('live MPEG-TS: a restarted publisher whose times repeat those held is a new epoch', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    first = await feedAll(rec, tsRun(0, 10), clock);
+  clock.now += 3000;
+  rec.beginConnection();
+  // a zero-based clock again, joined at its keyframe 5: a time that is held, other pictures
+  const counter = { value: 0 },
+    later = await feedAll(
+      rec,
+      tsHelpers.join(
+        tsHelpers.tsTables(),
+        ...[...Array(10).keys()].map((i) =>
+          tsHelpers.tsFrame(105 + i, (5 + i) * TICKS, counter, { bytes: 310 }),
+        ),
+      ),
+      clock,
+    );
+  rec.finish(later);
+  assert.equal(rec.epoch, 1);
+  // none of the new publisher's frames is taken for one already held; the last frame of
+  // the old one was still open when it went away
+  assert.equal(first.frames.length, 7);
+  assert.deepEqual(
+    later.frames.map((f) => f.epoch),
+    [0, 0, ...Array(10).fill(1)],
+  );
+  const pts = (await indexFile(await saved(store))).frames.map((f) => f.pts);
+  assert.equal(pts.length, 19);
+  assert.ok(pts.every((t, i) => i === 0 || t > pts[i - 1]));
+});
+
+test('live MPEG-TS: a codec change on the same stream ends the session', async () => {
+  const { rec, clock } = tsRecorder();
+  await feedAll(rec, tsRun(0, 10), clock);
+  rec.beginConnection();
+  await assert.rejects(
+    () => rec.feed(tsHelpers.join(tsHelpers.tsTables({ type: 0x24 }), tsRun(0, 3).subarray(376))),
+    (e) => e instanceof LiveError && e.code === 'tracks' && e.terminal,
+  );
+});
+
+test('live MPEG-TS: ending the stream indexes the frames still held', async () => {
+  const { rec, store } = tsRecorder(),
+    out = await feedAll(rec, tsRun(0, 12), null);
+  assert.equal(out.frames.length, 9);
+  rec.finish(out);
+  assert.deepEqual(
+    out.frames.map((f) => f.id),
+    [...Array(12).keys()],
+  );
+  assert.deepEqual(
+    frameTimes(out.frames),
+    frameTimes((await indexFile(await saved(store))).frames),
+  );
+  // a stream of two frames can be saved
+  const short = tsRecorder(),
+    few = await feedAll(short.rec, tsRun(0, 2), null);
+  assert.equal(few.frames.length, 0);
+  short.rec.finish(few);
+  assert.equal(few.frames.length, 2);
+  assert.ok(few.tracks[0].width);
+});
+
+test('live MPEG-TS: junk longer than a few packets is skipped without a reconnect', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 },
+    out = await feedAll(rec, tsRun(0, 10, { counter }), clock);
+  await feedAll(rec, new Uint8Array(188 * 10 + 31).fill(0x55), clock, 300);
+  const rest = tsHelpers.join(
+    ...[...Array(80).keys()].map((i) => tsHelpers.tsFrame(10 + i, (10 + i) * TICKS, counter)),
+  );
+  for (const f of (await feedAll(rec, rest, clock)).frames) out.frames.push(f);
+  rec.finish(out);
+  assert.equal(rec.epoch, 0);
+  // frame 9 was still open when the junk came; the junk is not stored, so the file has it
+  assert.deepEqual(
+    frameTimes(out.frames),
+    [...Array(90).keys()].filter((n) => n !== 9),
+  );
+  assert.deepEqual(frameTimes((await indexFile(await saved(store))).frames), [...Array(90).keys()]);
+  assert.equal(store.size % 188, 0);
+});
+
+test('live MPEG-TS: what a failed message stored is indexed, and nothing else', async () => {
+  const { rec, store, clock } = tsRecorder(),
+    counter = { value: 0 },
+    good = tsRun(0, 12, { counter }),
+    out = { frames: [] };
+  // one message: twelve frames, then more junk than is tolerated
+  await assert.rejects(
+    () => rec.feed(tsHelpers.join(good, new Uint8Array(188 * 80).fill(0x55)), out),
+    (e) => e instanceof LiveError && e.code === 'format' && !e.terminal,
+  );
+  assert.equal(store.size, good.length);
+  assert.equal(out.frames.length, 9);
+  rec.beginConnection();
+  clock.now += 500;
+  const next = tsHelpers.join(
+    tsHelpers.tsTables(),
+    ...[...Array(8).keys()].map((i) => tsHelpers.tsFrame(10 + i, (10 + i) * TICKS, counter)),
+  );
+  for (const f of (await feedAll(rec, next, clock)).frames) out.frames.push(f);
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [...Array(18).keys()]);
+  assert.ok(out.frames.every((f) => f.transport.packetEnd <= store.size));
+});
+
+test('live MPEG-TS: a repeated packet that starts an access unit is not a restart', async () => {
+  const { rec, clock } = tsRecorder(),
+    counter = { value: 0 },
+    parts = [tsHelpers.tsTables()];
+  for (let n = 0; n < 12; n++) {
+    const frame = tsHelpers.tsFrame(n, n * TICKS, counter);
+    parts.push(n === 6 ? tsHelpers.join(frame.subarray(0, 188), frame) : frame);
+  }
+  const out = await feedAll(rec, tsHelpers.join(...parts), clock);
+  rec.finish(out);
+  assert.equal(rec.epoch, 0);
+  assert.deepEqual(frameTimes(out.frames), [...Array(12).keys()]);
+  assert.ok(out.frames.every((f) => f.decodable));
+});

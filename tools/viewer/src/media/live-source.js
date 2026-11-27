@@ -256,8 +256,8 @@ export class LiveSource {
     return t ? transportPayload(bytes, offset, frame) : bytes;
   }
   /** The recording so far as a File with the frame index's offsets. */
-  async snapshot() {
-    const { parts } = await this.request({ type: 'snapshot' });
+  async snapshot({ final = false } = {}) {
+    const { parts } = await this.request({ type: 'snapshot', final });
     return new File(parts, this.name, {
       type: this.format === 'mpegts' ? 'video/mp2t' : 'video/x-matroska',
       lastModified: this.started,
@@ -270,7 +270,8 @@ export class LiveSource {
       this.stop();
       this.set('ended');
     }
-    return this.snapshot();
+    // the last frames received are indexed before the file is made
+    return this.snapshot({ final: true });
   }
   close() {
     if (this.closed) return;

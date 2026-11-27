@@ -54,6 +54,12 @@ function pesClock(b, payload) {
   const both = (b[payload + 7] & 0x40) !== 0 && payload + 19 <= PACKET;
   return { pts: payload + 9, dts: both ? payload + 14 : payload + 9 };
 }
+// identifies a packet whatever its continuity counter
+function mark(b) {
+  let h = 0x811c9dc5 ^ (b[3] & 0xf0);
+  for (let i = 4; i < PACKET; i++) h = Math.imul(h ^ b[i], 0x01000193);
+  return h >>> 0;
+}
 function shiftPacket(b, at, offset) {
   if (at.pcrAt >= 0) {
     // program clock reference: 33-bit base, 6 reserved bits, 9-bit extension
@@ -94,6 +100,7 @@ export class TsLiveRecorder {
     this.epoch = 0;
     this.offset = 0; // 90 kHz ticks added to this epoch's timestamps
     this.lastStart = null; // source decode time of the newest video access unit seen
+    this.lastMark = null; // ... and the mark of its first packet
     this.lastDone = null; // ... of the newest one known to be complete
     this.lastStored = null; // stored decode time of the newest video access unit
     this.lastWall = null;
@@ -101,7 +108,7 @@ export class TsLiveRecorder {
     this.announced = null;
     this.partial = new Uint8Array(0);
     this.tables = new Set();
-    this.recent = []; // source decode times of the newest access units stored
+    this.recent = []; // {raw, mark} of the newest access units stored
     this.cuts = []; // stream offsets where what follows does not continue what came before
     this.keyed = false;
     this.position = 0;
@@ -113,6 +120,7 @@ export class TsLiveRecorder {
   beginConnection() {
     this.partial = new Uint8Array(0);
     this.aligned = false;
+    this.junk = 0; // bytes passed over looking for packet alignment
     this.joining = true; // until this connection's first video access unit places it
     this.skipTo = null; // source time up to which this connection repeats what is held
     this.placed = false; // whether this connection continues the frames held is not known yet
@@ -137,16 +145,21 @@ export class TsLiveRecorder {
         );
       return this.drop.get(pid) === false;
     }
+    let repeated = false;
     if (at.payload >= 0) {
       const counter = b[3] & 15,
         previous = this.counters.get(pid);
-      if (previous !== undefined && counter !== previous && counter !== (previous + 1) % 16)
+      repeated = counter === previous;
+      if (previous !== undefined && !repeated && counter !== (previous + 1) % 16)
         this.cuts.push(this.position); // packets were lost: wait for a keyframe
       this.counters.set(pid, counter);
     }
-    if (!clock) return this.drop.get(pid) === false;
+    // a packet sent twice does not start another access unit
+    if (!clock || repeated) return this.drop.get(pid) === false;
     const raw = readTime(b, clock.dts),
-      wall = this.now();
+      wall = this.now(),
+      sum = mark(b);
+    let again = false;
     if (this.skipTo !== null) {
       // still within what is held
       if (ahead(raw, this.skipTo) <= 0) {
@@ -162,17 +175,21 @@ export class TsLiveRecorder {
       let fresh = false;
       if (this.joining) {
         // The relay starts a viewer at its newest keyframe, which may be one already held:
-        // then its time is one that was stored. The access unit that was being received
-        // when the old connection ended is not held, so it is taken again.
+        // then its time and first packet are ones that were stored. A restarted publisher
+        // can repeat a time, but not the picture.
         const held = this.lastDone ?? (this.lastStart - 1 + WRAP) % WRAP;
-        if (ahead(raw, held) <= 0 && this.recent.includes(raw)) {
+        if (ahead(raw, held) <= 0 && this.recent.some((r) => r.raw === raw && r.mark === sum)) {
           this.joining = false;
           this.skipTo = held;
           this.drop.set(pid, true);
           return false;
         }
+        // The access unit that was being received when the old connection ended is not
+        // held: it is taken again, as the next one of the same stream.
+        again = raw === this.lastStart && sum === this.lastMark;
         // a later time is the same publisher only if its clock advanced about as far as ours
-        if (advance <= 0 || Math.abs(advance - elapsed) > SAME_EPOCH_SLACK_MS) fresh = true;
+        if (!again && (advance <= 0 || Math.abs(advance - elapsed) > SAME_EPOCH_SLACK_MS))
+          fresh = true;
       } else if (advance <= 0 || advance - elapsed > SAME_EPOCH_SLACK_MS) fresh = true;
       if (fresh) {
         this.epoch++;
@@ -186,11 +203,14 @@ export class TsLiveRecorder {
     // a connection that does not carry on from the frames held starts at a keyframe
     if (!this.placed) this.cuts.push(this.position);
     this.placed = true;
-    this.recent.push(raw);
-    if (this.recent.length > 256) this.recent.shift();
     this.drop.set(pid, false);
-    this.lastDone = this.lastStart;
+    if (!again) {
+      this.recent.push({ raw, mark: sum });
+      if (this.recent.length > 256) this.recent.shift();
+      this.lastDone = this.lastStart;
+    }
     this.lastStart = raw;
+    this.lastMark = sum;
     this.lastStored = (raw + this.offset) % WRAP;
     this.lastWall = wall;
     return true;
@@ -204,28 +224,35 @@ export class TsLiveRecorder {
       base = this.store.size,
       kept = [],
       frames = [];
-    let at = 0;
+    let at = 0,
+      failure = null; // thrown once what this message did deliver has been stored
     for (;;) {
       if (!this.aligned) {
-        if (bytes.length - at >= 4 && bytes[at] === 0x1a && bytes[at + 1] === 0x45)
-          throw new LiveError(
+        if (bytes.length - at >= 4 && bytes[at] === 0x1a && bytes[at + 1] === 0x45) {
+          failure = new LiveError(
             'format',
             'The stream changed from MPEG-TS video to raw thermal; open it again.',
             true,
           );
+          break;
+        }
         let found = -1;
-        for (let i = at; i + PACKET < bytes.length && i < at + PACKET * 4; i++)
+        for (let i = at; i + PACKET < bytes.length; i++)
           if (bytes[i] === 0x47 && bytes[i + PACKET] === 0x47) {
             found = i;
             break;
           }
-        if (found < 0) {
-          if (bytes.length - at > MAX_PARTIAL)
-            throw new LiveError('format', 'No MPEG-TS packet alignment in the stream');
+        // what has been searched is not searched again
+        const passed = (found < 0 ? Math.max(at, bytes.length - PACKET) : found) - at;
+        at += passed;
+        this.junk += passed;
+        if (this.junk > MAX_PARTIAL) {
+          failure = new LiveError('format', 'No MPEG-TS packet alignment in the stream');
           break;
         }
-        at = found;
+        if (found < 0) break;
         this.aligned = true;
+        this.junk = 0;
       }
       if (at + PACKET > bytes.length) break;
       if (bytes[at] !== 0x47) {
@@ -246,14 +273,29 @@ export class TsLiveRecorder {
       this.noteTables(b, where);
       kept.push(b);
       frames.push(...this.demux.ready());
+      if (this.source.codecChanged) {
+        failure = new LiveError(
+          'tracks',
+          'The stream restarted with a different video format; open it again.',
+          true,
+        );
+        break;
+      }
     }
     this.partial = bytes.slice(at);
-    if (!kept.length) return out;
-    const block = new Uint8Array(kept.length * PACKET);
-    kept.forEach((b, i) => block.set(b, i * PACKET));
-    if ((await this.store.append(block)) !== base)
-      throw new LiveError('store', 'Live recording offsets are inconsistent', true);
-    for (const frame of frames) this.emit(frame, out);
+    if (kept.length) {
+      const block = new Uint8Array(kept.length * PACKET);
+      kept.forEach((b, i) => block.set(b, i * PACKET));
+      if ((await this.store.append(block)) !== base)
+        throw new LiveError('store', 'Live recording offsets are inconsistent', true);
+      for (const frame of frames) this.emit(frame, out);
+    }
+    if (failure) throw failure;
+    return out;
+  }
+  /** The stream has ended: the frames the demuxer still held, as a file's last frames are. */
+  finish(out = { frames: [] }) {
+    for (const frame of this.demux.finish()) this.emit(frame, out);
     return out;
   }
   // the PIDs that carry program map tables, from the program association table

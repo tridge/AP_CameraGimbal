@@ -1120,7 +1120,13 @@ export function createTsDemuxer(source) {
         }
         if ([0x1b, 0x24].includes(type)) {
           streamTypes.set(id, type);
-          if (!source.tracks.some((t) => t.id === id))
+          const codec = type === 0x24 ? 'hevc' : 'avc',
+            known = source.tracks.find((t) => t.id === id);
+          if (known && known.codec !== codec) {
+            source.codecChanged = true;
+            warn('MPEG-TS video codec changed within the stream');
+          }
+          if (!known)
             source.tracks.push({
               id,
               codec: type === 0x24 ? 'hevc' : 'avc',
