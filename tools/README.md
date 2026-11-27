@@ -29,6 +29,8 @@
 - `repack-root-password.sh` rebuilds the MT11 root filesystem with a supplied
   SHA-512 crypt verifier, `MT11_ROOT_PASSWORD`, or an interactively entered
   password. The package builder invokes it with the configured project value.
+  Byte-identical vendor files are stored once, as hard links, which leaves the
+  image room to spare in its fixed-size volume.
 - `build_a8_package.sh` creates the SIYI A8 mini SD update (`make a8`);
   its first argument is the checked-in platform directory. See `packaging/a8/README.md`.
 - `build_zr10_firmware.sh` combines the checked-in ZR10 platform directory with
