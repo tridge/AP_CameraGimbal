@@ -467,6 +467,128 @@ test('live MPEG-TS: a rejoin at the access unit that was cut off is not a restar
   assert.equal(rec.frames, 15);
 });
 
+test('live MPEG-TS: a signalled video discontinuity waits for a keyframe', async () => {
+  const { rec, clock } = tsRecorder(),
+    counter = { value: 0 },
+    signal = new Uint8Array(188).fill(255);
+  signal.set([0x47, tsHelpers.VIDEO_PID >> 8, tsHelpers.VIDEO_PID & 255, 0x20, 183, 0x80]);
+  // no packet is missing by the counters, and frame 6 is lost
+  const out = await feedAll(
+    rec,
+    tsHelpers.join(tsRun(0, 7, { counter }), signal, tsRun(7, 13, { start: 7 * TICKS, counter })),
+    clock,
+  );
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11]);
+  assert.deepEqual(
+    out.frames.map((f) => f.decodable),
+    [true, true, true, true, true, true, false, false, false, true, true],
+  );
+});
+
+const tsLater = (counter, from, to, options) =>
+  [...Array(to - from).keys()].map((i) =>
+    tsHelpers.tsFrame(from + i, (from + i) * TICKS, counter, options),
+  );
+
+test('live MPEG-TS: a restarted publisher cut off in its first access unit loses nothing on rejoin', async () => {
+  const { rec, clock } = tsRecorder();
+  await feedAll(rec, tsRun(0, 20), clock);
+  const out = { frames: [] };
+  for (const whole of [false, true]) {
+    clock.now += 3000;
+    rec.beginConnection();
+    // a zero-based clock again; the first of these connections ends in its first keyframe
+    const counter = { value: 0 },
+      first = tsHelpers.tsFrame(100, 0, counter, { bytes: 500 }),
+      rest = [...Array(12).keys()].map((i) => tsHelpers.tsFrame(101 + i, (1 + i) * TICKS, counter));
+    const part = await feedAll(
+      rec,
+      whole
+        ? tsHelpers.join(tsHelpers.tsTables(), first, ...rest)
+        : tsHelpers.join(tsHelpers.tsTables(), first.subarray(0, 3 * 188)),
+      clock,
+    );
+    out.frames.push(...part.frames);
+  }
+  rec.finish(out);
+  assert.equal(rec.epoch, 1);
+  assert.equal(out.frames.filter((f) => f.epoch === 1).length, 12);
+  assert.ok(out.frames.filter((f) => f.epoch === 1).every((f) => f.decodable));
+});
+
+test('live MPEG-TS: lost packets among those of frames already held do not cut the frames that follow', async () => {
+  const { rec, clock } = tsRecorder(),
+    counter = { value: 0 },
+    first = tsRun(0, 9, { counter }),
+    out = await feedAll(rec, first.subarray(0, first.length - 188), clock);
+  clock.now += 300;
+  rec.beginConnection();
+  // the relay starts at keyframe 5; the counter jumps before frame 6, which is held
+  const again = { value: 0 },
+    five = tsHelpers.tsFrame(5, 5 * TICKS, again);
+  again.value += 5;
+  out.frames.push(
+    ...(
+      await feedAll(
+        rec,
+        tsHelpers.join(tsHelpers.tsTables(), five, ...tsLater(again, 6, 13)),
+        clock,
+      )
+    ).frames,
+  );
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [...Array(12).keys()]);
+  assert.ok(out.frames.every((f) => f.decodable));
+});
+
+test('live MPEG-TS: a rejoin that lost the start of the first access unit not held waits for a keyframe', async () => {
+  const { rec, clock } = tsRecorder(),
+    counter = { value: 0 },
+    first = tsRun(0, 9, { counter }),
+    out = await feedAll(rec, first.subarray(0, first.length - 188), clock);
+  clock.now += 300;
+  rec.beginConnection();
+  // the relay starts at keyframe 5; the first packet of frame 8 does not arrive
+  const again = { value: 0 },
+    units = tsLater(again, 5, 13);
+  units[3] = units[3].subarray(188);
+  out.frames.push(
+    ...(await feedAll(rec, tsHelpers.join(tsHelpers.tsTables(), ...units), clock)).frames,
+  );
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11]);
+  assert.deepEqual(
+    out.frames.map((f) => f.decodable),
+    [...Array(8).fill(true), false, true, true],
+  );
+});
+
+test('live MPEG-TS: a discontinuity signalled before frames already held does not cut the frames that follow', async () => {
+  const { rec, clock } = tsRecorder(),
+    counter = { value: 0 },
+    first = tsRun(0, 7, { counter }),
+    out = await feedAll(rec, first.subarray(0, first.length - 188), clock),
+    signal = new Uint8Array(188).fill(255);
+  signal.set([0x47, tsHelpers.VIDEO_PID >> 8, tsHelpers.VIDEO_PID & 255, 0x20, 183, 0x80]);
+  clock.now += 300;
+  rec.beginConnection();
+  // the relay starts at keyframe 5
+  const again = { value: 0 };
+  out.frames.push(
+    ...(
+      await feedAll(
+        rec,
+        tsHelpers.join(tsHelpers.tsTables(), signal, ...tsLater(again, 5, 11)),
+        clock,
+      )
+    ).frames,
+  );
+  rec.finish(out);
+  assert.deepEqual(frameTimes(out.frames), [...Array(10).keys()]);
+  assert.ok(out.frames.every((f) => f.decodable));
+});
+
 test('live MPEG-TS: a restarted publisher whose times repeat those held is a new epoch', async () => {
   const { rec, store, clock } = tsRecorder(),
     first = await feedAll(rec, tsRun(0, 10), clock);

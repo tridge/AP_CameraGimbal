@@ -140,6 +140,7 @@ export class TsLiveRecorder {
     this.drop = new Map(); // by PID: the access unit being received is not kept
     this.probe = null; // a first access unit held back while it is compared with one stored
     this.distinct = false; // it was not that one: another publisher
+    this.missed = false; // packets were lost among ones that were not kept
     this.open = null;
     this.interrupt();
   }
@@ -152,6 +153,7 @@ export class TsLiveRecorder {
   overlap(held, counter) {
     this.joining = false;
     this.skipTo = held;
+    this.missed = false; // what was lost before this is held
     this.counters.set(this.source.tracks[0].id, counter);
     this.drop.set(this.source.tracks[0].id, true);
   }
@@ -219,18 +221,22 @@ export class TsLiveRecorder {
         );
       return this.drop.get(pid) === false;
     }
-    let repeated = false;
+    // packets were lost, or the sender says the pictures do not carry on: if this packet is
+    // kept, what follows waits for a keyframe
+    let gap = (b[3] & 0x20) !== 0 && b[4] > 0 && (b[5] & 0x80) !== 0,
+      repeated = false;
     if (at.payload >= 0) {
       const counter = b[3] & 15,
         previous = this.counters.get(pid);
       repeated = counter === previous;
-      if (previous !== undefined && !repeated && counter !== (previous + 1) % 16)
-        this.cuts.push(this.position); // packets were lost: wait for a keyframe
+      if (previous !== undefined && !repeated && counter !== (previous + 1) % 16) gap = true;
       this.counters.set(pid, counter);
     }
     // a packet sent twice does not start another access unit
     if (!clock || repeated) {
       const keep = this.drop.get(pid) === false;
+      if (keep && gap) this.cuts.push(this.position);
+      else if (gap) this.missed = true; // the start of an access unit may be among them
       if (keep && !repeated && this.open) this.open.sum = fold(this.open.sum, mark(b));
       return keep;
     }
@@ -243,6 +249,7 @@ export class TsLiveRecorder {
       // still within what is held
       if (ahead(raw, this.skipTo) <= 0) {
         this.drop.set(pid, true);
+        this.missed = false; // what was lost before this is held
         return false;
       }
       // the next access unit after those held: the group of pictures continues
@@ -285,9 +292,12 @@ export class TsLiveRecorder {
       this.open = { raw, mark: sum };
       this.recent.push(this.open);
       if (this.recent.length > 256) this.recent.shift();
-      this.lastDone = this.lastStart;
+      // none of another publisher's access units is held
+      this.lastDone = fresh ? null : this.lastStart;
     }
     if (this.open) this.open.sum = sum;
+    if (gap || this.missed) this.cuts.push(this.position);
+    this.missed = false;
     this.lastStart = raw;
     this.lastMark = sum;
     this.lastStored = (raw + this.offset) % WRAP;
