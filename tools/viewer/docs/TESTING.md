@@ -126,7 +126,7 @@ origin differs. A local /quantized/layer.json request should return 404.
 
 ## Follow and map-track navigation
 
-map-navigation.spec.js tests the checked Follow control below the map, zoom
+map-navigation.spec.js tests the checked Follow control above Project video, zoom
 preservation, frozen camera when disabled, 3D camera transport, dragging and
 click-vs-drag behaviour. Track clicks are exercised in 2D/3D at devicePixelRatio 2
 and resolutionScale 1.5, with exact and near-line positions, background misses

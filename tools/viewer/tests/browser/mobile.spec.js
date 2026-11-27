@@ -14,6 +14,23 @@ test('mobile review fits 390 px and deployed About notices load through local GE
   expect(width.viewport).toBe(390);
   expect(width.document).toBeLessThanOrEqual(width.viewport);
   expect(width.body).toBeLessThanOrEqual(width.viewport);
+  // the map controls wrap inside their panel, Follow still directly above Project video
+  const controls = await page.evaluate(() => {
+    const box = (q) => document.querySelector(q).getBoundingClientRect();
+    return {
+      panel: box('.map-panel'),
+      follow: box('#map-follow'),
+      project: box('#map-project-video'),
+      map: box('#map'),
+    };
+  });
+  for (const key of ['follow', 'project']) {
+    expect(controls[key].left).toBeGreaterThanOrEqual(controls.panel.left);
+    expect(controls[key].right).toBeLessThanOrEqual(controls.panel.right);
+    expect(controls[key].bottom).toBeLessThanOrEqual(controls.map.top);
+  }
+  expect(controls.follow.bottom).toBeLessThanOrEqual(controls.project.top);
+  expect(Math.abs(controls.follow.left - controls.project.left)).toBeLessThan(1);
   await screenshot(page, testInfo, 'mobile-thermal-review.png');
   const link = page.getByRole('link', { name: 'About / licences', exact: true });
   const licences = new URL('licenses/', page.url());

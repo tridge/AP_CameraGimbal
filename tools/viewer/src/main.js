@@ -74,7 +74,8 @@ const state = {
   findings: [],
   peaks: [],
   cursor: null, // the pixel inspected: the pointer's while it is over the image, else pinned
-  pinned: null, // the pixel chosen with the X/Y fields, a peak or a finding
+  pinned: null, // the pixel chosen with a click, the X/Y fields, a peak or a finding
+  pins: 0, // counts choices, so a finding still seeking does not undo a later one
   videoPointerInside: false,
   image: null,
   contrastUnits: null,
@@ -1391,11 +1392,7 @@ function renderPeaks() {
       button = document.createElement('button'),
       temp = celsius(p.value, state.frame?.thermalMetadata);
     button.textContent = `${i + 1}. ${p.x}, ${p.y} · ${temp === null ? p.value + ' raw' : temp.toFixed(2) + ' °C'} · ${p.scoreUnit ? `${p.contrast.toFixed(2)} ${p.scoreUnit}${p.singlePixel ? ' · pixel-scale excess' : ''}` : `contrast +${p.contrast.toFixed(1)} raw`}`;
-    button.onclick = () => {
-      state.cursor = state.pinned = { x: p.x, y: p.y };
-      paint();
-      inspectPixel(state.cursor);
-    };
+    button.onclick = () => pinPixel({ x: p.x, y: p.y });
     li.append(button);
     return li;
   });
@@ -1492,14 +1489,14 @@ function renderFindings() {
     button.title = f.note || 'Review this observation';
     button.onclick = () => {
       pause();
-      const generation = state.generation;
+      const generation = state.generation,
+        choice = ++state.pins;
       showFrame(frameAt(state.frames, f.videoSeconds, state.origin))
         .then(() => {
-          if (generation !== state.generation || !state.decoded) return;
+          // a pixel chosen while the frame was being fetched stands
+          if (generation !== state.generation || choice !== state.pins || !state.decoded) return;
           if (f.rawPixel.x >= state.decoded.width || f.rawPixel.y >= state.decoded.height) return;
-          state.cursor = state.pinned = { ...f.rawPixel };
-          paint();
-          inspectPixel(state.cursor);
+          pinPixel({ ...f.rawPixel });
         })
         .catch(error);
     };
@@ -1998,6 +1995,17 @@ $('rotation').onchange = (e) => {
   saveReview();
   paint();
 };
+// Selects a pixel until another is chosen; the pointer passing over the video does not change it.
+function pinPixel(point, fields = true) {
+  state.pins++;
+  state.cursor = state.pinned = point;
+  if (fields) {
+    $('pixel-x').value = point.x;
+    $('pixel-y').value = point.y;
+  }
+  paint();
+  inspectPixel(point);
+}
 // The pointer's cross goes with the pointer; a pinned pixel comes back.
 function pointerLeftImage() {
   state.videoPointerInside = false;
@@ -2026,10 +2034,25 @@ $('video-canvas').onpointermove = (e) => {
   inspectPixel(point);
   paint();
 };
-$('video-canvas').onpointerleave = $('video-canvas').onpointercancel = pointerLeftImage;
-// a click keeps the pixel under the pointer when the pointer moves away
-$('video-canvas').onclick = () => {
-  if (state.videoPointerInside && state.cursor) state.pinned = state.cursor;
+$('video-canvas').onpointerleave = pointerLeftImage;
+// A press and release in one place keeps that pixel when the pointer moves away. Taken from
+// the release itself: a touch has left by the time of its click, and the video may have been
+// scrolled under a still pointer. A drag is not a choice.
+let pressed = null;
+$('video-canvas').onpointercancel = () => {
+  pressed = null;
+  pointerLeftImage();
+};
+$('video-canvas').onpointerdown = (e) => {
+  pressed = e.isPrimary && e.button === 0 ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+};
+$('video-canvas').onpointerup = (e) => {
+  const from = pressed;
+  pressed = null;
+  if (!from || from.id !== e.pointerId || !state.decoded) return;
+  if (Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return;
+  const point = displayPoint(e);
+  if (point) pinPixel(point);
 };
 for (const id of ['pixel-x', 'pixel-y'])
   $(id).oninput = () => {
@@ -2045,9 +2068,8 @@ for (const id of ['pixel-x', 'pixel-y'])
       y >= state.decoded.height
     )
       return;
-    state.cursor = state.pinned = { x, y };
-    paint();
-    inspectPixel(state.cursor);
+    // not written back: the field is being typed in
+    pinPixel({ x, y }, false);
   };
 $('mark-finding').onclick = markFinding;
 $('scan-peaks').onclick = () => {

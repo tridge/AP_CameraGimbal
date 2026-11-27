@@ -5,7 +5,7 @@ import {
   openFile,
   waitIndexed,
   seekNumber,
-  pointAt,
+  pickAt,
   screenshot,
 } from './helpers.js';
 const thermal = process.env.VIEWER_REAL_THERMAL,
@@ -46,7 +46,7 @@ test('real quantized terrain locates hovered and marked thermal pixels in both m
   await page.locator('#log-file').setInputFiles(bin);
   await page.waitForFunction(() => window.fireViewer.state.log?.mission?.items?.length === 81);
   await seekNumber(page, 8315);
-  await pointAt(page, 337, 373);
+  await pickAt(page, 337, 373);
   await page.waitForFunction(
     () => window.fireViewer.elevation.ground(window.fireViewer.pose, 337, 373, 640, 512) !== null,
   );

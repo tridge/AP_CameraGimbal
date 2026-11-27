@@ -439,6 +439,8 @@ kbd {
 }
 .map-panel > .panel-heading {
   flex-wrap: wrap;
+  /* wrapped controls take their height from the map, not from over it */
+  flex-shrink: 0;
 }
 .map-controls {
   display: flex;

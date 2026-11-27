@@ -349,11 +349,72 @@ test('the pixel cross follows the pointer, goes when it leaves the video, and st
   expect(back.cursor).toEqual({ x: 100, y: 120 });
   expect([back.x, back.y]).toEqual(['100', '120']);
   expect(back.reading).toContain('Raw pixel 100, 120');
-  // a click keeps the pointer's pixel instead
+  // a click keeps the pointer's pixel instead, and the fields follow it
   await hoverRaw(page, 250, 200);
   await page.mouse.down();
   await page.mouse.up();
   await page.locator('#play').hover();
   expect(await cross(250, 200)).toBe(true);
+  expect(await state()).toMatchObject({ cursor: { x: 250, y: 200 }, x: '250', y: '200' });
+  // a drag that ends on the video is not a choice
+  await hoverRaw(page, 300, 300);
+  await page.mouse.down();
+  await hoverRaw(page, 340, 300);
+  await page.mouse.up();
+  await page.locator('#play').hover();
   expect((await state()).cursor).toEqual({ x: 250, y: 200 });
+  // a touch has left by the time of its click, with no move before it
+  const tapped = await page.evaluate(() => {
+    const canvas = document.querySelector('#video-canvas'),
+      r = canvas.getBoundingClientRect(),
+      d = window.fireViewer.state.decoded,
+      at = {
+        clientX: r.left + ((410 + 0.5) * r.width) / d.width,
+        clientY: r.top + ((90 + 0.5) * r.height) / d.height,
+        pointerId: 7,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        bubbles: true,
+      };
+    for (const type of ['pointerdown', 'pointerup', 'pointerleave'])
+      canvas.dispatchEvent(new PointerEvent(type, at));
+    return window.fireViewer.state.cursor;
+  });
+  expect(tapped).toEqual({ x: 410, y: 90 });
+  expect(await cross(410, 90)).toBe(true);
+  // choosing a peak or a finding writes the fields, so editing one keeps the other
+  await page.locator('#scan-peaks').click();
+  await page.locator('#peak-list button').first().click();
+  const peak = await page.evaluate(() => {
+    const p = window.fireViewer.state.peaks[0];
+    return { x: p.x, y: p.y };
+  });
+  expect(await state()).toMatchObject({ cursor: peak, x: String(peak.x), y: String(peak.y) });
+  await page.locator('#pixel-x').fill('61');
+  expect((await state()).cursor).toEqual({ x: 61, y: peak.y });
+  // a finding that is still seeking does not undo a pixel chosen meanwhile
+  await page.locator('#mark-finding').click();
+  await seekNumber(page, 5);
+  const chosen = await page.evaluate(() => {
+    const canvas = document.querySelector('#video-canvas'),
+      r = canvas.getBoundingClientRect(),
+      d = window.fireViewer.state.decoded,
+      at = {
+        clientX: r.left + ((500 + 0.5) * r.width) / d.width,
+        clientY: r.top + ((400 + 0.5) * r.height) / d.height,
+        pointerId: 1,
+        isPrimary: true,
+        button: 0,
+        bubbles: true,
+      };
+    document.querySelector('#finding-list button').click();
+    canvas.dispatchEvent(new PointerEvent('pointerdown', at));
+    canvas.dispatchEvent(new PointerEvent('pointerup', at));
+    return window.fireViewer.state.cursor;
+  });
+  expect(chosen).toEqual({ x: 500, y: 400 });
+  await page.waitForFunction(() => window.fireViewer.state.number === 0);
+  await page.waitForTimeout(200);
+  expect((await state()).cursor).toEqual({ x: 500, y: 400 });
 });
