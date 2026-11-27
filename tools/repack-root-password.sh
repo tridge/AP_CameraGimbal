@@ -131,11 +131,41 @@ fakeroot -i "$fakeroot_state" -s "$fakeroot_state" -- \
 fakeroot -i "$fakeroot_state" -s "$fakeroot_state" -- \
     chmod 0755 "$root_tree"
 
+# The vendor image fills its 128 LEBs to within a few KiB, and how tightly
+# mkfs.ubifs packs depends on the host's directory order, so a rebuild can
+# need a 129th. The vendor tree holds several byte-identical copies of its
+# multi-call binaries: store each once, as hard links, for room to spare.
+fakeroot -i "$fakeroot_state" -s "$fakeroot_state" -- python3 - "$root_tree" <<'PY'
+import hashlib, os, stat, sys
+first = {}
+for folder, _, names in os.walk(sys.argv[1]):
+    times = os.lstat(folder)
+    for name in sorted(names):
+        path = os.path.join(folder, name)
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size == 0 or info.st_nlink != 1:
+            continue
+        with open(path, 'rb') as stream:
+            digest = hashlib.sha256(stream.read()).digest()
+        key = (digest, info.st_mode, info.st_uid, info.st_gid, info.st_mtime_ns)
+        if key in first:
+            os.unlink(path)
+            os.link(first[key], path)
+        else:
+            first[key] = path
+    os.utime(folder, ns=(times.st_atime_ns, times.st_mtime_ns))
+PY
+
 rebuilt_ubifs="$mt11_work_dir/rootfs.ubifs"
 rebuilt_rootfs="$mt11_work_dir/rootfs"
 fakeroot -i "$fakeroot_state" -s "$fakeroot_state" -- \
     mkfs.ubifs -m 2048 -e 126976 -c 256 -x zlib -F \
     -r "$root_tree" -o "$rebuilt_ubifs"
+
+# Keep the vendor image size: empty LEBs up to the volume's 128.
+ubifs_bytes=$(stat -c %s "$rebuilt_ubifs")
+[[ $ubifs_bytes -le 16252928 ]] || die "rebuilt UBIFS is $ubifs_bytes bytes, over the 16252928 byte volume"
+head -c $((16252928 - ubifs_bytes)) /dev/zero | tr '\0' '\377' >> "$rebuilt_ubifs"
 
 image_seq_hex=$(od -An -tx1 -j24 -N4 "$source_rootfs" | tr -d ' \n')
 [[ "$image_seq_hex" =~ ^[0-9a-fA-F]{8}$ ]] || die "could not read UBI image sequence"
